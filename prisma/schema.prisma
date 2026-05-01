@@ -1,0 +1,96 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Note {
+  id        Int      @id @default(autoincrement())
+  title     String
+  content   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model CentreReference {
+  id            Int                        @id @default(autoincrement())
+  centreKey     Int                        @unique
+  name          String
+  openStatus    String
+  licenseNumber Int?
+  regionName    String?
+  areaName      String?
+  subgroupName  String?
+  ignored       Boolean                    @default(false)
+  lastSyncedAt  DateTime
+  createdAt     DateTime                   @default(now())
+  updatedAt     DateTime                   @updatedAt
+  manualCapacity ManualCentreCapacity?
+  snapshots     ServiceAnalyticsSnapshot[]
+
+  @@index([ignored, openStatus, name])
+}
+
+model ManualCentreCapacity {
+  id               Int             @id @default(autoincrement())
+  centreKey        Int             @unique
+  licensedCapacity Int
+  maxU2            Int?
+  maxO2            Int?
+  notes            String?
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+  centre           CentreReference @relation(fields: [centreKey], references: [centreKey], onDelete: Cascade, onUpdate: Cascade)
+}
+
+model AnalyticsSnapshotRun {
+  id          Int                        @id @default(autoincrement())
+  runDate     DateTime                   @unique
+  source      String                     @default("manual")
+  createdAt   DateTime                   @default(now())
+  snapshots   ServiceAnalyticsSnapshot[]
+
+  @@index([runDate(sort: Desc)])
+}
+
+model ServiceAnalyticsSnapshot {
+  id                    Int                  @id @default(autoincrement())
+  runId                 Int
+  centreKey             Int
+  serviceName           String
+  date                  DateTime
+  enrolledCount         Int
+  enrolledFteCount      Decimal              @default(0) @db.Decimal(8, 4)
+  enrolledUnder2Count   Int                  @default(0)
+  enrolledOver2Count    Int                  @default(0)
+  licensedCapacity      Int
+  licensedUnder2Capacity Int?
+  licensedOver2Capacity Int?
+  enrolmentRatio        Decimal              @db.Decimal(8, 4)
+  waitlistCount         Int
+  waitlistUnder5Count   Int                  @default(0)
+  waitlistTurning5ThisYearCount Int          @default(0)
+  waitlistAged5PlusCount Int                 @default(0)
+  waitlistUnknownAgeCount Int                @default(0)
+  waitlistOldestEntryDays Int?
+  waitlistAverageEntryDays Decimal?          @db.Decimal(8, 4)
+  knownLeavingCount     Int
+  knownLeavingCountsByWindow Json                 @default("{\"1W\":0,\"2W\":0,\"3W\":0,\"1M\":0,\"2M\":0,\"3M\":0,\"6M\":0,\"12M\":0}")
+  agedOutCount          Int
+  approachingFiveCount  Int
+  approachingFiveCountsByWindow Json             @default("{\"1W\":0,\"2W\":0,\"3W\":0,\"1M\":0,\"2M\":0,\"3M\":0,\"6M\":0,\"12M\":0}")
+  replacementPressure   Int
+  waitlistCoverRatio    Decimal              @db.Decimal(8, 4)
+  urgencyScore          Decimal              @db.Decimal(8, 4)
+  urgencyBand           String
+  createdAt             DateTime             @default(now())
+  centre                CentreReference      @relation(fields: [centreKey], references: [centreKey], onDelete: Restrict, onUpdate: Cascade)
+  run                   AnalyticsSnapshotRun @relation(fields: [runId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@unique([runId, centreKey])
+  @@index([runId, urgencyScore(sort: Desc)])
+  @@index([centreKey, date(sort: Desc)])
+}

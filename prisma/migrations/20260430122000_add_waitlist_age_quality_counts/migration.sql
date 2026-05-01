@@ -1,0 +1,5 @@
+ALTER TABLE "ServiceAnalyticsSnapshot"
+ADD COLUMN "waitlistUnder5Count" INTEGER NOT NULL DEFAULT 0,
+ADD COLUMN "waitlistTurning5ThisYearCount" INTEGER NOT NULL DEFAULT 0,
+ADD COLUMN "waitlistAged5PlusCount" INTEGER NOT NULL DEFAULT 0,
+ADD COLUMN "waitlistUnknownAgeCount" INTEGER NOT NULL DEFAULT 0;
