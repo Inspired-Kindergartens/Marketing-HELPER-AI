@@ -8,7 +8,8 @@
     "prisma:studio": "prisma studio",
     "prisma:migrate": "prisma migrate dev",
     "prisma:generate": "prisma generate",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "tsx test/run-tests.ts"
   },
   "keywords": [],
   "author": "",
@@ -19,6 +20,7 @@
     "@prisma/adapter-pg": "^7.8.0",
     "@prisma/client": "^7.8.0",
     "bootstrap-icons": "^1.13.1",
+    "chart.js": "4.5.1",
     "dotenv": "^17.4.2",
     "fastify": "^5.8.5",
     "pg": "^8.20.0",

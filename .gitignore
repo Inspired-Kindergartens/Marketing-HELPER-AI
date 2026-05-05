@@ -8,6 +8,7 @@ dist
 uploads
 .prisma
 generated
+/INFOCARE/
 INFOCARE-*
 OLD.*
 temp-*.sql

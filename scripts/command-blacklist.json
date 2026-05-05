@@ -1,0 +1,16 @@
+{
+  "blockedSubstrings": [
+    {
+      "pattern": "Stop-Process -Id",
+      "reason": "Use taskkill.exe for this repo's port 3000 dev server; Stop-Process repeatedly failed with Access is denied."
+    },
+    {
+      "pattern": "PORT='300",
+      "reason": "This project must run on port 3000 only; do not start alternate ports."
+    },
+    {
+      "pattern": "$env:PORT='300",
+      "reason": "This project must run on port 3000 only; do not start alternate ports."
+    }
+  ]
+}

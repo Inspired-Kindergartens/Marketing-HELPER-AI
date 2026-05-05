@@ -4,19 +4,19 @@ import type {
   ManualCentreCapacity,
 } from "../storage/analytics-store.js";
 import { getWindowOption, resolveWindowKey, type WindowKey, WINDOW_OPTIONS } from "../analytics/windows.js";
+import type { WaitlistDiscoveryReport } from "../infocare/waitlist-report.js";
 import type { ServiceAnalyticsSnapshot } from "../infocare/models.js";
 import { estimateShortPlusTypicalWaitlistCount } from "../analytics/waitlist-profile.js";
 import { renderLayout } from "./layout.js";
 
 type AnalyticsRow = NonNullable<LatestSnapshotSet>["snapshots"][number];
 type ServiceSort = "critical" | "asc" | "desc";
+type WaitlistSection = "threshold" | "hierarchy" | null;
 
 const PANEL_DEFINITIONS = [
   { id: "analytics", title: "Infocare Analytics", className: "panel--system" },
+  { id: "waitlist", title: "Waitlist Quality", className: "panel--waitlist" },
   { id: "status", title: "Status", className: "panel--status" },
-  { id: "summary", title: "Summary", className: "panel--tools" },
-  { id: "output", title: "Output", className: "panel--output" },
-  { id: "privacy", title: "Privacy", className: "panel--database" },
   { id: "chat", title: "AI Chat", className: "panel--chat" },
 ] as const;
 
@@ -28,19 +28,34 @@ type AppShellOptions = {
   centreHistory?: CentreSnapshotHistoryEntry[];
   annualHistory?: CentreSnapshotHistoryEntry[];
   manualCapacity?: ManualCentreCapacity | null;
+  waitlistSnapshotSet?: LatestSnapshotSet | null;
+  waitlistReport?: WaitlistDiscoveryReport | null;
+  waitlistSection?: string | null;
 };
 
 function formatPercent(value: number) {
   return `${Math.round(value * 100)}%`;
 }
 
+function escapeHtml(value: string) {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function serializeJsonForScript(value: unknown) {
+  return JSON.stringify(value).replaceAll("<", "\\u003c");
+}
+
 function formatCapacityWithPercent(
   enrolledCount: number,
-  enrolledFteCount: number,
+  _enrolledFteCount: number,
   licensedCapacity: number,
 ) {
-  const utilisationRatio =
-    licensedCapacity > 0 ? Math.max(0, Math.min(enrolledFteCount / licensedCapacity, 1)) : 0;
+  const utilisationRatio = licensedCapacity > 0 ? Math.max(0, enrolledCount / licensedCapacity) : 0;
 
   return `${enrolledCount}/${licensedCapacity} ${formatPercent(utilisationRatio)}`;
 }
@@ -87,6 +102,14 @@ function resolveServiceSort(input?: string | null): ServiceSort {
   }
 
   return "critical";
+}
+
+function resolveWaitlistSection(input?: string | null): WaitlistSection {
+  if (input === "threshold" || input === "hierarchy") {
+    return input;
+  }
+
+  return null;
 }
 
 function sortAnalyticsRows(rows: readonly AnalyticsRow[], serviceSort: ServiceSort) {
@@ -337,6 +360,580 @@ function isLargeHeadcountGap(row: AnalyticsRow) {
 
 function getKnownWaitlistAgeCount(row: AnalyticsRow) {
   return row.waitlistUnder5Count + row.waitlistTurning5ThisYearCount + row.waitlistAged5PlusCount;
+}
+
+function formatDaysSince(value?: string | null) {
+  if (!value) {
+    return "pending";
+  }
+
+  const timestamp = new Date(value).getTime();
+
+  if (!Number.isFinite(timestamp)) {
+    return "pending";
+  }
+
+  const elapsedDays = Math.max(0, Math.floor((Date.now() - timestamp) / 86_400_000));
+
+  return elapsedDays === 1 ? "1 day" : `${elapsedDays} days`;
+}
+
+function formatAverageDays(value: number | null | undefined) {
+  if (value == null || !Number.isFinite(value)) {
+    return "-";
+  }
+
+  return `${Math.round(value)}d`;
+}
+
+type WaitlistChartRow = {
+  label: string;
+  value: number;
+  meta?: string;
+};
+
+type WaitlistChartDataset = {
+  label: string;
+  values: number[];
+  color: "short" | "typical" | "longRunning" | "veryLongRunning" | "green" | "blue" | "orange" | "red";
+};
+
+type WaitlistChartConfig = {
+  kind: "bar" | "doughnut" | "stackedBar";
+  labels: string[];
+  values?: number[];
+  meta?: string[];
+  datasets?: WaitlistChartDataset[];
+};
+
+type WaitlistHierarchyRow = {
+  centre: string;
+  waitlist: number;
+  longRunningWaitCount?: number;
+  veryLongRunningWaitCount?: number;
+  oldestDays?: number;
+};
+
+function renderWaitlistChart(chartId: string, config: WaitlistChartConfig | null, emptyText: string) {
+  if (!config || config.labels.length === 0) {
+    return `<p class="waitlist-chart__empty">${escapeHtml(emptyText)}</p>`;
+  }
+
+  return `
+    <div class="waitlist-chart">
+      <div class="waitlist-chart__canvas-wrap">
+        <canvas id="${escapeHtml(chartId)}"></canvas>
+      </div>
+      <script type="application/json" data-waitlist-chart="${escapeHtml(chartId)}">${serializeJsonForScript(config)}</script>
+    </div>
+  `;
+}
+
+function buildSimpleChartConfig(kind: "bar" | "doughnut", rows: WaitlistChartRow[]): WaitlistChartConfig | null {
+  if (rows.length === 0) {
+    return null;
+  }
+
+  return {
+    kind,
+    labels: rows.map((row) => row.label),
+    values: rows.map((row) => row.value),
+    meta: rows.map((row) => row.meta ?? String(row.value)),
+  };
+}
+
+function hasThresholdCounts(row: { shortWaitCount?: number; typicalWaitCount?: number; longRunningWaitCount?: number; veryLongRunningWaitCount?: number }) {
+  return (
+    row.shortWaitCount != null ||
+    row.typicalWaitCount != null ||
+    row.longRunningWaitCount != null ||
+    row.veryLongRunningWaitCount != null
+  );
+}
+
+function getLongAndVeryLongCount(row: { longRunningWaitCount?: number; veryLongRunningWaitCount?: number }) {
+  return (row.longRunningWaitCount ?? 0) + (row.veryLongRunningWaitCount ?? 0);
+}
+
+function buildFallbackThresholdChartConfig(rows: readonly AnalyticsRow[], showAllRows: boolean): WaitlistChartConfig | null {
+  const sortedRows = [...rows]
+    .filter((row) => row.waitlistCount > 0)
+    .sort(
+      (left, right) =>
+        Math.max(right.waitlistCount - getActionableWaitlistCount(right), 0) -
+          Math.max(left.waitlistCount - getActionableWaitlistCount(left), 0) ||
+        right.waitlistCount - left.waitlistCount,
+    );
+  const visibleRows = showAllRows ? sortedRows : sortedRows.slice(0, 8);
+
+  if (visibleRows.length === 0) {
+    return null;
+  }
+
+  return {
+    kind: "stackedBar",
+    labels: visibleRows.map((row) => row.serviceName),
+    datasets: [
+      {
+        label: "<163",
+        values: visibleRows.map((row) => getActionableWaitlistCount(row)),
+        color: "short",
+      },
+      {
+        label: "163+",
+        values: visibleRows.map((row) => Math.max(row.waitlistCount - getActionableWaitlistCount(row), 0)),
+        color: "veryLongRunning",
+      },
+    ],
+  };
+}
+
+function mergeWaitlistReportRows(report: WaitlistDiscoveryReport) {
+  const byCentre = new Map<string, WaitlistDiscoveryReport["largestWaitlists"][number]>();
+
+  for (const row of [...report.largestWaitlists, ...report.longTailWaitlists]) {
+    const existing = byCentre.get(row.centre);
+
+    byCentre.set(row.centre, {
+      ...existing,
+      ...row,
+      waitlist: Math.max(existing?.waitlist ?? 0, row.waitlist),
+      oldestDays: Math.max(existing?.oldestDays ?? 0, row.oldestDays ?? 0) || undefined,
+      shortWaitCount: existing?.shortWaitCount ?? row.shortWaitCount,
+      typicalWaitCount: existing?.typicalWaitCount ?? row.typicalWaitCount,
+      longRunningWaitCount: existing?.longRunningWaitCount ?? row.longRunningWaitCount,
+      veryLongRunningWaitCount: existing?.veryLongRunningWaitCount ?? row.veryLongRunningWaitCount,
+    });
+  }
+
+  return [...byCentre.values()];
+}
+
+function formatDistributionLegendLabel(label: string, range: string) {
+  return `${label}: ${range}`;
+}
+
+function buildThresholdChartConfig(report: WaitlistDiscoveryReport, showAllRows: boolean): WaitlistChartConfig | null {
+  const rows = mergeWaitlistReportRows(report)
+    .filter(hasThresholdCounts)
+    .sort((left, right) => getLongAndVeryLongCount(right) - getLongAndVeryLongCount(left) || right.waitlist - left.waitlist);
+  const visibleRows = showAllRows ? rows : rows.slice(0, 8);
+
+  if (visibleRows.length === 0) {
+    return null;
+  }
+
+  const shortLabel = formatDistributionLegendLabel("Short wait", "0-76 days");
+  const typicalLabel = formatDistributionLegendLabel("Typical wait", "77-370 days");
+  const longLabel = formatDistributionLegendLabel("Long-running wait", "371-537 days");
+  const veryLongLabel = formatDistributionLegendLabel("Very long-running wait", "538+ days");
+
+  return {
+    kind: "stackedBar",
+    labels: visibleRows.map((row) => row.centre),
+    datasets: [
+      {
+        label: shortLabel,
+        values: visibleRows.map((row) => row.shortWaitCount ?? 0),
+        color: "short",
+      },
+      {
+        label: typicalLabel,
+        values: visibleRows.map((row) => row.typicalWaitCount ?? 0),
+        color: "typical",
+      },
+      {
+        label: longLabel,
+        values: visibleRows.map((row) => row.longRunningWaitCount ?? 0),
+        color: "longRunning",
+      },
+      {
+        label: veryLongLabel,
+        values: visibleRows.map((row) => row.veryLongRunningWaitCount ?? 0),
+        color: "veryLongRunning",
+      },
+    ],
+  };
+}
+
+function renderThresholdRefreshHref(
+  selectedCentreKey: number | null | undefined,
+  selectedWindowKey: WindowKey,
+  serviceSort: ServiceSort,
+) {
+  return `/actions/refresh-snapshot?${buildQueryString(selectedCentreKey, selectedWindowKey, serviceSort)}`;
+}
+
+function renderThresholdChart(
+  report: WaitlistDiscoveryReport,
+  showAllRows: boolean,
+  selectedCentreKey: number | null | undefined,
+  selectedWindowKey: WindowKey,
+  serviceSort: ServiceSort,
+) {
+  const chartConfig = buildThresholdChartConfig(report, showAllRows);
+
+  if (chartConfig) {
+    return renderWaitlistChart("waitlist-threshold-chart", chartConfig, "");
+  }
+
+  const total = report.totalWaitlistCount ?? report.shortPlusTypicalTotal ?? 0;
+  const good = report.shortPlusTypicalCount ?? 0;
+  const longRunning = report.longRunningCount ?? Math.max(total - good, 0);
+  const goodPercent = total > 0 ? Math.round((good / total) * 100) : 0;
+  const longPercent = total > 0 ? Math.max(0, 100 - goodPercent) : 0;
+
+  return `
+    <div class="waitlist-threshold-state">
+      <div class="waitlist-threshold-state__bars" aria-label="Current aggregate waitlist split">
+        <div class="waitlist-threshold-state__track">
+          <span class="waitlist-threshold-state__bar waitlist-threshold-state__bar--good" style="width: ${goodPercent}%"></span>
+          <span class="waitlist-threshold-state__bar waitlist-threshold-state__bar--long" style="width: ${longPercent}%"></span>
+        </div>
+        <div class="waitlist-threshold-state__legend">
+          <span><i class="waitlist-threshold-state__swatch waitlist-threshold-state__swatch--good"></i>&lt;163 ${good}/${total}</span>
+          <span><i class="waitlist-threshold-state__swatch waitlist-threshold-state__swatch--long"></i>163+ ${longRunning}/${total}</span>
+        </div>
+      </div>
+      <div class="waitlist-threshold-state__body">
+        <p>Per-centre distribution bars need the threshold columns from the waitlist pull.</p>
+        <div class="waitlist-threshold-state__required">
+          <span>Short wait: 0-76 days</span>
+          <span>Typical wait: 77-370 days</span>
+          <span>Long-running wait: 371-537 days</span>
+          <span>Very long-running wait: 538+ days</span>
+        </div>
+      </div>
+      <a class="panel-action-button waitlist-threshold-state__action" href="${escapeHtml(renderThresholdRefreshHref(selectedCentreKey, selectedWindowKey, serviceSort))}" aria-label="Refresh analytics and waitlist report" title="Refresh analytics and waitlist report">
+        <i class="bi bi-download ui-icon" aria-hidden="true"></i>
+        <span>Refresh source data</span>
+      </a>
+    </div>
+  `;
+}
+
+function renderWaitlistHierarchyTable(rows: WaitlistHierarchyRow[], showAllRows: boolean) {
+  const sortedRows = rows
+    .filter((row) => row.waitlist > 0)
+    .sort(
+      (left, right) =>
+        getLongAndVeryLongCount(right) - getLongAndVeryLongCount(left) ||
+        (right.veryLongRunningWaitCount ?? 0) - (left.veryLongRunningWaitCount ?? 0) ||
+        right.waitlist - left.waitlist ||
+        (right.oldestDays ?? 0) - (left.oldestDays ?? 0),
+    );
+  const visibleRows = showAllRows ? sortedRows : sortedRows.slice(0, 8);
+
+  if (visibleRows.length === 0) {
+    return `<p class="waitlist-chart__empty">No waitlist hierarchy rows stored.</p>`;
+  }
+
+  return `
+    <div class="waitlist-table-wrap">
+      <table class="waitlist-table">
+        <thead>
+          <tr>
+            <th>Centre</th>
+            <th>Long-running wait</th>
+            <th>Very long-running wait</th>
+            <th>Max days</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${visibleRows
+            .map(
+              (row) => `
+                <tr>
+                  <td>${escapeHtml(row.centre)}</td>
+                  <td>${row.longRunningWaitCount ?? "-"}</td>
+                  <td>${row.veryLongRunningWaitCount ?? "-"}</td>
+                  <td>${row.oldestDays ?? "-"}</td>
+                </tr>
+              `,
+            )
+            .join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function renderLongRunningTable(report: WaitlistDiscoveryReport, showAllRows: boolean) {
+  return renderWaitlistHierarchyTable(mergeWaitlistReportRows(report), showAllRows);
+}
+
+function buildRecentDemandChartConfig(rows: { centre: string; newEnrolments: number; newWaitlistEntries: number }[]): WaitlistChartConfig | null {
+  if (rows.length === 0) {
+    return null;
+  }
+
+  return {
+    kind: "stackedBar",
+    labels: rows.map((row) => row.centre),
+    datasets: [
+      {
+        label: "New enrolments",
+        values: rows.map((row) => row.newEnrolments),
+        color: "green",
+      },
+      {
+        label: "New waitlist entries",
+        values: rows.map((row) => row.newWaitlistEntries),
+        color: "blue",
+      },
+    ],
+  };
+}
+
+function renderRecentDemandPanel(
+  report: Pick<WaitlistDiscoveryReport, "recentDemand"> | null,
+  showAllRows: boolean,
+) {
+  const limitRows = <T,>(rows: T[]) => (showAllRows ? rows : rows.slice(0, 8));
+  const recentDemand = report?.recentDemand ?? {
+    lastMonth: [],
+    lastTwoMonths: [],
+    lastThreeMonths: [],
+  };
+
+  return `
+    <section class="waitlist-quality__section waitlist-quality__section--wide waitlist-quality__section--recent">
+      <h3>Recent Demand Activity</h3>
+      <div class="recent-demand-grid">
+        <section>
+          <h4>Last Month</h4>
+          ${renderWaitlistChart("waitlist-recent-month-chart", buildRecentDemandChartConfig(limitRows(recentDemand.lastMonth)), "No last-month recent demand rows stored.")}
+        </section>
+        <section>
+          <h4>Last Two Months</h4>
+          ${renderWaitlistChart("waitlist-recent-two-month-chart", buildRecentDemandChartConfig(limitRows(recentDemand.lastTwoMonths)), "No two-month recent demand rows stored.")}
+        </section>
+        <section>
+          <h4>Last Three Months</h4>
+          ${renderWaitlistChart("waitlist-recent-three-month-chart", buildRecentDemandChartConfig(limitRows(recentDemand.lastThreeMonths)), "No three-month recent demand rows stored.")}
+        </section>
+      </div>
+    </section>
+  `;
+}
+
+function buildWaitlistSectionQuery(
+  selectedCentreKey: number | null | undefined,
+  selectedWindowKey: WindowKey,
+  serviceSort: ServiceSort,
+  waitlistSection: Exclude<WaitlistSection, null>,
+) {
+  const params = new URLSearchParams(buildQueryString(selectedCentreKey, selectedWindowKey, serviceSort, "waitlist"));
+
+  params.set("waitlistSection", waitlistSection);
+
+  return params.toString();
+}
+
+function renderWaitlistSectionHeader(
+  title: string,
+  selectedCentreKey: number | null | undefined,
+  selectedWindowKey: WindowKey,
+  serviceSort: ServiceSort,
+  waitlistSection: Exclude<WaitlistSection, null>,
+  showBreakoutButton: boolean,
+) {
+  const button = showBreakoutButton
+    ? `<button class="panel-action-button waitlist-section-open" type="button" data-open-panel="waitlist" data-panel-query="${escapeHtml(buildWaitlistSectionQuery(selectedCentreKey, selectedWindowKey, serviceSort, waitlistSection))}" aria-label="Open ${escapeHtml(title)} window" title="Open window"><i class="bi bi-box-arrow-up-right ui-icon" aria-hidden="true"></i></button>`
+    : "";
+
+  return `
+    <div class="waitlist-quality__section-header">
+      <h3>${escapeHtml(title)}</h3>
+      ${button}
+    </div>
+  `;
+}
+
+function renderWaitlistReportPanel(
+  report: WaitlistDiscoveryReport,
+  showAllRows: boolean,
+  selectedCentreKey: number | null | undefined,
+  selectedWindowKey: WindowKey,
+  serviceSort: ServiceSort,
+  waitlistSection: WaitlistSection,
+) {
+  const totalWaitlistCount = report.totalWaitlistCount ?? report.shortPlusTypicalTotal ?? 0;
+  const under163Count = estimateShortPlusTypicalWaitlistCount(totalWaitlistCount);
+  const over163Count = Math.max(totalWaitlistCount - under163Count, 0);
+  const distributionRows = report.distribution.map((row) => ({
+    label: row.label,
+    value: row.count,
+    meta: `${row.count} ${row.share}`,
+  }));
+  const thresholdSection = `
+    <section class="waitlist-quality__section">
+      ${renderWaitlistSectionHeader("Waitlist by Distribution Days", selectedCentreKey, selectedWindowKey, serviceSort, "threshold", waitlistSection !== "threshold")}
+      ${renderThresholdChart(report, showAllRows, selectedCentreKey, selectedWindowKey, serviceSort)}
+    </section>
+  `;
+  const hierarchySection = `
+    <section class="waitlist-quality__section">
+      ${renderWaitlistSectionHeader("Waitlist Quality Hierarchy", selectedCentreKey, selectedWindowKey, serviceSort, "hierarchy", waitlistSection !== "hierarchy")}
+      ${renderLongRunningTable(report, showAllRows)}
+    </section>
+  `;
+  const waitlistBody =
+    waitlistSection === "threshold"
+      ? thresholdSection
+      : waitlistSection === "hierarchy"
+        ? hierarchySection
+        : `
+          ${thresholdSection}
+          ${hierarchySection}
+          <section class="waitlist-quality__section">
+            <h3>Waitlist Age Distribution</h3>
+            ${renderWaitlistChart("waitlist-distribution-chart", buildSimpleChartConfig("doughnut", distributionRows), "No distribution rows stored.")}
+          </section>
+          ${renderRecentDemandPanel(report, showAllRows)}
+        `;
+
+  return `
+    <div class="waitlist-quality${waitlistSection ? " waitlist-quality--section-focus" : ""}">
+      <div class="waitlist-quality__stats">
+        <div class="compact-stats__item">
+          <span class="compact-stats__label">&lt;163/Total</span>
+          <span class="compact-stats__value">${under163Count}/${totalWaitlistCount}</span>
+        </div>
+        <div class="compact-stats__item">
+          <span class="compact-stats__label">163+/Total</span>
+          <span class="compact-stats__value">${over163Count}/${totalWaitlistCount}</span>
+        </div>
+        ${
+          report.waitlistStartingDateCount != null
+            ? `<div class="compact-stats__item">
+                <span class="compact-stats__label">Starting date</span>
+                <span class="compact-stats__value">${report.waitlistStartingDateCount}/${totalWaitlistCount}</span>
+              </div>`
+            : ""
+        }
+        <div class="compact-stats__item">
+          <span class="compact-stats__label">Oldest</span>
+          <span class="compact-stats__value">${report.oldestDays ?? 0}d</span>
+        </div>
+        <div class="compact-stats__item">
+          <span class="compact-stats__label">Median</span>
+          <span class="compact-stats__value">${formatAverageDays(report.medianDays)}</span>
+        </div>
+      </div>
+      <div class="waitlist-quality__grid">
+        ${waitlistBody}
+      </div>
+    </div>
+  `;
+}
+
+function renderWaitlistQualityPanel(
+  snapshotSet: LatestSnapshotSet | null,
+  report?: WaitlistDiscoveryReport | null,
+  showAllRows = false,
+  selectedCentreKey?: number | null,
+  selectedWindowKey: WindowKey = "3M",
+  serviceSort: ServiceSort = "critical",
+  waitlistSection: WaitlistSection = null,
+) {
+  if (report) {
+    return renderWaitlistReportPanel(
+      report,
+      showAllRows,
+      selectedCentreKey,
+      selectedWindowKey,
+      serviceSort,
+      waitlistSection,
+    );
+  }
+
+  const rows = snapshotSet?.snapshots ?? [];
+  const totalWaitlistCount = rows.reduce((sum, row) => sum + row.waitlistCount, 0);
+  const under163Count = rows.reduce((sum, row) => sum + getActionableWaitlistCount(row), 0);
+  const over163Count = Math.max(totalWaitlistCount - under163Count, 0);
+  const oldestEntryDays = Math.max(0, ...rows.map((row) => row.waitlistOldestEntryDays ?? 0));
+  const olderChildRows = [...rows]
+    .map((row) => ({
+      label: row.serviceName,
+      value: row.waitlistTurning5ThisYearCount + row.waitlistAged5PlusCount,
+      meta: `${row.waitlistTurning5ThisYearCount + row.waitlistAged5PlusCount}/${Math.max(getKnownWaitlistAgeCount(row), row.waitlistCount)}`,
+    }))
+    .filter((row) => row.value > 0)
+    .sort((left, right) => right.value - left.value)
+    .slice(0, 8);
+  const thresholdSection = `
+    <section class="waitlist-quality__section">
+      ${renderWaitlistSectionHeader("Waitlist by Distribution Days", selectedCentreKey, selectedWindowKey, serviceSort, "threshold", waitlistSection !== "threshold")}
+      ${renderWaitlistChart("waitlist-threshold-chart", buildFallbackThresholdChartConfig(rows, showAllRows), "No waitlist rows stored.")}
+    </section>
+  `;
+  const hierarchySection = `
+    <section class="waitlist-quality__section">
+      ${renderWaitlistSectionHeader("Waitlist Quality Hierarchy", selectedCentreKey, selectedWindowKey, serviceSort, "hierarchy", waitlistSection !== "hierarchy")}
+      ${renderWaitlistHierarchyTable(
+        rows.map((row) => ({
+          centre: row.serviceName,
+          waitlist: row.waitlistCount,
+          longRunningWaitCount: Math.max(row.waitlistCount - getActionableWaitlistCount(row), 0),
+          oldestDays: row.waitlistOldestEntryDays ?? undefined,
+        })),
+        showAllRows,
+      )}
+    </section>
+  `;
+  const waitlistBody =
+    waitlistSection === "threshold"
+      ? thresholdSection
+      : waitlistSection === "hierarchy"
+        ? hierarchySection
+        : `
+          ${thresholdSection}
+          ${hierarchySection}
+          <section class="waitlist-quality__section">
+            <h3>Waitlist Age Distribution</h3>
+            ${renderWaitlistChart("waitlist-older-children-chart", buildSimpleChartConfig("doughnut", olderChildRows), "No older-child waitlist rows stored.")}
+          </section>
+          ${renderRecentDemandPanel(null, showAllRows)}
+        `;
+
+  if (rows.length === 0) {
+    return `
+      <div class="waitlist-quality waitlist-quality--empty">
+        <p>No stored waitlist analytics are available yet.</p>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="waitlist-quality${waitlistSection ? " waitlist-quality--section-focus" : ""}">
+      <div class="waitlist-quality__stats">
+        <div class="compact-stats__item">
+          <span class="compact-stats__label">&lt;163/Total</span>
+          <span class="compact-stats__value">${under163Count}/${totalWaitlistCount}</span>
+        </div>
+        <div class="compact-stats__item">
+          <span class="compact-stats__label">163+/Total</span>
+          <span class="compact-stats__value">${over163Count}/${totalWaitlistCount}</span>
+        </div>
+        <div class="compact-stats__item">
+          <span class="compact-stats__label">Starting date</span>
+          <span class="compact-stats__value">snapshot</span>
+        </div>
+        <div class="compact-stats__item">
+          <span class="compact-stats__label">Oldest</span>
+          <span class="compact-stats__value">${oldestEntryDays}d</span>
+        </div>
+        <div class="compact-stats__item">
+          <span class="compact-stats__label">Median</span>
+          <span class="compact-stats__value">-</span>
+        </div>
+      </div>
+      <div class="waitlist-quality__grid">
+        ${waitlistBody}
+      </div>
+    </div>
+  `;
 }
 
 function resolveSelectedRow(
@@ -620,7 +1217,7 @@ function renderAnalyticsTable(
       (row) => `
         <tr class="${row.centreKey === selectedCentreKey ? "analytics-table__row--selected analytics-table__row--clickable" : "analytics-table__row--clickable"}" data-row-href="/?${buildQueryString(row.centreKey, selectedWindowKey, serviceSort)}">
           <td class="analytics-table__service">
-            <a class="analytics-table__link" href="/?${buildQueryString(row.centreKey, selectedWindowKey, serviceSort)}">${row.serviceName}</a>
+            ${row.serviceName}
           </td>
           <td class="analytics-table__numeric">${formatCapacityWithPercent(row.enrolledCount, row.enrolledFteCount, row.licensedCapacity)}</td>
           <td class="analytics-table__numeric">${formatAgeBandCapacity(row.enrolledUnder2Count, row.licensedUnder2Capacity)}</td>
@@ -785,48 +1382,34 @@ function renderAiChatPanel(
   `;
 }
 
-function renderStatusPanel(snapshotSet: LatestSnapshotSet | null, historyCount: number) {
-  return `
-    <div class="status-lines">
-      <p>Snapshot source: ${snapshotSet?.source ?? "Unavailable"}</p>
-      <p>Rows loaded: ${snapshotSet?.snapshots.length ?? 0}</p>
-      <p>History points in view: ${historyCount}</p>
-      <p>Last refresh: ${snapshotSet ? formatTimestamp(snapshotSet.createdAt) : "Pending"}</p>
-    </div>
-  `;
-}
-
-function renderOutputPanel(
+function renderStatusPanel(
   snapshotSet: LatestSnapshotSet | null,
   selectedCentreKey: number | null | undefined,
   selectedWindowKey: WindowKey,
   centreHistory: CentreSnapshotHistoryEntry[],
 ) {
   const selectedRow = resolveSelectedRow(snapshotSet, selectedCentreKey);
-  const selectedWindowLabel =
-    getWindowOption(selectedWindowKey).label;
+  const selectedWindowLabel = getWindowOption(selectedWindowKey).label;
   const latestHistory = centreHistory.at(-1)?.snapshot;
   const previousHistory = centreHistory.length > 1 ? centreHistory[centreHistory.length - 2]?.snapshot : null;
+  const rowCount = snapshotSet?.snapshots.length ?? 0;
+  const dualPathCount =
+    snapshotSet?.snapshots.filter((snapshot) => snapshot.waitlistCount > 0 && snapshot.enrolledCount < snapshot.licensedCapacity).length ??
+    0;
 
   return `
-    <div class="output-list">
-      <p>Latest run date: ${snapshotSet?.runDate.slice(0, 10) ?? "Pending"}</p>
-      <ul>
-        <li><span>Centre</span><strong>${selectedRow?.serviceName ?? "No selection"}</strong></li>
-        <li><span>Window</span><strong>${selectedWindowLabel}</strong></li>
-        <li><span>Current waitlist</span><strong>${selectedRow?.waitlistCount ?? 0}</strong></li>
-        <li><span>Previous waitlist</span><strong>${previousHistory?.waitlistCount ?? latestHistory?.waitlistCount ?? 0}</strong></li>
-      </ul>
-    </div>
-  `;
-}
-
-function renderPrivacyPanel() {
-  return `
-    <div class="status-lines">
-      <p>Individual child first names and last names are stripped out of the analytics pipeline before any dashboard rendering or snapshot storage happens.</p>
-      <p>Parent names are not collected by this dashboard and should not be added to prompts, exports, or future analytics summaries.</p>
-      <p>Centre messaging should stay aggregated to counts, age bands, waitlist pressure, and turnover signals rather than identifiable family details.</p>
+    <div class="dashboard-status">
+      <p><span>Snapshot</span><strong>${snapshotSet?.source ?? "Unavailable"}</strong></p>
+      <p><span>Rows</span><strong>${rowCount}</strong></p>
+      <p><span>History</span><strong>${centreHistory.length}</strong></p>
+      <p><span>Refreshed</span><strong>${snapshotSet ? formatTimestamp(snapshotSet.createdAt) : "Pending"}</strong></p>
+      <p><span>Run date</span><strong>${snapshotSet?.runDate.slice(0, 10) ?? "Pending"}</strong></p>
+      <p><span>Window</span><strong>${selectedWindowLabel}</strong></p>
+      <p><span>Waitlist + space</span><strong>${dualPathCount}</strong></p>
+      <p><span>Centre</span><strong>${selectedRow?.serviceName ?? "No selection"}</strong></p>
+      <p><span>Waitlist</span><strong>${selectedRow?.waitlistCount ?? 0}</strong></p>
+      <p><span>Previous waitlist</span><strong>${previousHistory?.waitlistCount ?? latestHistory?.waitlistCount ?? 0}</strong></p>
+      <p class="dashboard-status__note">Child and family identities stay out of dashboard rendering, storage, prompts, exports, and summaries.</p>
     </div>
   `;
 }
@@ -875,29 +1458,71 @@ function renderBreakoutScript() {
             return;
           }
 
-          let featureString = "popup=yes,resizable=yes,scrollbars=yes,width=1600,height=900";
+          let targetBounds = {
+            left: window.screen?.availLeft || 0,
+            top: window.screen?.availTop || 0,
+            width: window.screen?.availWidth || window.screen?.width || 1600,
+            height: window.screen?.availHeight || window.screen?.height || 900,
+          };
+          let featureString = [
+            "popup=yes",
+            "resizable=yes",
+            "scrollbars=yes",
+            "fullscreen=yes",
+            "left=" + targetBounds.left,
+            "top=" + targetBounds.top,
+            "screenX=" + targetBounds.left,
+            "screenY=" + targetBounds.top,
+            "width=" + targetBounds.width,
+            "height=" + targetBounds.height,
+          ].join(",");
 
           if ("getScreenDetails" in window) {
             try {
               const details = await window.getScreenDetails();
               const targetIndex = resolveTargetScreenIndex(details);
               const screen = details.screens[targetIndex] ?? details.currentScreen;
+              targetBounds = {
+                left: screen.availLeft,
+                top: screen.availTop,
+                width: screen.availWidth,
+                height: screen.availHeight,
+              };
 
               featureString = [
                 "popup=yes",
                 "resizable=yes",
                 "scrollbars=yes",
-                "left=" + screen.availLeft,
-                "top=" + screen.availTop,
-                "width=" + Math.max(960, Math.floor(screen.availWidth * 0.92)),
-                "height=" + Math.max(700, Math.floor(screen.availHeight * 0.92)),
+                "fullscreen=yes",
+                "left=" + targetBounds.left,
+                "top=" + targetBounds.top,
+                "screenX=" + targetBounds.left,
+                "screenY=" + targetBounds.top,
+                "width=" + targetBounds.width,
+                "height=" + targetBounds.height,
               ].join(",");
               localStorage.setItem(storageKey, String(targetIndex));
             } catch (error) {
             }
           }
 
-          window.open("/?" + query, "_blank", featureString);
+          const popup = window.open("/?" + query, "_blank", featureString);
+
+          if (popup) {
+            try {
+              popup.moveTo(targetBounds.left, targetBounds.top);
+              popup.resizeTo(targetBounds.width, targetBounds.height);
+              setTimeout(() => {
+                try {
+                  popup.moveTo(targetBounds.left, targetBounds.top);
+                  popup.resizeTo(targetBounds.width, targetBounds.height);
+                } catch (error) {
+                }
+              }, 250);
+              popup.focus();
+            } catch (error) {
+            }
+          }
         }
 
         document.addEventListener("click", (event) => {
@@ -932,6 +1557,172 @@ function renderBreakoutScript() {
   `;
 }
 
+function renderWaitlistChartScript() {
+  return `
+    <script>
+      (() => {
+        if (!window.Chart) {
+          return;
+        }
+
+        const gridColor = "rgba(212, 212, 212, 0.12)";
+        const tickColor = "#d4d4d4";
+        const colorMap = {
+          short: "#7fbe6f",
+          typical: "#4bc2c3",
+          longRunning: "#eeaf38",
+          veryLongRunning: "#fb3640",
+          green: "#7fbe6f",
+          blue: "#4bc2c3",
+          orange: "#eeaf38",
+          red: "#fb3640",
+        };
+        const palette = [colorMap.short, colorMap.typical, colorMap.longRunning, colorMap.veryLongRunning, "#9d8fe3", "#d4d4d4"];
+
+        function resolveColor(key, fallbackIndex) {
+          return colorMap[key] || palette[fallbackIndex % palette.length];
+        }
+
+        function readConfig(script) {
+          try {
+            return JSON.parse(script.textContent || "{}");
+          } catch (error) {
+            return null;
+          }
+        }
+
+        function createBarConfig(config) {
+          return {
+            type: "bar",
+            data: {
+              labels: config.labels,
+              datasets: [{
+                data: config.values,
+                backgroundColor: "#7fbe6f",
+                borderColor: "#d8f79a",
+                borderWidth: 1,
+              }],
+            },
+            options: {
+              animation: false,
+              indexAxis: "y",
+              maintainAspectRatio: false,
+              plugins: {
+                legend: { display: false },
+                tooltip: {
+                  callbacks: {
+                    label: (context) => config.meta?.[context.dataIndex] || String(context.raw),
+                  },
+                },
+              },
+              scales: {
+                x: {
+                  beginAtZero: true,
+                  grid: { color: gridColor },
+                  ticks: { color: tickColor, precision: 0 },
+                },
+                y: {
+                  grid: { display: false },
+                  ticks: { color: tickColor, autoSkip: false },
+                },
+              },
+            },
+          };
+        }
+
+        function createStackedBarConfig(config) {
+          return {
+            type: "bar",
+            data: {
+              labels: config.labels,
+              datasets: (config.datasets || []).map((dataset, index) => ({
+                label: dataset.label,
+                data: dataset.values,
+                backgroundColor: resolveColor(dataset.color, index),
+                borderColor: "#050505",
+                borderWidth: 1,
+              })),
+            },
+            options: {
+              animation: false,
+              indexAxis: "y",
+              maintainAspectRatio: false,
+              plugins: {
+                legend: {
+                  position: "bottom",
+                  labels: { color: tickColor, boxWidth: 10 },
+                },
+              },
+              scales: {
+                x: {
+                  stacked: true,
+                  beginAtZero: true,
+                  grid: { color: gridColor },
+                  ticks: { color: tickColor, precision: 0 },
+                },
+                y: {
+                  stacked: true,
+                  grid: { display: false },
+                  ticks: { color: tickColor, autoSkip: false },
+                },
+              },
+            },
+          };
+        }
+
+        function createDoughnutConfig(config) {
+          return {
+            type: "doughnut",
+            data: {
+              labels: config.labels,
+              datasets: [{
+                data: config.values,
+                  backgroundColor: config.values.map((_, index) => palette[index % palette.length]),
+                borderColor: "#050505",
+                borderWidth: 2,
+              }],
+            },
+            options: {
+              animation: false,
+              maintainAspectRatio: false,
+              plugins: {
+                legend: {
+                  position: "right",
+                  labels: { color: tickColor, boxWidth: 10 },
+                },
+                tooltip: {
+                  callbacks: {
+                    label: (context) => config.meta?.[context.dataIndex] || String(context.raw),
+                  },
+                },
+              },
+            },
+          };
+        }
+
+        for (const script of document.querySelectorAll("script[data-waitlist-chart]")) {
+          const chartId = script.getAttribute("data-waitlist-chart");
+          const canvas = chartId ? document.getElementById(chartId) : null;
+          const config = readConfig(script);
+
+          if (!(canvas instanceof HTMLCanvasElement) || !config) {
+            continue;
+          }
+
+          const chartConfig =
+            config.kind === "doughnut"
+              ? createDoughnutConfig(config)
+              : config.kind === "stackedBar"
+                ? createStackedBarConfig(config)
+                : createBarConfig(config);
+
+          new Chart(canvas, chartConfig);
+        }
+      })();
+    </script>
+  `;
+}
+
 export function renderAppShell(
   snapshotSet: LatestSnapshotSet | null,
   options: AppShellOptions = {},
@@ -942,6 +1733,9 @@ export function renderAppShell(
   const focusPanelId = options.focusPanelId ?? null;
   const centreHistory = options.centreHistory ?? [];
   const annualHistory = options.annualHistory ?? [];
+  const waitlistSnapshotSet = options.waitlistSnapshotSet ?? snapshotSet;
+  const waitlistReport = options.waitlistReport ?? null;
+  const waitlistSection = resolveWaitlistSection(options.waitlistSection);
   const panelContent = PANEL_DEFINITIONS.map((panel) => ({
     id: panel.id,
     title: panel.title,
@@ -954,33 +1748,33 @@ export function renderAppShell(
             <span>${snapshotSet ? formatTimestamp(snapshotSet.createdAt) : "pending"}</span>
           `
         : panel.id === "status"
-          ? `<span>read-only</span>`
-          : panel.id === "summary"
-            ? `<span>live counts</span>`
-            : panel.id === "output"
-              ? `<span>${selectedWindowKey} insight view</span>`
-              : panel.id === "privacy"
-                ? `<span>identity-safe</span>`
-                : "",
+          ? `<span>read-only summary</span>`
+          : panel.id === "waitlist"
+            ? `<span>${waitlistReport?.generatedAt ? `report ${formatTimestamp(waitlistReport.generatedAt)}` : `last pulled ${formatDaysSince(waitlistSnapshotSet?.createdAt)}`}</span>`
+            : "",
     children:
       panel.id === "analytics"
         ? renderAnalyticsTable(snapshotSet, selectedCentreKey, selectedWindowKey, serviceSort)
+        : panel.id === "waitlist"
+          ? renderWaitlistQualityPanel(
+              waitlistSnapshotSet,
+              waitlistReport,
+              focusPanelId === "waitlist",
+              selectedCentreKey,
+              selectedWindowKey,
+              serviceSort,
+              focusPanelId === "waitlist" ? waitlistSection : null,
+            )
         : panel.id === "status"
-          ? renderStatusPanel(snapshotSet, centreHistory.length)
-          : panel.id === "summary"
-            ? renderCompactStats(snapshotSet, selectedWindowKey)
-            : panel.id === "output"
-              ? renderOutputPanel(snapshotSet, selectedCentreKey, selectedWindowKey, centreHistory)
-              : panel.id === "privacy"
-                ? renderPrivacyPanel()
-                : renderAiChatPanel(
-                    snapshotSet,
-                    selectedCentreKey,
-                    selectedWindowKey,
-                    centreHistory,
-                    annualHistory,
-                    options.manualCapacity,
-                  ),
+          ? renderStatusPanel(snapshotSet, selectedCentreKey, selectedWindowKey, centreHistory)
+          : renderAiChatPanel(
+              snapshotSet,
+              selectedCentreKey,
+              selectedWindowKey,
+              centreHistory,
+              annualHistory,
+              options.manualCapacity,
+            ),
   }));
   const layout = renderLayout({
     panels: panelContent,
@@ -998,6 +1792,8 @@ export function renderAppShell(
   </head>
   <body>
     ${layout}
+    <script src="/vendor/chart.umd.js"></script>
+    ${renderWaitlistChartScript()}
     ${renderBreakoutScript()}
   </body>
 </html>`;

@@ -109,6 +109,10 @@ function round(value, digits = 1) {
   return Number(value.toFixed(digits));
 }
 
+function getWaitlistAgeDate(child) {
+  return child.application_date ?? child.starting_date;
+}
+
 async function main() {
   const now = new Date();
   const today = toIsoDateOnly(now);
@@ -126,7 +130,7 @@ async function main() {
 
   const allEntries = [];
   const centreSummaries = [];
-  const missingStartingDateEntries = [];
+  const missingApplicationDateEntries = [];
   const errors = [];
 
   for (const [index, centre] of centres.entries()) {
@@ -139,13 +143,13 @@ async function main() {
       });
       const childList = Array.isArray(response.child_list) ? response.child_list : [];
       const ages = [];
-      let missingStartDateCount = 0;
+      let missingApplicationDateCount = 0;
 
       for (const child of childList) {
-        const days = calculateAgeInDays(child.starting_date, now);
+        const days = calculateAgeInDays(getWaitlistAgeDate(child), now);
 
         if (days == null) {
-          missingStartDateCount += 1;
+          missingApplicationDateCount += 1;
           continue;
         }
 
@@ -157,10 +161,10 @@ async function main() {
         });
       }
 
-      if (missingStartDateCount > 0) {
-        missingStartingDateEntries.push({
+      if (missingApplicationDateCount > 0) {
+        missingApplicationDateEntries.push({
           centreName: centre.name,
-          missingStartDateCount,
+          missingApplicationDateCount,
         });
       }
 
@@ -170,7 +174,8 @@ async function main() {
         centreName: centre.name,
         waitlistCount: childList.length,
         usableAgeCount: ages.length,
-        missingStartDateCount,
+        missingApplicationDateCount,
+        waitAges: ages,
         medianDays: percentile(sortedAges, 0.5),
         p75Days: percentile(sortedAges, 0.75),
         oldestDays: sortedAges.length > 0 ? sortedAges[sortedAges.length - 1] : null,
@@ -183,6 +188,14 @@ async function main() {
     }
 
     await sleep(index === centres.length - 1 ? 0 : 175);
+  }
+
+  if (errors.length > 0) {
+    throw new Error(
+      `Waitlist report refresh did not cover every open centre. ${errors.length} of ${centres.length} centres failed: ${errors
+        .map((error) => error.centreName)
+        .join(", ")}`,
+    );
   }
 
   const validDays = allEntries.map((entry) => entry.waitDays).sort((a, b) => a - b);
@@ -211,15 +224,34 @@ async function main() {
   const oldestDays = validDays.length > 0 ? validDays[validDays.length - 1] : null;
   const totalWaitlistCount = centreSummaries.reduce((sum, centre) => sum + centre.waitlistCount, 0);
   const totalUsableAgeCount = centreSummaries.reduce((sum, centre) => sum + centre.usableAgeCount, 0);
-  const totalMissingStartDateCount = centreSummaries.reduce((sum, centre) => sum + centre.missingStartDateCount, 0);
-  const centresWithLongTail = centreSummaries
-    .filter((centre) => (centre.oldestDays ?? 0) >= 180)
-    .sort((a, b) => (b.oldestDays ?? 0) - (a.oldestDays ?? 0))
-    .slice(0, 12);
-  const biggestWaitlists = centreSummaries
+  const totalMissingApplicationDateCount = centreSummaries.reduce((sum, centre) => sum + centre.missingApplicationDateCount, 0);
+  const centreSummariesWithThresholdCounts = centreSummaries.map((centre) => {
+    const shortWaitCount = centre.waitAges.filter((days) => p25Days != null && days <= p25Days).length;
+    const typicalWaitCount = centre.waitAges.filter((days) => p25Days != null && p75Days != null && days > p25Days && days <= p75Days).length;
+    const longRunningWaitCount = centre.waitAges.filter((days) => p75Days != null && p90Days != null && days > p75Days && days <= p90Days).length;
+    const veryLongRunningWaitCount = centre.waitAges.filter((days) => p90Days != null && days > p90Days).length;
+
+    return {
+      ...centre,
+      shortWaitCount,
+      typicalWaitCount,
+      longRunningWaitCount,
+      veryLongRunningWaitCount,
+    };
+  });
+  const biggestWaitlists = centreSummariesWithThresholdCounts
     .filter((centre) => centre.waitlistCount > 0)
     .sort((a, b) => b.waitlistCount - a.waitlistCount || (b.oldestDays ?? 0) - (a.oldestDays ?? 0))
-    .slice(0, 15);
+  const biggestLongRunningWaitlists = centreSummariesWithThresholdCounts
+    .filter((centre) => centre.waitlistCount > 0)
+    .sort(
+      (a, b) =>
+        b.longRunningWaitCount +
+          b.veryLongRunningWaitCount -
+          (a.longRunningWaitCount + a.veryLongRunningWaitCount) ||
+        b.veryLongRunningWaitCount - a.veryLongRunningWaitCount ||
+        b.waitlistCount - a.waitlistCount,
+    );
 
   const lines = [];
   lines.push("# INFOCARE WAITLIST");
@@ -230,8 +262,8 @@ async function main() {
   lines.push("");
   lines.push(`- Open centres checked: ${centres.length}`);
   lines.push(`- Waitlist entries returned across all centres: ${totalWaitlistCount}`);
-  lines.push(`- Entries with usable wait-age data from \`starting_date\`: ${totalUsableAgeCount}`);
-  lines.push(`- Entries missing usable \`starting_date\`: ${totalMissingStartDateCount}`);
+  lines.push(`- Entries with usable wait-age data from \`application_date\`: ${totalUsableAgeCount}`);
+  lines.push(`- Entries missing usable \`application_date\`: ${totalMissingApplicationDateCount}`);
   if (errors.length > 0) {
     lines.push(`- Centres skipped due to API errors: ${errors.length}`);
   }
@@ -254,13 +286,13 @@ async function main() {
   if (totalUsableAgeCount > 0) {
     lines.push(`- Short wait: 0-${p25Days} days`);
     lines.push(`- Typical wait: ${p25Days + 1}-${p75Days} days`);
-    lines.push(`- Long wait: ${p75Days + 1}-${p90Days} days`);
-    lines.push(`- Very long wait: ${p90Days + 1}+ days`);
+    lines.push(`- Long-running wait: ${p75Days + 1}-${p90Days} days`);
+    lines.push(`- Very long-running wait: ${p90Days + 1}+ days`);
   } else {
     lines.push("- Not enough usable data to derive thresholds.");
   }
   lines.push("");
-  lines.push("## Bell Curve");
+  lines.push("## Distribution");
   lines.push("");
   lines.push("| Days on waitlist | Count | Share | Distribution |");
   lines.push("|---|---:|---:|---|");
@@ -271,21 +303,21 @@ async function main() {
   lines.push("");
   lines.push("## Centres With Largest Waitlists");
   lines.push("");
-  lines.push("| Centre | Waitlist | Median days | 75th percentile | Oldest | Missing start dates |");
-  lines.push("|---|---:|---:|---:|---:|---:|");
+  lines.push("| Centre | Waitlist | Short wait | Typical wait | Long-running wait | Very long-running wait | Median days | 75th percentile | Oldest | Missing application dates |");
+  lines.push("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|");
   for (const centre of biggestWaitlists) {
     lines.push(
-      `| ${centre.centreName} | ${centre.waitlistCount} | ${centre.medianDays ?? "-"} | ${centre.p75Days ?? "-"} | ${centre.oldestDays ?? "-"} | ${centre.missingStartDateCount} |`,
+      `| ${centre.centreName} | ${centre.waitlistCount} | ${centre.shortWaitCount} | ${centre.typicalWaitCount} | ${centre.longRunningWaitCount} | ${centre.veryLongRunningWaitCount} | ${centre.medianDays ?? "-"} | ${centre.p75Days ?? "-"} | ${centre.oldestDays ?? "-"} | ${centre.missingApplicationDateCount} |`,
     );
   }
   lines.push("");
   lines.push("## Centres With Long-Tail Waitlists");
   lines.push("");
-  lines.push("| Centre | Waitlist | Oldest visible entry | Median days |");
-  lines.push("|---|---:|---:|---:|");
-  for (const centre of centresWithLongTail) {
+  lines.push("| Centre | Waitlist | Long-running wait | Very long-running wait | Oldest visible entry | Median days |");
+  lines.push("|---|---:|---:|---:|---:|---:|");
+  for (const centre of biggestLongRunningWaitlists) {
     lines.push(
-      `| ${centre.centreName} | ${centre.waitlistCount} | ${centre.oldestDays ?? "-"} | ${centre.medianDays ?? "-"} |`,
+      `| ${centre.centreName} | ${centre.waitlistCount} | ${centre.longRunningWaitCount} | ${centre.veryLongRunningWaitCount} | ${centre.oldestDays ?? "-"} | ${centre.medianDays ?? "-"} |`,
     );
   }
   lines.push("");
@@ -299,24 +331,21 @@ async function main() {
     lines.push(`- ${round((over90 / totalUsableAgeCount) * 100, 1)}% of usable waitlist entries have been waiting more than 90 days.`);
     lines.push(`- ${round((over180 / totalUsableAgeCount) * 100, 1)}% of usable waitlist entries have been waiting more than 180 days.`);
     lines.push(`- ${round((over365 / totalUsableAgeCount) * 100, 1)}% of usable waitlist entries have been waiting more than 365 days.`);
-    if (totalMissingStartDateCount > 0) {
-      lines.push(`- Some waitlist records do not expose a usable \`starting_date\`, so the age distribution is strong directional evidence rather than a perfect census.`);
-    }
-    if (centresWithLongTail.length > 0) {
-      lines.push(`- A long tail exists in several centres, which supports using a "possible stale waitlist" message only when the queue is both very large and visibly old.`);
+    if (totalMissingApplicationDateCount > 0) {
+      lines.push(`- Some waitlist records do not expose a usable \`application_date\`, so the age distribution is strong directional evidence rather than a perfect census.`);
     }
     lines.push(`- A practical app threshold for "long time on a waitlist" would be above ${p75Days} days, with "very long" above ${p90Days} days.`);
   }
   lines.push("");
-  if (missingStartingDateEntries.length > 0) {
-    lines.push("## Centres With Missing Starting Dates");
+  if (missingApplicationDateEntries.length > 0) {
+    lines.push("## Centres With Missing Application Dates");
     lines.push("");
-    lines.push("| Centre | Missing start dates |");
+    lines.push("| Centre | Missing application dates |");
     lines.push("|---|---:|");
-    for (const centre of missingStartingDateEntries
-      .sort((a, b) => b.missingStartDateCount - a.missingStartDateCount)
+    for (const centre of missingApplicationDateEntries
+      .sort((a, b) => b.missingApplicationDateCount - a.missingApplicationDateCount)
       .slice(0, 20)) {
-      lines.push(`| ${centre.centreName} | ${centre.missingStartDateCount} |`);
+      lines.push(`| ${centre.centreName} | ${centre.missingApplicationDateCount} |`);
     }
     lines.push("");
   }

@@ -17,7 +17,7 @@ function escapeHtml(value: string) {
 }
 
 export function renderPanel({ id, title, children, className, meta, actions }: PanelOptions) {
-  const panelClassName = className ? `panel ${className}` : "panel";
+  const panelClassName = className ? `panel panel-border-a ${className}` : "panel panel-border-a";
   const panelId = id ?? title;
 
   return `

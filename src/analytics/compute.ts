@@ -75,6 +75,14 @@ function calculateAgeInDays(dateValue: string, referenceDate: Date) {
   return Math.max(0, Math.floor(days));
 }
 
+function getWaitlistAgeDate(child: CentreExtractionBundle["waitingListChildren"][number]) {
+  const source = child as CentreExtractionBundle["waitingListChildren"][number] & {
+    application_date?: string | null;
+  };
+
+  return source.application_date ?? child.starting_date;
+}
+
 function isUnder2AtReferenceDate(birthDate: string, referenceDate: Date) {
   const age = calculateAgeInYears(birthDate, referenceDate);
 
@@ -292,11 +300,13 @@ export function computeServiceAnalyticsSnapshot(
 
   const waitlistEntryAges = bundle.waitingListChildren
     .map((child) => {
-      if (!child.starting_date) {
+      const waitlistAgeDate = getWaitlistAgeDate(child);
+
+      if (!waitlistAgeDate) {
         return null;
       }
 
-      return calculateAgeInDays(child.starting_date, referenceDate);
+      return calculateAgeInDays(waitlistAgeDate, referenceDate);
     })
     .filter((days): days is number => days !== null);
   const waitlistOldestEntryDays =

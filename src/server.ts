@@ -4,15 +4,18 @@ import { join } from "node:path";
 import Fastify from "fastify";
 import { z } from "zod";
 
-import { refreshAnalyticsSnapshot } from "./analytics/snapshot.js";
+import { ensureDailyAnalyticsSnapshot, refreshAnalyticsSnapshot } from "./analytics/snapshot.js";
 import { resolveWindowKey, resolveWindowStartDate } from "./analytics/windows.js";
 import { prisma } from "./db";
 import { syncStoredCentreReferences } from "./infocare/centre-sync.js";
+import { readWaitlistDiscoveryReport } from "./infocare/waitlist-report.js";
+import { ensureWeeklyWaitlistReport, refreshWaitlistReport } from "./infocare/waitlist-refresh.js";
 import { getInfocareEnv } from "./infocare/client.js";
 import {
   readCentreSnapshotHistory,
   readLatestAnalyticsSnapshotSet,
   readManualCentreCapacityByKey,
+  readWindowAnalyticsSnapshotSet,
 } from "./storage/analytics-store.js";
 import { renderAppShell } from "./ui/app-shell.js";
 
@@ -21,6 +24,11 @@ const envSchema = z.object({
   HOST: z.string().default("127.0.0.1"),
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
   DATABASE_URL: z.string().min(1),
+  AUTO_DAILY_SNAPSHOT: z
+    .string()
+    .trim()
+    .transform((value) => value.toLowerCase() === "true")
+    .default(false),
   INFOCAREUSER: z.string().trim().min(1),
   INFOCAREPASS: z.string().trim().min(1),
   INFOCARE_BASE_URL: z
@@ -40,16 +48,20 @@ const app = Fastify({
   logger: env.NODE_ENV !== "test",
 });
 
-const VALID_PANEL_IDS = new Set(["analytics", "status", "summary", "output", "privacy", "chat"]);
+const VALID_PANEL_IDS = new Set(["analytics", "waitlist", "status", "chat"]);
 
-app.get<{ Querystring: { centre?: string; window?: string; panel?: string; sort?: string } }>("/", async (request, reply) => {
+app.get<{ Querystring: { centre?: string; window?: string; panel?: string; sort?: string; waitlistSection?: string } }>("/", async (request, reply) => {
   const latestSnapshotSet = await readLatestAnalyticsSnapshotSet();
   const centre = Number.parseInt(String(request.query?.centre ?? ""), 10);
   const selectedWindowKey = resolveWindowKey(request.query?.window);
   const serviceSort = request.query?.sort ?? null;
   const selectedCentreKey = Number.isNaN(centre) ? null : centre;
   const latestRunDate = latestSnapshotSet ? new Date(latestSnapshotSet.runDate) : new Date();
-  const snapshotSet = latestSnapshotSet;
+  const windowStartDate = resolveWindowStartDate(latestRunDate, selectedWindowKey);
+  const snapshotSet =
+    latestSnapshotSet == null
+      ? null
+      : (await readWindowAnalyticsSnapshotSet(windowStartDate, latestRunDate)) ?? latestSnapshotSet;
   const resolvedSelectedCentreKey =
     selectedCentreKey ??
     snapshotSet?.snapshots[0]?.centreKey ??
@@ -58,7 +70,7 @@ app.get<{ Querystring: { centre?: string; window?: string; panel?: string; sort?
     resolvedSelectedCentreKey == null
       ? []
       : await readCentreSnapshotHistory(resolvedSelectedCentreKey, {
-          fromDate: resolveWindowStartDate(latestRunDate, selectedWindowKey),
+          fromDate: windowStartDate,
           toDate: latestRunDate,
         });
   const annualHistory =
@@ -72,6 +84,7 @@ app.get<{ Querystring: { centre?: string; window?: string; panel?: string; sort?
     resolvedSelectedCentreKey == null
       ? null
       : await readManualCentreCapacityByKey(resolvedSelectedCentreKey);
+  const waitlistReport = await readWaitlistDiscoveryReport();
   const focusPanelId =
     VALID_PANEL_IDS.has(request.query?.panel ?? "") ? request.query?.panel ?? null : null;
 
@@ -86,6 +99,9 @@ app.get<{ Querystring: { centre?: string; window?: string; panel?: string; sort?
         centreHistory,
         annualHistory,
         manualCapacity,
+        waitlistSnapshotSet: latestSnapshotSet,
+        waitlistReport,
+        waitlistSection: request.query?.waitlistSection ?? null,
       }),
     );
 });
@@ -115,6 +131,7 @@ app.get<{ Querystring: { centre?: string; window?: string; sort?: string } }>("/
 
 app.get<{ Querystring: { centre?: string; window?: string; sort?: string } }>("/actions/refresh-snapshot", async (request, reply) => {
   await refreshAnalyticsSnapshot({ source: "manual-refresh" });
+  await refreshWaitlistReport();
   const centre = request.query?.centre;
   const params = new URLSearchParams();
 
@@ -145,6 +162,15 @@ app.get("/vendor/bootstrap-icons.css", async (_request, reply) => {
   return reply.type("text/css; charset=utf-8").send(css);
 });
 
+app.get("/vendor/chart.umd.js", async (_request, reply) => {
+  const script = await readFile(
+    join(process.cwd(), "node_modules", "chart.js", "dist", "chart.umd.js"),
+    "utf8",
+  );
+
+  return reply.type("application/javascript; charset=utf-8").send(script);
+});
+
 app.get<{ Params: { file: string } }>("/vendor/fonts/:file", async (request, reply) => {
   const file = request.params.file;
 
@@ -170,6 +196,11 @@ app.get("/health", async () => {
 async function start() {
   await prisma.$connect();
   await prisma.$queryRaw`SELECT 1`;
+
+  if (env.AUTO_DAILY_SNAPSHOT) {
+    await ensureDailyAnalyticsSnapshot();
+  }
+  await ensureWeeklyWaitlistReport();
 
   await app.listen({
     host: "127.0.0.1",
