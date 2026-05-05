@@ -24,6 +24,15 @@ export type WaitlistThreshold = {
   range: string;
 };
 
+export type WaitlistAgeProfileRow = {
+  category: string;
+  under5: number;
+  turning5: number;
+  aged5Plus: number;
+  unknownDob: number;
+  total: number;
+};
+
 export type RecentDemandRow = {
   centre: string;
   newEnrolments: number;
@@ -48,6 +57,7 @@ export type WaitlistDiscoveryReport = {
   largestWaitlists: WaitlistReportTableRow[];
   longTailWaitlists: WaitlistReportTableRow[];
   distribution: WaitlistReportDistributionRow[];
+  ageProfileByThreshold: WaitlistAgeProfileRow[];
   thresholds: WaitlistThreshold[];
   recentDemand: {
     lastMonth: RecentDemandRow[];
@@ -191,6 +201,17 @@ function parseRecentDemandRows(tableSource: string): RecentDemandRow[] {
   }));
 }
 
+function parseWaitlistAgeProfileRows(tableSource: string): WaitlistAgeProfileRow[] {
+  return parseMarkdownTable(tableSource).map((row) => ({
+    category: getCell(row, "Wait category", "Category") ?? "",
+    under5: parseNumber(getCell(row, "Under 5")) ?? 0,
+    turning5: parseNumber(getCell(row, "Turning 5 this year", "Turning 5")) ?? 0,
+    aged5Plus: parseNumber(getCell(row, "Aged 5+", "5+")) ?? 0,
+    unknownDob: parseNumber(getCell(row, "Unknown DOB", "Unknown")) ?? 0,
+    total: parseNumber(getCell(row, "Total")) ?? 0,
+  }));
+}
+
 export async function readWaitlistDiscoveryReport() {
   try {
     const source = await readFile(join(process.cwd(), "INFOCARE", "INFOCARE-WAITLIST.md"), "utf8");
@@ -229,6 +250,9 @@ export async function readWaitlistDiscoveryReport() {
       largestWaitlists: parseCentreRows(extractTable(source, "Centres With Largest Waitlists")),
       longTailWaitlists: parseCentreRows(extractTable(source, "Centres With Long-Tail Waitlists")),
       distribution: parseDistributionRows(extractTable(source, "Distribution")),
+      ageProfileByThreshold: parseWaitlistAgeProfileRows(
+        extractTable(source, "Waitlist Age Profile By Threshold"),
+      ),
       thresholds: parseThresholds(source),
       recentDemand: {
         lastMonth: parseRecentDemandRows(extractTable(source, "Top Recent Demand In The Last Month")),

@@ -452,6 +452,10 @@ button {
   grid-column: 1 / -1;
 }
 
+.waitlist-quality__section--recent {
+  padding-bottom: 40px;
+}
+
 .waitlist-quality__section h3 {
   margin: 0;
   color: var(--color-ghost);
@@ -494,6 +498,10 @@ button {
   min-height: 160px;
   flex: 1;
   overflow: hidden;
+}
+
+.waitlist-chart--recent-demand .waitlist-chart__canvas-wrap {
+  min-height: max(220px, calc(var(--waitlist-chart-rows, 8) * 34px + 52px));
 }
 
 .waitlist-chart__empty {
@@ -624,6 +632,10 @@ button {
   background: var(--color-panel-header-bg);
   color: var(--color-ghost);
   text-transform: uppercase;
+}
+
+.waitlist-age-profile-table {
+  min-width: 560px;
 }
 
 .recent-demand-grid {

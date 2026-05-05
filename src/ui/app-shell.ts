@@ -403,6 +403,7 @@ type WaitlistChartConfig = {
   labels: string[];
   values?: number[];
   meta?: string[];
+  colors?: string[];
   datasets?: WaitlistChartDataset[];
 };
 
@@ -419,9 +420,11 @@ function renderWaitlistChart(chartId: string, config: WaitlistChartConfig | null
     return `<p class="waitlist-chart__empty">${escapeHtml(emptyText)}</p>`;
   }
 
+  const chartClass = chartId.startsWith("waitlist-recent-") ? " waitlist-chart--recent-demand" : "";
+
   return `
-    <div class="waitlist-chart">
-      <div class="waitlist-chart__canvas-wrap">
+    <div class="waitlist-chart${chartClass}">
+      <div class="waitlist-chart__canvas-wrap" style="--waitlist-chart-rows: ${config.labels.length}">
         <canvas id="${escapeHtml(chartId)}"></canvas>
       </div>
       <script type="application/json" data-waitlist-chart="${escapeHtml(chartId)}">${serializeJsonForScript(config)}</script>
@@ -439,6 +442,19 @@ function buildSimpleChartConfig(kind: "bar" | "doughnut", rows: WaitlistChartRow
     labels: rows.map((row) => row.label),
     values: rows.map((row) => row.value),
     meta: rows.map((row) => row.meta ?? String(row.value)),
+  };
+}
+
+function buildWaitlistAgeDistributionChartConfig(rows: WaitlistChartRow[]): WaitlistChartConfig | null {
+  const config = buildSimpleChartConfig("doughnut", rows);
+
+  if (!config) {
+    return null;
+  }
+
+  return {
+    ...config,
+    colors: ["#7fbe6f", "#4bc2c3", "#eeaf38", "#fb3640"],
   };
 }
 
@@ -511,6 +527,88 @@ function mergeWaitlistReportRows(report: WaitlistDiscoveryReport) {
 
 function formatDistributionLegendLabel(label: string, range: string) {
   return `${label}: ${range}`;
+}
+
+function formatShare(count: number, total: number) {
+  return total > 0 ? `${((count / total) * 100).toFixed(1)}%` : "0.0%";
+}
+
+function buildWaitlistAgeCategoryRows(report: WaitlistDiscoveryReport): WaitlistChartRow[] {
+  const rows = mergeWaitlistReportRows(report).filter(hasThresholdCounts);
+
+  if (rows.length === 0) {
+    return [];
+  }
+
+  const shortWaitCount = rows.reduce((sum, row) => sum + (row.shortWaitCount ?? 0), 0);
+  const typicalWaitCount = rows.reduce((sum, row) => sum + (row.typicalWaitCount ?? 0), 0);
+  const longRunningWaitCount = rows.reduce((sum, row) => sum + (row.longRunningWaitCount ?? 0), 0);
+  const veryLongRunningWaitCount = rows.reduce((sum, row) => sum + (row.veryLongRunningWaitCount ?? 0), 0);
+  const total = shortWaitCount + typicalWaitCount + longRunningWaitCount + veryLongRunningWaitCount;
+
+  return [
+    {
+      label: formatDistributionLegendLabel("Short wait", "0-76 days"),
+      value: shortWaitCount,
+      meta: `${shortWaitCount} ${formatShare(shortWaitCount, total)}`,
+    },
+    {
+      label: formatDistributionLegendLabel("Typical wait", "77-370 days"),
+      value: typicalWaitCount,
+      meta: `${typicalWaitCount} ${formatShare(typicalWaitCount, total)}`,
+    },
+    {
+      label: formatDistributionLegendLabel("Long-running wait", "371-537 days"),
+      value: longRunningWaitCount,
+      meta: `${longRunningWaitCount} ${formatShare(longRunningWaitCount, total)}`,
+    },
+    {
+      label: formatDistributionLegendLabel("Very long-running wait", "538+ days"),
+      value: veryLongRunningWaitCount,
+      meta: `${veryLongRunningWaitCount} ${formatShare(veryLongRunningWaitCount, total)}`,
+    },
+  ];
+}
+
+function renderWaitlistAgeProfileTable(report: WaitlistDiscoveryReport) {
+  const rows = report.ageProfileByThreshold;
+
+  if (rows.length === 0) {
+    return `<p class="waitlist-chart__empty">Refresh the waitlist report to show DOB profile by wait category.</p>`;
+  }
+
+  return `
+    <div class="waitlist-table-wrap waitlist-age-profile-table-wrap">
+      <table class="waitlist-table waitlist-age-profile-table">
+        <thead>
+          <tr>
+            <th>Wait category</th>
+            <th>Under 5</th>
+            <th>Turning 5</th>
+            <th>Aged 5+</th>
+            <th>Unknown DOB</th>
+            <th>Total</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows
+            .map(
+              (row) => `
+                <tr>
+                  <td>${escapeHtml(row.category)}</td>
+                  <td>${row.under5}</td>
+                  <td>${row.turning5}</td>
+                  <td>${row.aged5Plus}</td>
+                  <td>${row.unknownDob}</td>
+                  <td>${row.total}</td>
+                </tr>
+              `,
+            )
+            .join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
 }
 
 function buildThresholdChartConfig(report: WaitlistDiscoveryReport, showAllRows: boolean): WaitlistChartConfig | null {
@@ -761,11 +859,7 @@ function renderWaitlistReportPanel(
   const totalWaitlistCount = report.totalWaitlistCount ?? report.shortPlusTypicalTotal ?? 0;
   const under163Count = estimateShortPlusTypicalWaitlistCount(totalWaitlistCount);
   const over163Count = Math.max(totalWaitlistCount - under163Count, 0);
-  const distributionRows = report.distribution.map((row) => ({
-    label: row.label,
-    value: row.count,
-    meta: `${row.count} ${row.share}`,
-  }));
+  const distributionRows = buildWaitlistAgeCategoryRows(report);
   const thresholdSection = `
     <section class="waitlist-quality__section">
       ${renderWaitlistSectionHeader("Waitlist by Distribution Days", selectedCentreKey, selectedWindowKey, serviceSort, "threshold", waitlistSection !== "threshold")}
@@ -788,7 +882,11 @@ function renderWaitlistReportPanel(
           ${hierarchySection}
           <section class="waitlist-quality__section">
             <h3>Waitlist Age Distribution</h3>
-            ${renderWaitlistChart("waitlist-distribution-chart", buildSimpleChartConfig("doughnut", distributionRows), "No distribution rows stored.")}
+            ${renderWaitlistChart("waitlist-distribution-chart", buildWaitlistAgeDistributionChartConfig(distributionRows), "No distribution rows stored.")}
+          </section>
+          <section class="waitlist-quality__section">
+            <h3>DOB Profile By Wait Category</h3>
+            ${renderWaitlistAgeProfileTable(report)}
           </section>
           ${renderRecentDemandPanel(report, showAllRows)}
         `;
@@ -1677,7 +1775,7 @@ function renderWaitlistChartScript() {
               labels: config.labels,
               datasets: [{
                 data: config.values,
-                  backgroundColor: config.values.map((_, index) => palette[index % palette.length]),
+                backgroundColor: config.values.map((_, index) => config.colors?.[index] || palette[index % palette.length]),
                 borderColor: "#050505",
                 borderWidth: 2,
               }],

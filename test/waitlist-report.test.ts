@@ -46,6 +46,15 @@ Generated: 2026-05-01T00:00:00.000Z
 - Short plus typical: 1 of 2
 - Long-running plus very long-running: 1 of 2
 
+## Waitlist Age Profile By Threshold
+
+| Wait category | Under 5 | Turning 5 this year | Aged 5+ | Unknown DOB | Total |
+|---|---:|---:|---:|---:|---:|
+| Short wait | 1 | 0 | 0 | 0 | 1 |
+| Typical wait | 0 | 0 | 0 | 0 | 0 |
+| Long-running wait | 0 | 1 | 0 | 0 | 1 |
+| Very long-running wait | 0 | 0 | 0 | 0 | 0 |
+
 ## Centres With Largest Waitlists
 
 | Centre | Waitlist | Short wait | Typical wait | Long-running wait | Very long-running wait |
@@ -59,6 +68,14 @@ Generated: 2026-05-01T00:00:00.000Z
       assert.equal(report?.startDateCount, 2);
       assert.equal(report?.missingStartDateCount, 0);
       assert.equal(report?.largestWaitlists[0]?.longRunningWaitCount, 1);
+      assert.deepEqual(report?.ageProfileByThreshold[2], {
+        category: "Long-running wait",
+        under5: 0,
+        turning5: 1,
+        aged5Plus: 0,
+        unknownDob: 0,
+        total: 1,
+      });
     },
   );
 });

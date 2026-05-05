@@ -22,6 +22,7 @@ type CentreWaitlistSummary = {
   usableAgeCount: number;
   missingStartDateCount: number;
   waitAges: number[];
+  waitlistEntries: { waitDays: number; birthDate?: string | null }[];
   medianDays: number | null;
   p75Days: number | null;
   oldestDays: number | null;
@@ -64,6 +65,36 @@ function calculateAgeInDays(dateValue: unknown, referenceDate: Date) {
   return Number.isFinite(days) ? Math.max(0, Math.floor(days)) : null;
 }
 
+function calculateAgeInYears(dateValue: unknown, referenceDate: Date) {
+  if (typeof dateValue !== "string" || dateValue.trim() === "") {
+    return null;
+  }
+
+  const value = new Date(dateValue);
+
+  if (Number.isNaN(value.getTime())) {
+    return null;
+  }
+
+  const years = (referenceDate.getTime() - value.getTime()) / 31_557_600_000;
+
+  return Number.isFinite(years) ? years : null;
+}
+
+function willTurnFiveThisCalendarYear(dateValue: unknown, referenceDate: Date) {
+  if (typeof dateValue !== "string" || dateValue.trim() === "") {
+    return false;
+  }
+
+  const value = new Date(dateValue);
+
+  if (Number.isNaN(value.getTime())) {
+    return false;
+  }
+
+  return value.getUTCFullYear() + 5 === referenceDate.getUTCFullYear();
+}
+
 function percentile(sortedValues: number[], fraction: number) {
   if (sortedValues.length === 0) {
     return null;
@@ -86,6 +117,35 @@ function buildBucket(days: number) {
   if (days <= 180) return "91-180";
   if (days <= 365) return "181-365";
   return "366+";
+}
+
+function buildThresholdLabel(days: number, p25Days: number | null, p75Days: number | null, p90Days: number | null) {
+  if (p25Days == null || p75Days == null || p90Days == null) {
+    return null;
+  }
+
+  if (days <= p25Days) return "Short wait";
+  if (days <= p75Days) return "Typical wait";
+  if (days <= p90Days) return "Long-running wait";
+  return "Very long-running wait";
+}
+
+function buildWaitlistChildAgeLabel(birthDate: unknown, referenceDate: Date) {
+  const age = calculateAgeInYears(birthDate, referenceDate);
+
+  if (age == null) {
+    return "unknown";
+  }
+
+  if (age >= 5) {
+    return "aged5Plus";
+  }
+
+  if (willTurnFiveThisCalendarYear(birthDate, referenceDate)) {
+    return "turning5";
+  }
+
+  return "under5";
 }
 
 function renderBar(count: number, maxCount: number) {
@@ -140,6 +200,49 @@ function buildRecentDemandRow(
   };
 }
 
+function buildWaitlistAgeProfileRows(
+  centreSummaries: CentreWaitlistSummary[],
+  referenceDate: Date,
+  p25Days: number | null,
+  p75Days: number | null,
+  p90Days: number | null,
+) {
+  const rows = new Map(
+    ["Short wait", "Typical wait", "Long-running wait", "Very long-running wait"].map((label) => [
+      label,
+      {
+        label,
+        under5: 0,
+        turning5: 0,
+        aged5Plus: 0,
+        unknown: 0,
+      },
+    ]),
+  );
+
+  for (const centre of centreSummaries) {
+    for (const entry of centre.waitlistEntries) {
+      const thresholdLabel = buildThresholdLabel(entry.waitDays, p25Days, p75Days, p90Days);
+
+      if (!thresholdLabel) {
+        continue;
+      }
+
+      const row = rows.get(thresholdLabel);
+      const childAgeLabel = buildWaitlistChildAgeLabel(entry.birthDate, referenceDate);
+
+      if (row) {
+        row[childAgeLabel] += 1;
+      }
+    }
+  }
+
+  return [...rows.values()].map((row) => ({
+    ...row,
+    total: row.under5 + row.turning5 + row.aged5Plus + row.unknown,
+  }));
+}
+
 function renderRecentDemandSection(
   lines: string[],
   heading: string,
@@ -185,6 +288,7 @@ async function collectCentreSummary(
     ),
   ]);
   const waitAges: number[] = [];
+  const waitlistEntries: { waitDays: number; birthDate?: string | null }[] = [];
   let usableStartingDateCount = 0;
   let missingStartDateCount = 0;
 
@@ -201,6 +305,10 @@ async function collectCentreSummary(
     }
 
     waitAges.push(days);
+    waitlistEntries.push({
+      waitDays: days,
+      birthDate: child.birth_date,
+    });
   }
 
   const sortedAges = [...waitAges].sort((a, b) => a - b);
@@ -213,6 +321,7 @@ async function collectCentreSummary(
     usableAgeCount: waitAges.length,
     missingStartDateCount,
     waitAges,
+    waitlistEntries,
     medianDays: percentile(sortedAges, 0.5),
     p75Days: percentile(sortedAges, 0.75),
     oldestDays: sortedAges.at(-1) ?? null,
@@ -328,6 +437,13 @@ export async function generateWaitlistReportMarkdown(referenceDate: Date = new D
     (sum, centre) => sum + centre.veryLongRunningWaitCount,
     0,
   );
+  const waitlistAgeProfileRows = buildWaitlistAgeProfileRows(
+    centreSummaries,
+    referenceDate,
+    p25Days,
+    p75Days,
+    p90Days,
+  );
   const maxBucketCount = Math.max(...bucketCounts.values(), 0);
   const lines: string[] = [];
 
@@ -384,6 +500,16 @@ export async function generateWaitlistReportMarkdown(referenceDate: Date = new D
   lines.push(`- Short plus typical: ${shortPlusTypicalCount} of ${totalUsableAgeCount}`);
   lines.push(`- Long-running plus very long-running: ${longRunningCount} of ${totalUsableAgeCount}`);
   lines.push(`- Very long-running only: ${veryLongRunningCount} of ${totalUsableAgeCount}`);
+  lines.push("");
+  lines.push("## Waitlist Age Profile By Threshold");
+  lines.push("");
+  lines.push("| Wait category | Under 5 | Turning 5 this year | Aged 5+ | Unknown DOB | Total |");
+  lines.push("|---|---:|---:|---:|---:|---:|");
+  for (const row of waitlistAgeProfileRows) {
+    lines.push(
+      `| ${row.label} | ${row.under5} | ${row.turning5} | ${row.aged5Plus} | ${row.unknown} | ${row.total} |`,
+    );
+  }
   lines.push("");
   lines.push("## Centres With Largest Waitlists");
   lines.push("");
