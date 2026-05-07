@@ -10,5 +10,12 @@ uploads
 generated
 /INFOCARE/
 INFOCARE-*
+/META/
+META-*
 OLD.*
 temp-*.sql
+marketing-helper-ai-495603-7bf952d32fa8.json
+centre-contact-list.xlsx
+*centre-contact-list.xlsx
+OAuth.json
+google-oauth-token.json

@@ -6,6 +6,20 @@ import type {
 import { getWindowOption, resolveWindowKey, type WindowKey, WINDOW_OPTIONS } from "../analytics/windows.js";
 import type { WaitlistDiscoveryReport } from "../infocare/waitlist-report.js";
 import type { ServiceAnalyticsSnapshot } from "../infocare/models.js";
+import type { MetaConfigStatus } from "../meta/config.js";
+import type { GoogleAnalyticsConfigStatus } from "../google-analytics/config.js";
+import type {
+  GoogleAnalyticsDailySnapshotView,
+  GoogleAnalyticsPageSnapshotView,
+} from "../storage/google-analytics-store.js";
+import type { MetaAdsDashboardData } from "../storage/meta-store.js";
+import type {
+  MetaNotificationHistoryPage,
+  MetaNotificationHistoryRow,
+  MetaRecommendationNotificationView,
+} from "../storage/meta-recommendation-notifications-store.js";
+import type { MetaRecommendationNoteView } from "../storage/meta-recommendation-notes-store.js";
+import { matchCentreContact, type CentreContact } from "../storage/centre-contact-store.js";
 import { estimateShortPlusTypicalWaitlistCount } from "../analytics/waitlist-profile.js";
 import { renderLayout } from "./layout.js";
 
@@ -16,7 +30,8 @@ type WaitlistSection = "threshold" | "hierarchy" | null;
 const PANEL_DEFINITIONS = [
   { id: "analytics", title: "Infocare Analytics", className: "panel--system" },
   { id: "waitlist", title: "Waitlist Quality", className: "panel--waitlist" },
-  { id: "status", title: "Status", className: "panel--status" },
+  { id: "meta-ads", title: "META Ads", className: "panel--meta-ads" },
+  { id: "google-analytics", title: "Google Analytics", className: "panel--google-analytics" },
   { id: "chat", title: "AI Chat", className: "panel--chat" },
 ] as const;
 
@@ -31,6 +46,14 @@ type AppShellOptions = {
   waitlistSnapshotSet?: LatestSnapshotSet | null;
   waitlistReport?: WaitlistDiscoveryReport | null;
   waitlistSection?: string | null;
+  metaConfigStatus?: MetaConfigStatus | null;
+  metaAdsDashboardData?: MetaAdsDashboardData | null;
+  googleAnalyticsConfigStatus?: GoogleAnalyticsConfigStatus | null;
+  googleAnalyticsSnapshot?: GoogleAnalyticsDailySnapshotView | null;
+  metaRecommendationNotifications?: MetaRecommendationNotificationView[];
+  metaRecommendationNotificationCount?: number;
+  metaRecommendationNotes?: MetaRecommendationNoteView[];
+  centreContacts?: CentreContact[];
 };
 
 function formatPercent(value: number) {
@@ -384,6 +407,147 @@ function formatAverageDays(value: number | null | undefined) {
   }
 
   return `${Math.round(value)}d`;
+}
+
+function formatMoney(value: number | null | undefined) {
+  if (value == null || !Number.isFinite(value)) {
+    return "-";
+  }
+
+  return new Intl.NumberFormat("en-NZ", {
+    style: "currency",
+    currency: "NZD",
+    maximumFractionDigits: 2,
+  }).format(value);
+}
+
+function formatMetaMetric(value: number | null | undefined, suffix = "") {
+  if (value == null || !Number.isFinite(value)) {
+    return "-";
+  }
+
+  return `${Number(value.toFixed(2))}${suffix}`;
+}
+
+function formatInteger(value: number | null | undefined) {
+  if (value == null || !Number.isFinite(value)) {
+    return "-";
+  }
+
+  return new Intl.NumberFormat("en-NZ", {
+    maximumFractionDigits: 0,
+  }).format(value);
+}
+
+function formatDateOnly(value: string | null | undefined) {
+  if (!value) {
+    return "-";
+  }
+
+  return new Date(value).toLocaleDateString("en-NZ", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+}
+
+function isBeforeToday(value: string | null | undefined) {
+  if (!value) {
+    return false;
+  }
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return false;
+  }
+
+  const today = new Date();
+  const dateOnly = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const todayOnly = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+
+  return dateOnly < todayOnly;
+}
+
+function createMetaNotificationId(row: AnalyticsRow, selectedWindowKey: WindowKey, recommendation: string) {
+  return [
+    "meta-ads",
+    selectedWindowKey,
+    row.centreKey,
+    recommendation.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, ""),
+  ].join(":");
+}
+
+function groupMetaRecommendationNotes(notes: MetaRecommendationNoteView[]) {
+  const grouped = new Map<string, MetaRecommendationNoteView[]>();
+
+  for (const note of notes) {
+    const existing = grouped.get(note.notificationId) ?? [];
+    existing.push(note);
+    grouped.set(note.notificationId, existing);
+  }
+
+  return grouped;
+}
+
+function getDismissedMetaNotificationIds(notifications: MetaRecommendationNotificationView[]) {
+  return new Set(
+    notifications
+      .filter((notification) => notification.dismissedAt)
+      .map((notification) => notification.notificationId),
+  );
+}
+
+function renderMetaRecommendationNote(note: MetaRecommendationNoteView) {
+  const isDeleted = Boolean(note.deletedAt);
+
+  return `
+    <li class="meta-ads-note${isDeleted ? " meta-ads-note--deleted" : ""}" data-meta-note-id="${note.id}">
+      <span>${escapeHtml(note.text)}</span>
+      <button type="button" data-meta-note-delete title="Delete note" aria-label="Delete note"${isDeleted ? " hidden" : ""}>
+        <i class="bi bi-trash ui-icon" aria-hidden="true"></i>
+      </button>
+      <button type="button" data-meta-note-restore title="Undo delete" aria-label="Undo delete"${isDeleted ? "" : " hidden"}>
+        <i class="bi bi-arrow-counterclockwise ui-icon" aria-hidden="true"></i>
+      </button>
+    </li>
+  `;
+}
+
+function joinGreetingNames(names: string[]) {
+  const filteredNames = [
+    ...new Set(
+      names
+        .map((name) => name.trim().split(/\s+/)[0] ?? "")
+        .filter(Boolean),
+    ),
+  ];
+
+  if (filteredNames.length === 0) {
+    return "there";
+  }
+
+  if (filteredNames.length === 1) {
+    return filteredNames[0];
+  }
+
+  return `${filteredNames.slice(0, -1).join(", ")} and ${filteredNames[filteredNames.length - 1]}`;
+}
+
+function buildMetaAdvertEmailHref(contact: CentreContact) {
+  const greetingNames = joinGreetingNames([contact.headTeacher, contact.administrator]);
+  const subject = `Facebook advert for enrolments`;
+  const body = [
+    `Kia ora ${greetingNames},`,
+    "",
+    "I hope your day is going well.",
+    "",
+    "I wanted to start a conversation with you about the possibility of running a Facebook advert for enrolments over the next month. I thought it could be a good opportunity to help raise awareness of your kindergarten and encourage enquiries from local whānau.",
+    "",
+    "Please let me know your thoughts, and whether this is something you would be interested in exploring further.",
+  ].join("\n");
+
+  return `mailto:${contact.email.replace(/[\r\n]/g, "")}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 }
 
 type WaitlistChartRow = {
@@ -760,6 +924,17 @@ function renderLongRunningTable(report: WaitlistDiscoveryReport, showAllRows: bo
   return renderWaitlistHierarchyTable(mergeWaitlistReportRows(report), showAllRows);
 }
 
+function formatRecentDemandCentreLabel(centre: string) {
+  const trimmed = centre.trim();
+  const kindergartenIndex = trimmed.search(/\bkindergart?en\b/i);
+
+  if (kindergartenIndex >= 0) {
+    return trimmed.slice(0, kindergartenIndex).trim() || trimmed;
+  }
+
+  return trimmed;
+}
+
 function buildRecentDemandChartConfig(rows: { centre: string; newEnrolments: number; newWaitlistEntries: number }[]): WaitlistChartConfig | null {
   if (rows.length === 0) {
     return null;
@@ -767,7 +942,7 @@ function buildRecentDemandChartConfig(rows: { centre: string; newEnrolments: num
 
   return {
     kind: "stackedBar",
-    labels: rows.map((row) => row.centre),
+    labels: rows.map((row) => formatRecentDemandCentreLabel(row.centre)),
     datasets: [
       {
         label: "New enrolments",
@@ -862,13 +1037,13 @@ function renderWaitlistReportPanel(
   const distributionRows = buildWaitlistAgeCategoryRows(report);
   const thresholdSection = `
     <section class="waitlist-quality__section">
-      ${renderWaitlistSectionHeader("Waitlist by Distribution Days", selectedCentreKey, selectedWindowKey, serviceSort, "threshold", waitlistSection !== "threshold")}
+      ${renderWaitlistSectionHeader("Waitlist by Distribution Days", selectedCentreKey, selectedWindowKey, serviceSort, "threshold", false)}
       ${renderThresholdChart(report, showAllRows, selectedCentreKey, selectedWindowKey, serviceSort)}
     </section>
   `;
   const hierarchySection = `
     <section class="waitlist-quality__section">
-      ${renderWaitlistSectionHeader("Waitlist Quality Hierarchy", selectedCentreKey, selectedWindowKey, serviceSort, "hierarchy", waitlistSection !== "hierarchy")}
+      ${renderWaitlistSectionHeader("Waitlist Quality Hierarchy", selectedCentreKey, selectedWindowKey, serviceSort, "hierarchy", false)}
       ${renderLongRunningTable(report, showAllRows)}
     </section>
   `;
@@ -895,11 +1070,11 @@ function renderWaitlistReportPanel(
     <div class="waitlist-quality${waitlistSection ? " waitlist-quality--section-focus" : ""}">
       <div class="waitlist-quality__stats">
         <div class="compact-stats__item">
-          <span class="compact-stats__label">&lt;163/Total</span>
+          <span class="compact-stats__label">&lt;163d/Total</span>
           <span class="compact-stats__value">${under163Count}/${totalWaitlistCount}</span>
         </div>
         <div class="compact-stats__item">
-          <span class="compact-stats__label">163+/Total</span>
+          <span class="compact-stats__label">163+d/Total</span>
           <span class="compact-stats__value">${over163Count}/${totalWaitlistCount}</span>
         </div>
         ${
@@ -962,13 +1137,13 @@ function renderWaitlistQualityPanel(
     .slice(0, 8);
   const thresholdSection = `
     <section class="waitlist-quality__section">
-      ${renderWaitlistSectionHeader("Waitlist by Distribution Days", selectedCentreKey, selectedWindowKey, serviceSort, "threshold", waitlistSection !== "threshold")}
+      ${renderWaitlistSectionHeader("Waitlist by Distribution Days", selectedCentreKey, selectedWindowKey, serviceSort, "threshold", false)}
       ${renderWaitlistChart("waitlist-threshold-chart", buildFallbackThresholdChartConfig(rows, showAllRows), "No waitlist rows stored.")}
     </section>
   `;
   const hierarchySection = `
     <section class="waitlist-quality__section">
-      ${renderWaitlistSectionHeader("Waitlist Quality Hierarchy", selectedCentreKey, selectedWindowKey, serviceSort, "hierarchy", waitlistSection !== "hierarchy")}
+      ${renderWaitlistSectionHeader("Waitlist Quality Hierarchy", selectedCentreKey, selectedWindowKey, serviceSort, "hierarchy", false)}
       ${renderWaitlistHierarchyTable(
         rows.map((row) => ({
           centre: row.serviceName,
@@ -1007,11 +1182,11 @@ function renderWaitlistQualityPanel(
     <div class="waitlist-quality${waitlistSection ? " waitlist-quality--section-focus" : ""}">
       <div class="waitlist-quality__stats">
         <div class="compact-stats__item">
-          <span class="compact-stats__label">&lt;163/Total</span>
+          <span class="compact-stats__label">&lt;163d/Total</span>
           <span class="compact-stats__value">${under163Count}/${totalWaitlistCount}</span>
         </div>
         <div class="compact-stats__item">
-          <span class="compact-stats__label">163+/Total</span>
+          <span class="compact-stats__label">163+d/Total</span>
           <span class="compact-stats__value">${over163Count}/${totalWaitlistCount}</span>
         </div>
         <div class="compact-stats__item">
@@ -1092,14 +1267,23 @@ function buildPanelActions(
     panelId === "analytics"
       ? `<a class="panel-action-button" href="/actions/refresh-snapshot?${buildQueryString(selectedCentreKey, "3M", "critical")}" aria-label="Download latest Infocare analytics snapshot" title="Download latest Infocare analytics snapshot"><i class="bi bi-download ui-icon" aria-hidden="true"></i></a>`
       : "";
+  const metaRefreshAction =
+    panelId === "meta-ads"
+      ? `<a class="panel-action-button" href="/actions/refresh-meta-ads?${buildQueryString(selectedCentreKey, selectedWindowKey, serviceSort)}" aria-label="Download latest Meta Ads data" title="Download latest Meta Ads data"><i class="bi bi-download ui-icon" aria-hidden="true"></i></a>`
+      : "";
+  const googleAnalyticsRefreshAction =
+    panelId === "google-analytics"
+      ? `<a class="panel-action-button" href="/actions/refresh-google-analytics?${buildQueryString(selectedCentreKey, selectedWindowKey, serviceSort)}" aria-label="Download latest Google Analytics data" title="Download latest Google Analytics data"><i class="bi bi-download ui-icon" aria-hidden="true"></i></a>`
+      : "";
+  const fullscreenAction = `<button class="panel-action-button" type="button" data-fullscreen-toggle aria-label="Enter fullscreen" title="Enter fullscreen"><i class="bi bi-fullscreen ui-icon" aria-hidden="true"></i></button>`;
 
   if (focusPanelId === panelId) {
-    return `${analyticsRefreshAction}<a class="panel-action-link" href="/?${buildQueryString(selectedCentreKey, selectedWindowKey, serviceSort)}"><i class="bi bi-arrow-left-short ui-icon" aria-hidden="true"></i><span>Return to dashboard</span></a>`;
+    return `${analyticsRefreshAction}${metaRefreshAction}${googleAnalyticsRefreshAction}${fullscreenAction}<a class="panel-action-link" href="/?${buildQueryString(selectedCentreKey, selectedWindowKey, serviceSort)}"><i class="bi bi-arrow-left-short ui-icon" aria-hidden="true"></i><span>Return to dashboard</span></a>`;
   }
 
   const popupQuery = buildQueryString(selectedCentreKey, selectedWindowKey, serviceSort, panelId);
 
-  return `${analyticsRefreshAction}<button class="panel-action-button" type="button" data-open-panel="${panelId}" data-panel-query="${popupQuery}" aria-label="Open window" title="Open window"><i class="bi bi-box-arrow-up-right ui-icon" aria-hidden="true"></i></button>`;
+  return `${analyticsRefreshAction}${metaRefreshAction}${googleAnalyticsRefreshAction}${fullscreenAction}<button class="panel-action-button" type="button" data-open-panel="${panelId}" data-panel-query="${popupQuery}" aria-label="Open window" title="Open window"><i class="bi bi-box-arrow-up-right ui-icon" aria-hidden="true"></i></button>`;
 }
 
 function buildWindowInsights(row: AnalyticsRow, history: CentreSnapshotHistoryEntry[], windowKey: WindowKey) {
@@ -1304,6 +1488,7 @@ function renderAnalyticsTable(
   selectedCentreKey: number | null | undefined,
   selectedWindowKey: WindowKey,
   serviceSort: ServiceSort,
+  centreContacts: CentreContact[] = [],
 ) {
   const analyticsRows = sortAnalyticsRows(snapshotSet?.snapshots ?? [], serviceSort);
   const selectedCentreValue = selectedCentreKey == null ? null : selectedCentreKey;
@@ -1312,10 +1497,16 @@ function renderAnalyticsTable(
   const descSortHref = `/?${buildQueryString(selectedCentreValue, selectedWindowKey, "desc")}`;
   const rows = analyticsRows
     .map(
-      (row) => `
+      (row) => {
+        const contact = matchCentreContact(row.serviceName, centreContacts);
+        const emailAction = contact
+          ? `<a class="analytics-table__email-action" href="${escapeHtml(buildMetaAdvertEmailHref(contact))}" title="Email centre about a Facebook advert" aria-label="Email ${escapeHtml(row.serviceName)} about a Facebook advert"><i class="bi bi-envelope ui-icon" aria-hidden="true"></i></a>`
+          : "";
+
+        return `
         <tr class="${row.centreKey === selectedCentreKey ? "analytics-table__row--selected analytics-table__row--clickable" : "analytics-table__row--clickable"}" data-row-href="/?${buildQueryString(row.centreKey, selectedWindowKey, serviceSort)}">
           <td class="analytics-table__service">
-            ${row.serviceName}
+            ${escapeHtml(row.serviceName)}
           </td>
           <td class="analytics-table__numeric">${formatCapacityWithPercent(row.enrolledCount, row.enrolledFteCount, row.licensedCapacity)}</td>
           <td class="analytics-table__numeric">${formatAgeBandCapacity(row.enrolledUnder2Count, row.licensedUnder2Capacity)}</td>
@@ -1324,15 +1515,17 @@ function renderAnalyticsTable(
           <td class="analytics-table__numeric">${row.agedOutCount}</td>
           <td class="analytics-table__numeric">${getScopedApproachingFiveCount(row, selectedWindowKey)}</td>
           <td class="analytics-table__numeric">${getScopedKnownLeavingCount(row, selectedWindowKey)}</td>
+          <td class="analytics-table__action">${emailAction}</td>
         </tr>
-      `,
+      `;
+      },
     )
     .join("");
   const body =
     rows ||
     `
       <tr>
-        <td colspan="8" class="analytics-table__empty">No analytics snapshot rows are available yet.</td>
+        <td colspan="9" class="analytics-table__empty">No analytics snapshot rows are available yet.</td>
       </tr>
     `;
 
@@ -1378,6 +1571,7 @@ function renderAnalyticsTable(
               <th class="analytics-table__numeric">Age 5+</th>
               <th class="analytics-table__numeric">Near 5</th>
               <th class="analytics-table__numeric">Leaving</th>
+              <th class="analytics-table__action">Email</th>
             </tr>
           </thead>
           <tbody>${body}</tbody>
@@ -1480,34 +1674,686 @@ function renderAiChatPanel(
   `;
 }
 
-function renderStatusPanel(
-  snapshotSet: LatestSnapshotSet | null,
-  selectedCentreKey: number | null | undefined,
+function getMetaCoverageByCentre(metaAdsDashboardData?: MetaAdsDashboardData | null) {
+  return new Map((metaAdsDashboardData?.centreCoverage ?? []).map((row) => [row.centreKey, row]));
+}
+
+function getMetaRecommendation(
+  row: AnalyticsRow,
   selectedWindowKey: WindowKey,
-  centreHistory: CentreSnapshotHistoryEntry[],
+  coverage: ReturnType<typeof getMetaCoverageByCentre>,
 ) {
-  const selectedRow = resolveSelectedRow(snapshotSet, selectedCentreKey);
-  const selectedWindowLabel = getWindowOption(selectedWindowKey).label;
-  const latestHistory = centreHistory.at(-1)?.snapshot;
-  const previousHistory = centreHistory.length > 1 ? centreHistory[centreHistory.length - 2]?.snapshot : null;
-  const rowCount = snapshotSet?.snapshots.length ?? 0;
-  const dualPathCount =
-    snapshotSet?.snapshots.filter((snapshot) => snapshot.waitlistCount > 0 && snapshot.enrolledCount < snapshot.licensedCapacity).length ??
-    0;
+  const centreCoverage = coverage.get(row.centreKey);
+  const openPlaces = Math.max(row.licensedCapacity - row.enrolledCount, 0);
+  const actionableWaitlist = getActionableWaitlistCount(row);
+  const replacementPressure = getScopedReplacementPressure(row, selectedWindowKey);
+  const activeCampaignCount = centreCoverage?.activeCampaignCount ?? 0;
+  const spend30d = centreCoverage?.spend30d ?? 0;
+
+  if (openPlaces >= 5 && actionableWaitlist <= 3 && activeCampaignCount === 0) {
+    return "Needs ads";
+  }
+
+  if (openPlaces >= 5 && activeCampaignCount > 0 && spend30d > 0) {
+    return "Ads active, monitor";
+  }
+
+  if (row.waitlistCount >= openPlaces + replacementPressure && activeCampaignCount > 0 && spend30d > 0) {
+    return "Review spend";
+  }
+
+  if (replacementPressure >= 3 && activeCampaignCount === 0) {
+    return "Prepare campaign";
+  }
+
+  if (openPlaces <= 1 && row.waitlistCount >= 5) {
+    return "Demand covered";
+  }
+
+  return activeCampaignCount > 0 ? "Covered by ads" : "Watch";
+}
+
+function renderMetaCoverageRows(
+  snapshotSet: LatestSnapshotSet | null,
+  metaAdsDashboardData?: MetaAdsDashboardData | null,
+) {
+  const deliverySortRank = new Map([
+    ["Active", 0],
+    ["Learning", 1],
+    ["Learning Limited", 2],
+    ["Completed", 3],
+    ["Not Delivering", 4],
+    ["Rejected", 5],
+  ]);
+  const centreNames = new Map((snapshotSet?.snapshots ?? []).map((row) => [row.centreKey, row.serviceName]));
+  const getDisplayCentreName = (row: MetaAdsDashboardData["currentAds"][number]) =>
+    row.centreKey == null
+      ? row.adSetName !== "-"
+        ? row.adSetName
+        : row.campaignName !== "-"
+          ? row.campaignName
+          : row.adName
+      : (centreNames.get(row.centreKey) ?? `Centre ${row.centreKey}`);
+  const rows = (metaAdsDashboardData?.currentAds ?? [])
+    .filter((row) => deliverySortRank.has(row.status))
+    .sort((left, right) => {
+      const deliverySort = (deliverySortRank.get(left.status) ?? 999) - (deliverySortRank.get(right.status) ?? 999);
+
+      if (deliverySort !== 0) {
+        return deliverySort;
+      }
+
+      const leftCentre = getDisplayCentreName(left);
+      const rightCentre = getDisplayCentreName(right);
+      const centreSort = leftCentre.localeCompare(rightCentre);
+
+      if (centreSort !== 0) {
+        return centreSort;
+      }
+
+      return left.adName.localeCompare(right.adName);
+    });
+
+  if ((snapshotSet?.snapshots ?? []).length === 0) {
+    return `
+      <tr>
+        <td colspan="9" class="meta-ads-table__empty">Refresh Infocare analytics before comparing centre demand with Meta advertising coverage.</td>
+      </tr>
+    `;
+  }
+
+  if (rows.length === 0) {
+    return `
+      <tr>
+        <td colspan="9" class="meta-ads-table__empty">No current matched adverts found for the selected Meta delivery states.</td>
+      </tr>
+    `;
+  }
+
+  return rows
+    .map(
+      (row) => {
+        const rowClass =
+          isBeforeToday(row.endsAt) || row.status === "Rejected" ? ` class="meta-ads-table__ended-row"` : "";
+
+        return `
+        <tr${rowClass}>
+          <td>${escapeHtml(getDisplayCentreName(row))}</td>
+          <td>${escapeHtml(`${row.adName}${row.advertType ? ` - ${row.advertType}` : ""}`)}</td>
+          <td>${escapeHtml(row.status)}</td>
+          <td>${row.resultCount == null ? "-" : `${formatInteger(row.resultCount)} ${escapeHtml(row.resultLabel)}`}</td>
+          <td class="meta-ads-table__numeric">${formatInteger(row.impressions)}</td>
+          <td class="meta-ads-table__numeric">${formatMoney(row.spend)}</td>
+          <td class="meta-ads-table__numeric">${formatMoney(row.cpr)}</td>
+          <td class="meta-ads-table__numeric">${formatMoney(row.budget)}</td>
+          <td>${formatDateOnly(row.endsAt)}</td>
+        </tr>
+      `;
+      },
+    )
+    .join("");
+}
+
+function renderMetaConfigEmptyState(metaConfigStatus?: MetaConfigStatus | null) {
+  if (!metaConfigStatus || metaConfigStatus.isConfigured) {
+    return "";
+  }
 
   return `
-    <div class="dashboard-status">
-      <p><span>Snapshot</span><strong>${snapshotSet?.source ?? "Unavailable"}</strong></p>
-      <p><span>Rows</span><strong>${rowCount}</strong></p>
-      <p><span>History</span><strong>${centreHistory.length}</strong></p>
-      <p><span>Refreshed</span><strong>${snapshotSet ? formatTimestamp(snapshotSet.createdAt) : "Pending"}</strong></p>
-      <p><span>Run date</span><strong>${snapshotSet?.runDate.slice(0, 10) ?? "Pending"}</strong></p>
-      <p><span>Window</span><strong>${selectedWindowLabel}</strong></p>
-      <p><span>Waitlist + space</span><strong>${dualPathCount}</strong></p>
-      <p><span>Centre</span><strong>${selectedRow?.serviceName ?? "No selection"}</strong></p>
-      <p><span>Waitlist</span><strong>${selectedRow?.waitlistCount ?? 0}</strong></p>
-      <p><span>Previous waitlist</span><strong>${previousHistory?.waitlistCount ?? latestHistory?.waitlistCount ?? 0}</strong></p>
-      <p class="dashboard-status__note">Child and family identities stay out of dashboard rendering, storage, prompts, exports, and summaries.</p>
+    <div class="meta-ads-config-state">
+      <strong>Meta Ads refresh is not configured.</strong>
+      <span>Server-side Meta Ads credentials are required before data can be pulled.</span>
+    </div>
+  `;
+}
+
+function renderMetaDeliveryNotices(metaAdsDashboardData?: MetaAdsDashboardData | null) {
+  const notDeliveringCount = metaAdsDashboardData?.notDeliveringCampaignCount ?? 0;
+  const rejectedCount = metaAdsDashboardData?.rejectedCampaignCount ?? 0;
+
+  if (notDeliveringCount === 0 && rejectedCount === 0) {
+    return "";
+  }
+
+  const notices = [
+    notDeliveringCount > 0
+      ? `<li><strong>${notDeliveringCount} Not Delivering</strong><span>Something is blocking spend.</span></li>`
+      : "",
+    rejectedCount > 0 ? `<li><strong>${rejectedCount} Rejected</strong><span>Policy issue.</span></li>` : "",
+  ].join("");
+
+  return `<ul class="meta-ads-delivery-notices">${notices}</ul>`;
+}
+
+function renderMetaRecommendations(
+  snapshotSet: LatestSnapshotSet | null,
+  selectedWindowKey: WindowKey,
+  metaAdsDashboardData?: MetaAdsDashboardData | null,
+  metaRecommendationNotifications: MetaRecommendationNotificationView[] = [],
+  metaRecommendationNotes: MetaRecommendationNoteView[] = [],
+  centreContacts: CentreContact[] = [],
+) {
+  const rows = snapshotSet?.snapshots ?? [];
+  const coverage = getMetaCoverageByCentre(metaAdsDashboardData);
+  const notesByNotificationId = groupMetaRecommendationNotes(metaRecommendationNotes);
+  const dismissedNotificationIds = getDismissedMetaNotificationIds(metaRecommendationNotifications);
+  const recommendations = rows
+    .map((row) => {
+      const centreCoverage = coverage.get(row.centreKey);
+      const openPlaces = Math.max(row.licensedCapacity - row.enrolledCount, 0);
+      const actionableWaitlist = getActionableWaitlistCount(row);
+      const replacementPressure = getScopedReplacementPressure(row, selectedWindowKey);
+      const recommendation = getMetaRecommendation(row, selectedWindowKey, coverage);
+      const priority =
+        recommendation === "Needs ads" || recommendation === "Prepare campaign"
+          ? 3
+          : recommendation === "Ads active, monitor" || recommendation === "Review spend"
+            ? 2
+            : 1;
+
+      return {
+        row,
+        centreCoverage,
+        openPlaces,
+        actionableWaitlist,
+        replacementPressure,
+        recommendation,
+        priority,
+        notificationId: createMetaNotificationId(row, selectedWindowKey, recommendation),
+      };
+    })
+    .filter((entry) => entry.priority > 1)
+    .filter((entry) => !dismissedNotificationIds.has(entry.notificationId))
+    .sort((left, right) => {
+      if (right.priority !== left.priority) {
+        return right.priority - left.priority;
+      }
+
+      return right.openPlaces + right.replacementPressure - (left.openPlaces + left.replacementPressure);
+    })
+    .slice(0, 6);
+
+  if (recommendations.length === 0) {
+    return `
+      <p class="meta-ads-empty" data-meta-recommendations-empty>No urgent campaign changes found from the current Infocare demand and matched Meta coverage.</p>
+      <ul class="meta-ads-recommendations" data-meta-recommendations-list></ul>
+    `;
+  }
+
+  return `
+    <p class="meta-ads-empty" data-meta-recommendations-empty hidden>No urgent campaign changes found from the current Infocare demand and matched Meta coverage.</p>
+    <ul class="meta-ads-recommendations" data-meta-recommendations-list>
+      ${recommendations
+        .map((entry) => {
+          const notes = notesByNotificationId.get(entry.notificationId) ?? [];
+          const contact = matchCentreContact(entry.row.serviceName, centreContacts);
+
+          return `
+            <li class="meta-ads-notification" data-meta-notification-id="${escapeHtml(entry.notificationId)}">
+              <div class="meta-ads-notification__content">
+                <div class="meta-ads-notification__title">
+                  <strong>${escapeHtml(entry.recommendation)}</strong>
+                  <div class="meta-ads-notification__title-actions">
+                    ${
+                      contact
+                        ? `<a class="meta-ads-notification__email" href="${escapeHtml(buildMetaAdvertEmailHref(contact))}" title="Email centre about a Facebook advert" aria-label="Email ${escapeHtml(entry.row.serviceName)} about a Facebook advert"><i class="bi bi-envelope ui-icon" aria-hidden="true"></i></a>`
+                        : ""
+                    }
+                    <button type="button" data-meta-notification-dismiss title="Dismiss notification" aria-label="Dismiss notification">
+                      <i class="bi bi-x-lg ui-icon" aria-hidden="true"></i>
+                    </button>
+                  </div>
+                </div>
+                <span>${escapeHtml(entry.row.serviceName)}: ${entry.openPlaces} open, ${entry.actionableWaitlist}/${entry.row.waitlistCount} actionable waitlist, ${entry.replacementPressure} pressure, ${entry.centreCoverage?.activeCampaignCount ?? 0} active campaigns, ${formatMoney(entry.centreCoverage?.spend30d ?? 0)} spend.</span>
+              </div>
+              <div class="meta-ads-notification__actions">
+                <div class="meta-ads-notification__controls">
+                  <textarea data-meta-note-text placeholder="Add a note" aria-label="Add a note" rows="1"></textarea>
+                  <button type="button" data-meta-note-add title="Add note" aria-label="Add note">
+                    <i class="bi bi-plus-lg ui-icon" aria-hidden="true"></i>
+                  </button>
+                </div>
+                <ol class="meta-ads-notification__notes" data-meta-notes>${notes.map(renderMetaRecommendationNote).join("")}</ol>
+              </div>
+            </li>
+          `;
+        })
+        .join("")}
+    </ul>
+  `;
+}
+
+function renderMetaNotificationHistory(
+  notificationCount: number,
+) {
+  return `
+    <div class="meta-ads-history" data-meta-history data-page-size="25">
+      <div class="meta-ads-history__toolbar">
+        <select data-meta-history-centre-filter aria-label="Filter notification history by centre">
+          <option value="">All centres</option>
+        </select>
+        <select data-meta-history-kind-filter aria-label="Filter notification history by type">
+          <option value="">All types</option>
+          <option value="Notification">Notification</option>
+          <option value="Note">Note</option>
+        </select>
+      </div>
+      <div class="meta-ads-table-wrap">
+        <table class="meta-ads-table meta-ads-table--history">
+          <thead>
+            <tr>
+              <th>Centre</th>
+              <th>Type</th>
+              <th>Heading</th>
+              <th>Message</th>
+              <th>Status</th>
+              <th class="meta-ads-table__numeric">Open</th>
+              <th class="meta-ads-table__numeric">Waitlist</th>
+              <th class="meta-ads-table__numeric">Pressure</th>
+              <th>When</th>
+            </tr>
+          </thead>
+          <tbody data-meta-history-body>
+            <tr>
+              <td colspan="9" class="meta-ads-table__empty" data-meta-history-loading>Loading notification history...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="meta-ads-history__pagination" data-meta-history-pagination></div>
+      <p class="meta-ads-empty" data-meta-history-empty${notificationCount > 0 ? " hidden" : ""}>No recommendation notifications have been recorded yet.</p>
+    </div>
+  `;
+}
+
+export function renderMetaNotificationHistoryRows(rows: MetaNotificationHistoryRow[]) {
+  if (rows.length === 0) {
+    return `<tr><td colspan="9" class="meta-ads-table__empty">No history rows found.</td></tr>`;
+  }
+
+  return rows
+    .map(
+      (row) => `
+        <tr data-meta-history-row data-centre-key="${row.centreKey}" data-notification-id="${escapeHtml(row.notificationId)}" data-meta-history-kind="${escapeHtml(row.kind)}" data-meta-history-heading="${escapeHtml(row.heading)}" data-meta-history-message="${escapeHtml(row.message)}">
+          <td>${escapeHtml(row.centreName)}</td>
+          <td>${row.kind}</td>
+          <td>${escapeHtml(row.heading)}</td>
+          <td class="meta-ads-history__message">${escapeHtml(row.message)}</td>
+          <td data-meta-history-status>${row.status}</td>
+          <td class="meta-ads-table__numeric">${row.openPlaces}</td>
+          <td class="meta-ads-table__numeric">${row.waitlist}</td>
+          <td class="meta-ads-table__numeric">${row.pressure}</td>
+          <td>${formatTimestamp(row.occurredAt)}</td>
+        </tr>
+      `,
+    )
+    .join("");
+}
+
+export function renderMetaNotificationHistoryPagination(pageData: MetaNotificationHistoryPage) {
+  if (pageData.totalRows === 0) {
+    return "";
+  }
+
+  const previousDisabled = pageData.page <= 1 ? " disabled" : "";
+  const nextDisabled = pageData.page >= pageData.totalPages ? " disabled" : "";
+  const firstRow = (pageData.page - 1) * pageData.pageSize + 1;
+  const lastRow = Math.min(pageData.page * pageData.pageSize, pageData.totalRows);
+
+  return `
+    <span>${firstRow}-${lastRow} of ${pageData.totalRows}</span>
+    <button type="button" data-meta-history-page="${pageData.page - 1}" aria-label="Previous notification history page" title="Previous page"${previousDisabled}>
+      <i class="bi bi-chevron-left ui-icon" aria-hidden="true"></i>
+    </button>
+    <button type="button" data-meta-history-page="${pageData.page + 1}" aria-label="Next notification history page" title="Next page"${nextDisabled}>
+      <i class="bi bi-chevron-right ui-icon" aria-hidden="true"></i>
+    </button>
+  `;
+}
+
+function renderMetaAdsPanel(
+  snapshotSet: LatestSnapshotSet | null,
+  selectedWindowKey: WindowKey,
+  metaConfigStatus?: MetaConfigStatus | null,
+  metaAdsDashboardData?: MetaAdsDashboardData | null,
+  metaRecommendationNotifications: MetaRecommendationNotificationView[] = [],
+  metaRecommendationNotificationCount = metaRecommendationNotifications.length,
+  metaRecommendationNotes: MetaRecommendationNoteView[] = [],
+  centreContacts: CentreContact[] = [],
+) {
+  return `
+    <div class="meta-ads-panel">
+      <div class="meta-ads-summary">
+        <div class="meta-ads-summary__item">
+          <span>Active</span>
+          <strong>${metaAdsDashboardData?.activeHealthyCampaignCount ?? 0}</strong>
+          <small>Healthy</small>
+        </div>
+        <div class="meta-ads-summary__item">
+          <span>Learning</span>
+          <strong>${metaAdsDashboardData?.learningCampaignCount ?? 0}</strong>
+          <small>Normal optimisation period</small>
+        </div>
+        <div class="meta-ads-summary__item">
+          <span>Learning Limited</span>
+          <strong>${metaAdsDashboardData?.learningLimitedCampaignCount ?? 0}</strong>
+          <small>Usually a problem</small>
+        </div>
+        <div class="meta-ads-summary__item">
+          <span>Completed</span>
+          <strong>${metaAdsDashboardData?.completedCampaignCount ?? 0}</strong>
+          <small>Ended in last 30 days</small>
+        </div>
+        <div class="meta-ads-summary__item">
+          <span>Not Delivering</span>
+          <strong>${metaAdsDashboardData?.notDeliveringCampaignCount ?? 0}</strong>
+          <small>Something is blocking spend</small>
+        </div>
+        <div class="meta-ads-summary__item">
+          <span>Rejected</span>
+          <strong>${metaAdsDashboardData?.rejectedCampaignCount ?? 0}</strong>
+          <small>Policy issue</small>
+        </div>
+        <div class="meta-ads-summary__item">
+          <span>Amount spent 30d</span>
+          <strong>${formatMoney(metaAdsDashboardData?.totalSpend30d ?? 0)}</strong>
+        </div>
+      </div>
+
+      ${renderMetaConfigEmptyState(metaConfigStatus)}
+
+      <section class="meta-ads-section meta-ads-section--wide meta-ads-section--recent">
+        <div class="meta-ads-section__header">
+          <h3>Recent Ads Running</h3>
+          <span>${metaAdsDashboardData?.latestPullAt ? `current ads from last pull ${formatTimestamp(metaAdsDashboardData.latestPullAt)}` : "no pull yet"}</span>
+        </div>
+        <div class="meta-ads-table-wrap">
+          <table class="meta-ads-table">
+            <thead>
+              <tr>
+                <th>Centre</th>
+                <th>Advert</th>
+                <th>Delivery</th>
+                <th>Results</th>
+                <th class="meta-ads-table__numeric">Impressions</th>
+                <th class="meta-ads-table__numeric">Amount spent</th>
+                <th class="meta-ads-table__numeric" title="Cost per result">CPR</th>
+                <th class="meta-ads-table__numeric">Budget</th>
+                <th>Ends</th>
+              </tr>
+            </thead>
+            <tbody>${renderMetaCoverageRows(snapshotSet, metaAdsDashboardData)}</tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="meta-ads-section meta-ads-section--wide meta-ads-section--recommendations">
+        <div class="meta-ads-section__header">
+          <h3>Recommendations</h3>
+          <span>${metaAdsDashboardData?.unmatchedCampaignCount ?? 0} unmatched campaigns</span>
+        </div>
+        ${renderMetaRecommendations(snapshotSet, selectedWindowKey, metaAdsDashboardData, metaRecommendationNotifications, metaRecommendationNotes, centreContacts)}
+      </section>
+
+      <section class="meta-ads-section meta-ads-section--wide">
+        <div class="meta-ads-section__header">
+          <h3>Notification History</h3>
+          <span>${metaRecommendationNotificationCount} stored</span>
+        </div>
+        ${renderMetaNotificationHistory(metaRecommendationNotificationCount)}
+      </section>
+    </div>
+  `;
+}
+
+function formatDecimalPercent(value: number | null | undefined) {
+  if (value == null || !Number.isFinite(value)) {
+    return "-";
+  }
+
+  return `${Number((value * 100).toFixed(1))}%`;
+}
+
+function formatDurationSeconds(value: number | null | undefined) {
+  if (value == null || !Number.isFinite(value)) {
+    return "-";
+  }
+
+  const minutes = Math.floor(value / 60);
+  const seconds = Math.round(value % 60);
+
+  return minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
+}
+
+function normalizePageMatchText(value: string) {
+  return value
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/kindergarten|centre|center|early|childhood|learning|the|and/g, " ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function getCentrePageMatchTokens(serviceName: string) {
+  return normalizePageMatchText(serviceName)
+    .split(" ")
+    .filter((token) => token.length >= 4);
+}
+
+function renderGoogleAnalyticsPageRows(pages: GoogleAnalyticsPageSnapshotView[], limit = 12) {
+  const visiblePages = pages.slice(0, limit);
+  const maxViews = Math.max(...visiblePages.map((page) => page.screenPageViews ?? 0), 1);
+
+  if (visiblePages.length === 0) {
+    return `<tr><td colspan="5" class="google-analytics-table__empty">No page data stored yet.</td></tr>`;
+  }
+
+  return visiblePages
+    .map((page) => {
+      const views = page.screenPageViews ?? 0;
+      const width = Math.max(4, Math.round((views / maxViews) * 100));
+
+      return `
+        <tr>
+          <td>
+            <strong>${escapeHtml(page.pageTitle || page.pagePath)}</strong>
+            <span>${escapeHtml(page.pagePath)}</span>
+          </td>
+          <td class="google-analytics-table__numeric">${formatInteger(views)}</td>
+          <td class="google-analytics-table__numeric">${formatInteger(page.activeUsers)}</td>
+          <td class="google-analytics-table__numeric">${formatInteger(page.sessions)}</td>
+          <td><span class="google-analytics-bar" style="--bar-width: ${width}%"></span></td>
+        </tr>
+      `;
+    })
+    .join("");
+}
+
+function buildMetaRelatedGoogleAnalyticsPages(
+  snapshotSet: LatestSnapshotSet | null,
+  metaAdsDashboardData: MetaAdsDashboardData | null | undefined,
+  googleAnalyticsSnapshot: GoogleAnalyticsDailySnapshotView,
+) {
+  const activeAdCentreKeys = new Set(
+    (metaAdsDashboardData?.currentAds ?? [])
+      .filter((ad) => ad.centreKey != null && !isBeforeToday(ad.endsAt))
+      .map((ad) => ad.centreKey as number),
+  );
+
+  for (const coverage of metaAdsDashboardData?.centreCoverage ?? []) {
+    if (coverage.activeCampaignCount > 0) {
+      activeAdCentreKeys.add(coverage.centreKey);
+    }
+  }
+
+  const centreRows = (snapshotSet?.snapshots ?? []).filter((row) => activeAdCentreKeys.has(row.centreKey));
+
+  return centreRows
+    .map((centre) => {
+      const tokens = getCentrePageMatchTokens(centre.serviceName);
+      const matchedPages = googleAnalyticsSnapshot.pages.filter((page) => {
+        const pageText = normalizePageMatchText(`${page.pagePath} ${page.pageTitle ?? ""}`);
+
+        return tokens.some((token) => pageText.includes(token));
+      });
+      const topPage = matchedPages.sort(
+        (left, right) => (right.screenPageViews ?? 0) - (left.screenPageViews ?? 0),
+      )[0];
+      const coverage = metaAdsDashboardData?.centreCoverage.find((row) => row.centreKey === centre.centreKey);
+
+      return {
+        centre,
+        page: topPage ?? null,
+        activeCampaignCount: coverage?.activeCampaignCount ?? 0,
+      };
+    })
+    .filter((row) => row.page != null || row.activeCampaignCount > 0)
+    .sort((left, right) => (right.page?.screenPageViews ?? 0) - (left.page?.screenPageViews ?? 0));
+}
+
+function renderMetaRelatedGoogleAnalyticsRows(
+  snapshotSet: LatestSnapshotSet | null,
+  metaAdsDashboardData: MetaAdsDashboardData | null | undefined,
+  googleAnalyticsSnapshot: GoogleAnalyticsDailySnapshotView,
+) {
+  const rows = buildMetaRelatedGoogleAnalyticsPages(snapshotSet, metaAdsDashboardData, googleAnalyticsSnapshot);
+
+  if (rows.length === 0) {
+    return `<tr><td colspan="6" class="google-analytics-table__empty">No active Meta ad centre pages matched yet.</td></tr>`;
+  }
+
+  return rows
+    .map((row) => `
+      <tr>
+        <td><strong>${escapeHtml(row.centre.serviceName)}</strong></td>
+        <td>${row.activeCampaignCount}</td>
+        <td>
+          ${
+            row.page
+              ? `<strong>${escapeHtml(row.page.pageTitle || row.page.pagePath)}</strong><span>${escapeHtml(row.page.pagePath)}</span>`
+              : `<span>No matching page in top 100</span>`
+          }
+        </td>
+        <td class="google-analytics-table__numeric">${formatInteger(row.page?.screenPageViews)}</td>
+        <td class="google-analytics-table__numeric">${formatInteger(row.page?.activeUsers)}</td>
+        <td class="google-analytics-table__numeric">${formatDecimalPercent(row.page?.engagementRate)}</td>
+      </tr>
+    `)
+    .join("");
+}
+
+function renderGoogleAnalyticsConfigEmptyState(configStatus?: GoogleAnalyticsConfigStatus | null) {
+  if (!configStatus || configStatus.isConfigured) {
+    return "";
+  }
+
+  return `
+    <div class="google-analytics-config-state">
+      <strong>Google Analytics is not ready.</strong>
+      <span>Missing ${configStatus.missingKeys.map(escapeHtml).join(", ")}.</span>
+    </div>
+  `;
+}
+
+function renderGoogleAnalyticsPanel(
+  snapshot?: GoogleAnalyticsDailySnapshotView | null,
+  configStatus?: GoogleAnalyticsConfigStatus | null,
+  snapshotSet?: LatestSnapshotSet | null,
+  metaAdsDashboardData?: MetaAdsDashboardData | null,
+) {
+  const hasSnapshot = Boolean(snapshot);
+
+  return `
+    <div class="google-analytics-panel">
+      ${renderGoogleAnalyticsConfigEmptyState(configStatus)}
+      ${
+        hasSnapshot && snapshot
+          ? `
+            <div class="google-analytics-summary">
+              <div class="google-analytics-summary__item">
+                <span>Active users</span>
+                <strong>${formatInteger(snapshot.activeUsers)}</strong>
+              </div>
+              <div class="google-analytics-summary__item">
+                <span>Sessions</span>
+                <strong>${formatInteger(snapshot.sessions)}</strong>
+              </div>
+              <div class="google-analytics-summary__item">
+                <span>Engaged sessions</span>
+                <strong>${formatInteger(snapshot.engagedSessions)}</strong>
+              </div>
+              <div class="google-analytics-summary__item">
+                <span>Views</span>
+                <strong>${formatInteger(snapshot.screenPageViews)}</strong>
+              </div>
+              <div class="google-analytics-summary__item">
+                <span>Conversions</span>
+                <strong>${formatMetaMetric(snapshot.conversions)}</strong>
+              </div>
+              <div class="google-analytics-summary__item">
+                <span>Revenue</span>
+                <strong>${formatMoney(snapshot.totalRevenue)}</strong>
+              </div>
+              <div class="google-analytics-summary__item">
+                <span>Engagement rate</span>
+                <strong>${formatDecimalPercent(snapshot.engagementRate)}</strong>
+              </div>
+              <div class="google-analytics-summary__item">
+                <span>Avg session</span>
+                <strong>${formatDurationSeconds(snapshot.averageSessionDuration)}</strong>
+              </div>
+            </div>
+            <div class="google-analytics-panel__meta">
+              <span>Property ${escapeHtml(snapshot.propertyId)}</span>
+              <span>Snapshot ${formatDateOnly(snapshot.snapshotDate)}</span>
+              <span>Pulled ${formatTimestamp(snapshot.pulledAt)}</span>
+            </div>
+            <section class="google-analytics-section">
+              <div class="google-analytics-section__header">
+                <h3>Most Visited Pages</h3>
+                <span>Last 30 days</span>
+              </div>
+              <div class="google-analytics-table-wrap">
+                <table class="google-analytics-table">
+                  <thead>
+                    <tr>
+                      <th>Page</th>
+                      <th class="google-analytics-table__numeric">Views</th>
+                      <th class="google-analytics-table__numeric">Users</th>
+                      <th class="google-analytics-table__numeric">Sessions</th>
+                      <th>Volume</th>
+                    </tr>
+                  </thead>
+                  <tbody>${renderGoogleAnalyticsPageRows(snapshot.pages)}</tbody>
+                </table>
+              </div>
+            </section>
+            <section class="google-analytics-section">
+              <div class="google-analytics-section__header">
+                <h3>Meta Ad Centre Pages</h3>
+                <span>Matched from active Meta ad centres</span>
+              </div>
+              <div class="google-analytics-table-wrap">
+                <table class="google-analytics-table">
+                  <thead>
+                    <tr>
+                      <th>Centre</th>
+                      <th>Ads</th>
+                      <th>Matched page</th>
+                      <th class="google-analytics-table__numeric">Views</th>
+                      <th class="google-analytics-table__numeric">Users</th>
+                      <th class="google-analytics-table__numeric">Engagement</th>
+                    </tr>
+                  </thead>
+                  <tbody>${renderMetaRelatedGoogleAnalyticsRows(snapshotSet ?? null, metaAdsDashboardData, snapshot)}</tbody>
+                </table>
+              </div>
+            </section>
+          `
+          : `<p class="google-analytics-panel__empty">Open this panel to take the first daily Google Analytics snapshot.</p>`
+      }
     </div>
   `;
 }
@@ -1623,10 +2469,391 @@ function renderBreakoutScript() {
           }
         }
 
-        document.addEventListener("click", (event) => {
+        function setFullscreenButtonState() {
+          const isFullscreen = Boolean(document.fullscreenElement);
+
+          for (const button of document.querySelectorAll("[data-fullscreen-toggle]")) {
+            const icon = button.querySelector(".ui-icon");
+            const label = isFullscreen ? "Exit fullscreen" : "Enter fullscreen";
+
+            button.setAttribute("aria-label", label);
+            button.setAttribute("title", label);
+
+            if (icon instanceof HTMLElement) {
+              icon.className = isFullscreen ? "bi bi-fullscreen-exit ui-icon" : "bi bi-fullscreen ui-icon";
+            }
+          }
+        }
+
+        async function toggleFullscreen() {
+          if (document.fullscreenElement) {
+            await document.exitFullscreen();
+            return;
+          }
+
+          await document.documentElement.requestFullscreen();
+        }
+
+        function getMetaHistoryElements() {
+          const history = document.querySelector("[data-meta-history]");
+          const body = history?.querySelector("[data-meta-history-body]");
+          const pagination = history?.querySelector("[data-meta-history-pagination]");
+          const centreFilter = history?.querySelector("[data-meta-history-centre-filter]");
+          const kindFilter = history?.querySelector("[data-meta-history-kind-filter]");
+
+          if (!(history instanceof HTMLElement) || !(body instanceof HTMLTableSectionElement) || !(pagination instanceof HTMLElement)) {
+            return null;
+          }
+
+          return {
+            history,
+            body,
+            pagination,
+            centreFilter: centreFilter instanceof HTMLSelectElement ? centreFilter : null,
+            kindFilter: kindFilter instanceof HTMLSelectElement ? kindFilter : null,
+          };
+        }
+
+        function syncMetaHistoryCentreOptions(select, options) {
+          const selectedValue = select.value;
+          const knownOptions = new Set(Array.from(select.options).map((option) => option.value));
+
+          for (const option of options || []) {
+            const value = String(option.centreKey || "");
+
+            if (!value || knownOptions.has(value)) {
+              continue;
+            }
+
+            const element = document.createElement("option");
+            element.value = value;
+            element.textContent = String(option.centreName || "");
+            select.append(element);
+          }
+
+          select.value = Array.from(select.options).some((option) => option.value === selectedValue) ? selectedValue : "";
+        }
+
+        async function loadMetaHistoryPage(page = 1) {
+          const elements = getMetaHistoryElements();
+
+          if (!elements) {
+            return;
+          }
+
+          const pageSize = elements.history.getAttribute("data-page-size") || "25";
+          const centre = elements.centreFilter?.value || "";
+          const kind = elements.kindFilter?.value || "";
+          const params = new URLSearchParams({ page: String(page), pageSize });
+
+          if (centre) {
+            params.set("centre", centre);
+          }
+
+          if (kind) {
+            params.set("kind", kind);
+          }
+
+          elements.history.setAttribute("aria-busy", "true");
+          elements.body.innerHTML = '<tr><td colspan="9" class="meta-ads-table__empty">Loading notification history...</td></tr>';
+
+          try {
+            const response = await fetch("/api/meta-recommendation-notifications/history?" + params.toString(), {
+              headers: {
+                "Accept": "application/json",
+              },
+            });
+
+            if (!response.ok) {
+              throw new Error("History request failed");
+            }
+
+            const payload = await response.json();
+            elements.body.innerHTML = String(payload.rowsHtml || "");
+            elements.pagination.innerHTML = String(payload.paginationHtml || "");
+
+            if (elements.centreFilter) {
+              syncMetaHistoryCentreOptions(elements.centreFilter, payload.centreOptions);
+            }
+          } catch (error) {
+            elements.body.innerHTML = '<tr><td colspan="9" class="meta-ads-table__empty">Notification history could not be loaded.</td></tr>';
+            elements.pagination.innerHTML = "";
+          } finally {
+            elements.history.removeAttribute("aria-busy");
+          }
+        }
+
+        function getMetaNotificationId(notification) {
+          return notification.getAttribute("data-meta-notification-id") || "";
+        }
+
+        function createMetaNoteElement(note) {
+          const item = document.createElement("li");
+          const text = document.createElement("span");
+          const deleteButton = document.createElement("button");
+          const restoreButton = document.createElement("button");
+
+          item.className = "meta-ads-note";
+          item.setAttribute("data-meta-note-id", String(note.id));
+          text.textContent = String(note.text || "");
+          deleteButton.type = "button";
+          deleteButton.setAttribute("data-meta-note-delete", "");
+          deleteButton.title = "Delete note";
+          deleteButton.setAttribute("aria-label", "Delete note");
+          deleteButton.innerHTML = '<i class="bi bi-trash ui-icon" aria-hidden="true"></i>';
+          restoreButton.type = "button";
+          restoreButton.setAttribute("data-meta-note-restore", "");
+          restoreButton.title = "Undo delete";
+          restoreButton.setAttribute("aria-label", "Undo delete");
+          restoreButton.hidden = true;
+          restoreButton.innerHTML = '<i class="bi bi-arrow-counterclockwise ui-icon" aria-hidden="true"></i>';
+          item.append(text, deleteButton, restoreButton);
+
+          return item;
+        }
+
+        function focusMetaRecommendation(notification) {
+          notification.scrollIntoView({ block: "nearest", inline: "nearest" });
+          const textInput = notification.querySelector("[data-meta-note-text]");
+
+          if (textInput instanceof HTMLTextAreaElement) {
+            textInput.focus();
+          }
+        }
+
+        function createMetaRecommendationFromHistoryRow(row) {
+          const id = row.getAttribute("data-notification-id") || "";
+
+          if (!id) {
+            return;
+          }
+
+          const existing = document.querySelector('.meta-ads-notification[data-meta-notification-id="' + CSS.escape(id) + '"]');
+
+          if (existing instanceof HTMLElement) {
+            focusMetaRecommendation(existing);
+            return;
+          }
+
+          const list = document.querySelector("[data-meta-recommendations-list]");
+
+          if (!(list instanceof HTMLUListElement)) {
+            return;
+          }
+
+          const heading = row.getAttribute("data-meta-history-heading") || row.children[2]?.textContent || "Recommendation";
+          const message = row.getAttribute("data-meta-history-message") || row.children[3]?.textContent || "";
+          const item = document.createElement("li");
+          const content = document.createElement("div");
+          const title = document.createElement("div");
+          const strong = document.createElement("strong");
+          const titleActions = document.createElement("div");
+          const dismissButton = document.createElement("button");
+          const summary = document.createElement("span");
+          const actions = document.createElement("div");
+          const controls = document.createElement("div");
+          const textarea = document.createElement("textarea");
+          const addButton = document.createElement("button");
+          const notes = document.createElement("ol");
+          const empty = document.querySelector("[data-meta-recommendations-empty]");
+
+          item.className = "meta-ads-notification";
+          item.setAttribute("data-meta-notification-id", id);
+          content.className = "meta-ads-notification__content";
+          title.className = "meta-ads-notification__title";
+          strong.textContent = heading;
+          titleActions.className = "meta-ads-notification__title-actions";
+          dismissButton.type = "button";
+          dismissButton.setAttribute("data-meta-notification-dismiss", "");
+          dismissButton.title = "Dismiss notification";
+          dismissButton.setAttribute("aria-label", "Dismiss notification");
+          dismissButton.innerHTML = '<i class="bi bi-x-lg ui-icon" aria-hidden="true"></i>';
+          summary.textContent = message;
+          actions.className = "meta-ads-notification__actions";
+          controls.className = "meta-ads-notification__controls";
+          textarea.setAttribute("data-meta-note-text", "");
+          textarea.placeholder = "Add a note";
+          textarea.setAttribute("aria-label", "Add a note");
+          textarea.rows = 1;
+          addButton.type = "button";
+          addButton.setAttribute("data-meta-note-add", "");
+          addButton.title = "Add note";
+          addButton.setAttribute("aria-label", "Add note");
+          addButton.innerHTML = '<i class="bi bi-plus-lg ui-icon" aria-hidden="true"></i>';
+          notes.className = "meta-ads-notification__notes";
+          notes.setAttribute("data-meta-notes", "");
+          titleActions.append(dismissButton);
+          title.append(strong, titleActions);
+          content.append(title, summary);
+          controls.append(textarea, addButton);
+          actions.append(controls, notes);
+          item.append(content, actions);
+          list.prepend(item);
+
+          if (empty instanceof HTMLElement) {
+            empty.hidden = true;
+          }
+
+          focusMetaRecommendation(item);
+        }
+
+        function setMetaNoteDeletedState(item, isDeleted) {
+          const deleteButton = item.querySelector("[data-meta-note-delete]");
+          const restoreButton = item.querySelector("[data-meta-note-restore]");
+
+          item.classList.toggle("meta-ads-note--deleted", isDeleted);
+
+          if (deleteButton instanceof HTMLButtonElement) {
+            deleteButton.hidden = isDeleted;
+          }
+
+          if (restoreButton instanceof HTMLButtonElement) {
+            restoreButton.hidden = !isDeleted;
+          }
+        }
+
+        async function saveMetaNote(notification, textInput) {
+          const id = getMetaNotificationId(notification);
+          const text = textInput.value.trim();
+
+          if (!id || !text) {
+            return;
+          }
+
+          const response = await fetch("/api/meta-recommendation-notes", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ notificationId: id, text }),
+          });
+
+          if (!response.ok) {
+            return;
+          }
+
+          const payload = await response.json();
+          const notesList = notification.querySelector("[data-meta-notes]");
+
+          if (notesList instanceof HTMLOListElement && payload.note) {
+            notesList.prepend(createMetaNoteElement(payload.note));
+          }
+
+          await loadMetaHistoryPage(1);
+
+          textInput.value = "";
+        }
+
+        document.addEventListener("click", async (event) => {
           const target = event.target;
 
           if (!(target instanceof HTMLElement)) {
+            return;
+          }
+
+          const addNoteButton = target.closest("[data-meta-note-add]");
+
+          if (addNoteButton instanceof HTMLButtonElement) {
+            event.preventDefault();
+            const notification = addNoteButton.closest("[data-meta-notification-id]");
+            const textInput = notification?.querySelector("[data-meta-note-text]");
+
+            if (notification instanceof HTMLElement && textInput instanceof HTMLTextAreaElement) {
+              await saveMetaNote(notification, textInput);
+            }
+
+            return;
+          }
+
+          const deleteNoteButton = target.closest("[data-meta-note-delete]");
+
+          if (deleteNoteButton instanceof HTMLButtonElement) {
+            event.preventDefault();
+            const note = deleteNoteButton.closest("[data-meta-note-id]");
+            const id = note?.getAttribute("data-meta-note-id") || "";
+
+            if (note instanceof HTMLLIElement && id) {
+              const response = await fetch("/api/meta-recommendation-notes/" + encodeURIComponent(id) + "/delete", {
+                method: "POST",
+              });
+
+              if (response.ok) {
+                setMetaNoteDeletedState(note, true);
+              }
+            }
+
+            return;
+          }
+
+          const restoreNoteButton = target.closest("[data-meta-note-restore]");
+
+          if (restoreNoteButton instanceof HTMLButtonElement) {
+            event.preventDefault();
+            const note = restoreNoteButton.closest("[data-meta-note-id]");
+            const id = note?.getAttribute("data-meta-note-id") || "";
+
+            if (note instanceof HTMLLIElement && id) {
+              const response = await fetch("/api/meta-recommendation-notes/" + encodeURIComponent(id) + "/restore", {
+                method: "POST",
+              });
+
+              if (response.ok) {
+                setMetaNoteDeletedState(note, false);
+              }
+            }
+
+            return;
+          }
+
+          const dismissNotificationButton = target.closest("[data-meta-notification-dismiss]");
+
+          if (dismissNotificationButton instanceof HTMLButtonElement) {
+            event.preventDefault();
+            const notification = dismissNotificationButton.closest("[data-meta-notification-id]");
+            const notificationId = notification instanceof HTMLElement ? getMetaNotificationId(notification) : "";
+
+            if (notification instanceof HTMLElement && notificationId) {
+              const response = await fetch("/api/meta-recommendation-notifications/dismiss", {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                },
+                body: JSON.stringify({ notificationId }),
+              });
+
+              if (response.ok) {
+                const historyRow = document.querySelector('[data-meta-history-row][data-notification-id="' + CSS.escape(notificationId) + '"]');
+                const historyStatus = historyRow?.querySelector("[data-meta-history-status]");
+
+                if (historyStatus instanceof HTMLTableCellElement) {
+                  historyStatus.textContent = "Dismissed";
+                }
+
+                notification.remove();
+                await loadMetaHistoryPage(1);
+              }
+            }
+
+            return;
+          }
+
+          const historyPageButton = target.closest("[data-meta-history-page]");
+
+          if (historyPageButton instanceof HTMLButtonElement) {
+            event.preventDefault();
+            const page = Number.parseInt(historyPageButton.getAttribute("data-meta-history-page") || "1", 10);
+
+            if (!Number.isNaN(page)) {
+              await loadMetaHistoryPage(page);
+            }
+
+            return;
+          }
+
+          const historyRow = target.closest("[data-meta-history-row]");
+
+          if (historyRow instanceof HTMLTableRowElement && !target.closest("a, button, textarea, input, label, select")) {
+            createMetaRecommendationFromHistoryRow(historyRow);
             return;
           }
 
@@ -1635,6 +2862,14 @@ function renderBreakoutScript() {
           if (openButton instanceof HTMLButtonElement) {
             event.preventDefault();
             void openPanel(openButton);
+            return;
+          }
+
+          const fullscreenButton = target.closest("[data-fullscreen-toggle]");
+
+          if (fullscreenButton instanceof HTMLButtonElement) {
+            event.preventDefault();
+            void toggleFullscreen();
             return;
           }
 
@@ -1649,7 +2884,40 @@ function renderBreakoutScript() {
           }
         });
 
+        document.addEventListener("fullscreenchange", setFullscreenButtonState);
+
+        document.addEventListener("change", (event) => {
+          const target = event.target;
+
+          if (!(target instanceof HTMLSelectElement) || !target.matches("[data-meta-history-centre-filter], [data-meta-history-kind-filter]")) {
+            return;
+          }
+
+          void loadMetaHistoryPage(1);
+        });
+
+        document.addEventListener("keydown", async (event) => {
+          const target = event.target;
+
+          if (!(target instanceof HTMLTextAreaElement) || !target.matches("[data-meta-note-text]")) {
+            return;
+          }
+
+          if (event.key !== "Enter" || event.shiftKey) {
+            return;
+          }
+
+          event.preventDefault();
+          const notification = target.closest("[data-meta-notification-id]");
+
+          if (notification instanceof HTMLElement) {
+            await saveMetaNote(notification, target);
+          }
+        });
+
         keepSelectedAnalyticsRowVisible();
+        void loadMetaHistoryPage(1);
+        setFullscreenButtonState();
       })();
     </script>
   `;
@@ -1834,6 +3102,9 @@ export function renderAppShell(
   const waitlistSnapshotSet = options.waitlistSnapshotSet ?? snapshotSet;
   const waitlistReport = options.waitlistReport ?? null;
   const waitlistSection = resolveWaitlistSection(options.waitlistSection);
+  const metaConfigStatus = options.metaConfigStatus ?? null;
+  const googleAnalyticsConfigStatus = options.googleAnalyticsConfigStatus ?? null;
+  const googleAnalyticsSnapshot = options.googleAnalyticsSnapshot ?? null;
   const panelContent = PANEL_DEFINITIONS.map((panel) => ({
     id: panel.id,
     title: panel.title,
@@ -1845,14 +3116,16 @@ export function renderAppShell(
             <span>source ${snapshotSet?.source ?? "none"}</span>
             <span>${snapshotSet ? formatTimestamp(snapshotSet.createdAt) : "pending"}</span>
           `
-        : panel.id === "status"
-          ? `<span>read-only summary</span>`
+        : panel.id === "meta-ads"
+          ? ""
           : panel.id === "waitlist"
             ? `<span>${waitlistReport?.generatedAt ? `report ${formatTimestamp(waitlistReport.generatedAt)}` : `last pulled ${formatDaysSince(waitlistSnapshotSet?.createdAt)}`}</span>`
-            : "",
+            : panel.id === "google-analytics"
+              ? `<span>${googleAnalyticsSnapshot ? `snapshot ${formatDateOnly(googleAnalyticsSnapshot.snapshotDate)}` : "no snapshot"}</span>`
+              : "",
     children:
       panel.id === "analytics"
-        ? renderAnalyticsTable(snapshotSet, selectedCentreKey, selectedWindowKey, serviceSort)
+        ? renderAnalyticsTable(snapshotSet, selectedCentreKey, selectedWindowKey, serviceSort, options.centreContacts ?? [])
         : panel.id === "waitlist"
           ? renderWaitlistQualityPanel(
               waitlistSnapshotSet,
@@ -1863,8 +3136,24 @@ export function renderAppShell(
               serviceSort,
               focusPanelId === "waitlist" ? waitlistSection : null,
             )
-        : panel.id === "status"
-          ? renderStatusPanel(snapshotSet, selectedCentreKey, selectedWindowKey, centreHistory)
+        : panel.id === "meta-ads"
+          ? renderMetaAdsPanel(
+              snapshotSet,
+              selectedWindowKey,
+              metaConfigStatus,
+              options.metaAdsDashboardData,
+              options.metaRecommendationNotifications ?? [],
+              options.metaRecommendationNotificationCount,
+              options.metaRecommendationNotes ?? [],
+              options.centreContacts ?? [],
+            )
+        : panel.id === "google-analytics"
+          ? renderGoogleAnalyticsPanel(
+              googleAnalyticsSnapshot,
+              googleAnalyticsConfigStatus,
+              snapshotSet,
+              options.metaAdsDashboardData,
+            )
           : renderAiChatPanel(
               snapshotSet,
               selectedCentreKey,

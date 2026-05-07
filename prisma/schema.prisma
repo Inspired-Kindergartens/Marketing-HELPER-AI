@@ -16,20 +16,24 @@ model Note {
 }
 
 model CentreReference {
-  id            Int                        @id @default(autoincrement())
-  centreKey     Int                        @unique
-  name          String
-  openStatus    String
-  licenseNumber Int?
-  regionName    String?
-  areaName      String?
-  subgroupName  String?
-  ignored       Boolean                    @default(false)
-  lastSyncedAt  DateTime
-  createdAt     DateTime                   @default(now())
-  updatedAt     DateTime                   @updatedAt
+  id             Int                        @id @default(autoincrement())
+  centreKey      Int                        @unique
+  name           String
+  openStatus     String
+  licenseNumber  Int?
+  regionName     String?
+  areaName       String?
+  subgroupName   String?
+  ignored        Boolean                    @default(false)
+  lastSyncedAt   DateTime
+  createdAt      DateTime                   @default(now())
+  updatedAt      DateTime                   @updatedAt
   manualCapacity ManualCentreCapacity?
-  snapshots     ServiceAnalyticsSnapshot[]
+  snapshots      ServiceAnalyticsSnapshot[]
+  metaCampaigns  MetaCampaign[]
+  metaAdSets     MetaAdSet[]
+  metaAds        MetaAd[]
+  metaInsights   MetaInsightSnapshot[]
 
   @@index([ignored, openStatus, name])
 }
@@ -47,50 +51,279 @@ model ManualCentreCapacity {
 }
 
 model AnalyticsSnapshotRun {
-  id          Int                        @id @default(autoincrement())
-  runDate     DateTime                   @unique
-  source      String                     @default("manual")
-  createdAt   DateTime                   @default(now())
-  snapshots   ServiceAnalyticsSnapshot[]
+  id        Int                        @id @default(autoincrement())
+  runDate   DateTime                   @unique
+  source    String                     @default("manual")
+  createdAt DateTime                   @default(now())
+  snapshots ServiceAnalyticsSnapshot[]
 
   @@index([runDate(sort: Desc)])
 }
 
 model ServiceAnalyticsSnapshot {
-  id                    Int                  @id @default(autoincrement())
-  runId                 Int
-  centreKey             Int
-  serviceName           String
-  date                  DateTime
-  enrolledCount         Int
-  enrolledFteCount      Decimal              @default(0) @db.Decimal(8, 4)
-  enrolledUnder2Count   Int                  @default(0)
-  enrolledOver2Count    Int                  @default(0)
-  licensedCapacity      Int
-  licensedUnder2Capacity Int?
-  licensedOver2Capacity Int?
-  enrolmentRatio        Decimal              @db.Decimal(8, 4)
-  waitlistCount         Int
-  waitlistUnder5Count   Int                  @default(0)
-  waitlistTurning5ThisYearCount Int          @default(0)
-  waitlistAged5PlusCount Int                 @default(0)
-  waitlistUnknownAgeCount Int                @default(0)
-  waitlistOldestEntryDays Int?
-  waitlistAverageEntryDays Decimal?          @db.Decimal(8, 4)
-  knownLeavingCount     Int
-  knownLeavingCountsByWindow Json                 @default("{\"1W\":0,\"2W\":0,\"3W\":0,\"1M\":0,\"2M\":0,\"3M\":0,\"6M\":0,\"12M\":0}")
-  agedOutCount          Int
-  approachingFiveCount  Int
-  approachingFiveCountsByWindow Json             @default("{\"1W\":0,\"2W\":0,\"3W\":0,\"1M\":0,\"2M\":0,\"3M\":0,\"6M\":0,\"12M\":0}")
-  replacementPressure   Int
-  waitlistCoverRatio    Decimal              @db.Decimal(8, 4)
-  urgencyScore          Decimal              @db.Decimal(8, 4)
-  urgencyBand           String
-  createdAt             DateTime             @default(now())
-  centre                CentreReference      @relation(fields: [centreKey], references: [centreKey], onDelete: Restrict, onUpdate: Cascade)
-  run                   AnalyticsSnapshotRun @relation(fields: [runId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  id                            Int                  @id @default(autoincrement())
+  runId                         Int
+  centreKey                     Int
+  serviceName                   String
+  date                          DateTime
+  enrolledCount                 Int
+  enrolledFteCount              Decimal              @default(0) @db.Decimal(8, 4)
+  enrolledUnder2Count           Int                  @default(0)
+  enrolledOver2Count            Int                  @default(0)
+  licensedCapacity              Int
+  licensedUnder2Capacity        Int?
+  licensedOver2Capacity         Int?
+  enrolmentRatio                Decimal              @db.Decimal(8, 4)
+  waitlistCount                 Int
+  waitlistUnder5Count           Int                  @default(0)
+  waitlistTurning5ThisYearCount Int                  @default(0)
+  waitlistAged5PlusCount        Int                  @default(0)
+  waitlistUnknownAgeCount       Int                  @default(0)
+  waitlistOldestEntryDays       Int?
+  waitlistAverageEntryDays      Decimal?             @db.Decimal(8, 4)
+  knownLeavingCount             Int
+  knownLeavingCountsByWindow    Json                 @default("{\"1W\":0,\"2W\":0,\"3W\":0,\"1M\":0,\"2M\":0,\"3M\":0,\"6M\":0,\"12M\":0}")
+  agedOutCount                  Int
+  approachingFiveCount          Int
+  approachingFiveCountsByWindow Json                 @default("{\"1W\":0,\"2W\":0,\"3W\":0,\"1M\":0,\"2M\":0,\"3M\":0,\"6M\":0,\"12M\":0}")
+  replacementPressure           Int
+  waitlistCoverRatio            Decimal              @db.Decimal(8, 4)
+  urgencyScore                  Decimal              @db.Decimal(8, 4)
+  urgencyBand                   String
+  createdAt                     DateTime             @default(now())
+  centre                        CentreReference      @relation(fields: [centreKey], references: [centreKey], onDelete: Restrict, onUpdate: Cascade)
+  run                           AnalyticsSnapshotRun @relation(fields: [runId], references: [id], onDelete: Cascade, onUpdate: Cascade)
 
   @@unique([runId, centreKey])
   @@index([runId, urgencyScore(sort: Desc)])
   @@index([centreKey, date(sort: Desc)])
+}
+
+model MetaAdAccount {
+  id              Int                   @id @default(autoincrement())
+  metaAdAccountId String                @unique
+  accountId       String?
+  name            String
+  accountStatus   Int?
+  currency        String?
+  timezoneName    String?
+  pulledAt        DateTime
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+  campaigns       MetaCampaign[]
+  adSets          MetaAdSet[]
+  ads             MetaAd[]
+  insights        MetaInsightSnapshot[]
+
+  @@index([metaAdAccountId])
+  @@index([pulledAt(sort: Desc)])
+}
+
+model MetaCampaign {
+  id              Int                   @id @default(autoincrement())
+  metaCampaignId  String                @unique
+  metaAdAccountId String
+  centreKey       Int?
+  name            String
+  status          String?
+  effectiveStatus String?
+  objective       String?
+  metaCreatedTime DateTime?
+  metaUpdatedTime DateTime?
+  pulledAt        DateTime
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+  adAccount       MetaAdAccount         @relation(fields: [metaAdAccountId], references: [metaAdAccountId], onDelete: Cascade, onUpdate: Cascade)
+  centre          CentreReference?      @relation(fields: [centreKey], references: [centreKey], onDelete: SetNull, onUpdate: Cascade)
+  adSets          MetaAdSet[]
+  ads             MetaAd[]
+  insights        MetaInsightSnapshot[]
+
+  @@index([metaAdAccountId])
+  @@index([metaCampaignId])
+  @@index([centreKey])
+  @@index([pulledAt(sort: Desc)])
+}
+
+model MetaAdSet {
+  id               Int                   @id @default(autoincrement())
+  metaAdSetId      String                @unique
+  metaCampaignId   String
+  metaAdAccountId  String
+  centreKey        Int?
+  name             String
+  status           String?
+  effectiveStatus  String?
+  optimizationGoal String?
+  dailyBudget      String?
+  lifetimeBudget   String?
+  startTime        DateTime?
+  endTime          DateTime?
+  metaCreatedTime  DateTime?
+  metaUpdatedTime  DateTime?
+  pulledAt         DateTime
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+  adAccount        MetaAdAccount         @relation(fields: [metaAdAccountId], references: [metaAdAccountId], onDelete: Cascade, onUpdate: Cascade)
+  campaign         MetaCampaign          @relation(fields: [metaCampaignId], references: [metaCampaignId], onDelete: Cascade, onUpdate: Cascade)
+  centre           CentreReference?      @relation(fields: [centreKey], references: [centreKey], onDelete: SetNull, onUpdate: Cascade)
+  ads              MetaAd[]
+  insights         MetaInsightSnapshot[]
+
+  @@index([metaAdAccountId])
+  @@index([metaCampaignId])
+  @@index([metaAdSetId])
+  @@index([centreKey])
+  @@index([pulledAt(sort: Desc)])
+}
+
+model MetaAd {
+  id              Int                   @id @default(autoincrement())
+  metaAdId        String                @unique
+  metaAdSetId     String?
+  metaCampaignId  String?
+  metaAdAccountId String
+  centreKey       Int?
+  name            String
+  status          String?
+  effectiveStatus String?
+  metaCreatedTime DateTime?
+  metaUpdatedTime DateTime?
+  pulledAt        DateTime
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+  adAccount       MetaAdAccount         @relation(fields: [metaAdAccountId], references: [metaAdAccountId], onDelete: Cascade, onUpdate: Cascade)
+  campaign        MetaCampaign?         @relation(fields: [metaCampaignId], references: [metaCampaignId], onDelete: SetNull, onUpdate: Cascade)
+  adSet           MetaAdSet?            @relation(fields: [metaAdSetId], references: [metaAdSetId], onDelete: SetNull, onUpdate: Cascade)
+  centre          CentreReference?      @relation(fields: [centreKey], references: [centreKey], onDelete: SetNull, onUpdate: Cascade)
+  insights        MetaInsightSnapshot[]
+
+  @@index([metaAdAccountId])
+  @@index([metaCampaignId])
+  @@index([metaAdSetId])
+  @@index([metaAdId])
+  @@index([centreKey])
+  @@index([pulledAt(sort: Desc)])
+}
+
+model MetaInsightSnapshot {
+  id              Int              @id @default(autoincrement())
+  pulledAt        DateTime
+  insightDate     DateTime
+  level           String
+  metaAdAccountId String
+  metaCampaignId  String?
+  metaAdSetId     String?
+  metaAdId        String?
+  centreKey       Int?
+  campaignName    String?
+  adSetName       String?
+  adName          String?
+  impressions     Int?
+  reach           Int?
+  clicks          Int?
+  spend           Decimal?         @db.Decimal(18, 6)
+  cpc             Decimal?         @db.Decimal(18, 6)
+  cpm             Decimal?         @db.Decimal(18, 6)
+  ctr             Decimal?         @db.Decimal(18, 6)
+  frequency       Decimal?         @db.Decimal(18, 6)
+  rawActions      Json?
+  raw             Json?
+  createdAt       DateTime         @default(now())
+  adAccount       MetaAdAccount    @relation(fields: [metaAdAccountId], references: [metaAdAccountId], onDelete: Cascade, onUpdate: Cascade)
+  campaign        MetaCampaign?    @relation(fields: [metaCampaignId], references: [metaCampaignId], onDelete: SetNull, onUpdate: Cascade)
+  adSet           MetaAdSet?       @relation(fields: [metaAdSetId], references: [metaAdSetId], onDelete: SetNull, onUpdate: Cascade)
+  ad              MetaAd?          @relation(fields: [metaAdId], references: [metaAdId], onDelete: SetNull, onUpdate: Cascade)
+  centre          CentreReference? @relation(fields: [centreKey], references: [centreKey], onDelete: SetNull, onUpdate: Cascade)
+
+  @@index([metaAdAccountId])
+  @@index([metaCampaignId])
+  @@index([metaAdSetId])
+  @@index([metaAdId])
+  @@index([centreKey])
+  @@index([pulledAt(sort: Desc)])
+  @@index([insightDate(sort: Desc)])
+  @@index([level, insightDate(sort: Desc)])
+}
+
+model MetaRecommendationNote {
+  id             Int       @id @default(autoincrement())
+  notificationId String
+  text           String
+  submittedAt    DateTime  @default(now())
+  deletedAt      DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([notificationId, submittedAt(sort: Desc)])
+  @@index([deletedAt])
+}
+
+model MetaRecommendationNotification {
+  id                 Int       @id @default(autoincrement())
+  notificationId     String    @unique
+  centreKey          Int
+  centreName         String
+  windowKey          String
+  recommendation     String
+  message            String
+  priority           Int
+  openPlaces         Int
+  actionableWaitlist Int
+  waitlistCount      Int
+  replacementPressure Int
+  activeCampaignCount Int
+  spend30d           Decimal   @default(0) @db.Decimal(18, 6)
+  firstSeenAt        DateTime  @default(now())
+  lastSeenAt         DateTime  @default(now())
+  dismissedAt        DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  @@index([centreKey, lastSeenAt(sort: Desc)])
+  @@index([dismissedAt])
+  @@index([lastSeenAt(sort: Desc)])
+}
+
+model GoogleAnalyticsDailySnapshot {
+  id                     Int      @id @default(autoincrement())
+  propertyId             String
+  snapshotDate           DateTime
+  pulledAt               DateTime
+  activeUsers            Int?
+  sessions               Int?
+  engagedSessions        Int?
+  screenPageViews        Int?
+  conversions            Decimal? @db.Decimal(18, 6)
+  totalRevenue           Decimal? @db.Decimal(18, 6)
+  engagementRate         Decimal? @db.Decimal(18, 6)
+  averageSessionDuration Decimal? @db.Decimal(18, 6)
+  raw                    Json?
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+  pages                  GoogleAnalyticsPageSnapshot[]
+
+  @@unique([propertyId, snapshotDate])
+  @@index([propertyId, snapshotDate(sort: Desc)])
+  @@index([pulledAt(sort: Desc)])
+}
+
+model GoogleAnalyticsPageSnapshot {
+  id              Int                          @id @default(autoincrement())
+  snapshotId      Int
+  propertyId      String
+  snapshotDate    DateTime
+  pagePath        String
+  pageTitle       String?
+  activeUsers     Int?
+  sessions        Int?
+  screenPageViews Int?
+  engagementRate  Decimal?                     @db.Decimal(18, 6)
+  raw             Json?
+  createdAt       DateTime                     @default(now())
+  snapshot        GoogleAnalyticsDailySnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@unique([snapshotId, pagePath])
+  @@index([propertyId, snapshotDate(sort: Desc)])
+  @@index([snapshotId, screenPageViews(sort: Desc)])
 }
