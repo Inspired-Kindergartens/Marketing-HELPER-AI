@@ -8,7 +8,11 @@ import { ensureDailyAnalyticsSnapshot, refreshAnalyticsSnapshot } from "./analyt
 import { resolveWindowKey, resolveWindowStartDate } from "./analytics/windows.js";
 import { prisma } from "./db";
 import { getGoogleAnalyticsConfig, readGoogleAnalyticsConfigStatus } from "./google-analytics/config.js";
-import { ensureDailyGoogleAnalyticsSnapshot, refreshGoogleAnalyticsSnapshot } from "./google-analytics/refresh.js";
+import {
+  ensureDailyGoogleAnalyticsSnapshot,
+  ensureGoogleAnalyticsMonthlySnapshots,
+  getGoogleAnalyticsMonthRanges,
+} from "./google-analytics/refresh.js";
 import { syncStoredCentreReferences } from "./infocare/centre-sync.js";
 import { readWaitlistDiscoveryReport } from "./infocare/waitlist-report.js";
 import { ensureWeeklyWaitlistReport, refreshWaitlistReport } from "./infocare/waitlist-refresh.js";
@@ -22,7 +26,12 @@ import {
   readWindowAnalyticsSnapshotSet,
 } from "./storage/analytics-store.js";
 import { readCentreContactList } from "./storage/centre-contact-store.js";
-import { readLatestGoogleAnalyticsDailySnapshot } from "./storage/google-analytics-store.js";
+import {
+  aggregateGoogleAnalyticsSnapshots,
+  readGoogleAnalyticsRangeSnapshot,
+  readGoogleAnalyticsRangeSnapshots,
+  readLatestGoogleAnalyticsDailySnapshot,
+} from "./storage/google-analytics-store.js";
 import { readMetaAdsDashboardData } from "./storage/meta-store.js";
 import {
   buildMetaRecommendationNotificationInputs,
@@ -163,7 +172,112 @@ async function ensureGoogleAnalyticsSnapshotIfConfigured() {
   }
 }
 
-app.get<{ Querystring: { centre?: string; window?: string; panel?: string; sort?: string; waitlistSection?: string; metaRefreshed?: string } }>("/", async (request, reply) => {
+function formatMonthKey(date: Date) {
+  return date.toISOString().slice(0, 7);
+}
+
+function getUtcDateOnly(value: Date) {
+  return new Date(Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate()));
+}
+
+function getGoogleAnalyticsDefaultRange(referenceDate = new Date()) {
+  const endDate = getUtcDateOnly(referenceDate);
+  const startDate = new Date(Date.UTC(endDate.getUTCFullYear(), endDate.getUTCMonth(), 1));
+
+  return { startDate, endDate };
+}
+
+function parseGoogleAnalyticsMonthYear(monthInput?: string | null, yearInput?: string | null) {
+  const month = Number.parseInt(String(monthInput ?? ""), 10);
+  const year = Number.parseInt(String(yearInput ?? ""), 10);
+
+  return Number.isInteger(month) && month >= 1 && month <= 12 && Number.isInteger(year)
+    ? { month, year }
+    : null;
+}
+
+function parseGoogleAnalyticsMonthKey(input?: string | null) {
+  const match = String(input ?? "").match(/^(\d{4})-(\d{2})$/);
+
+  return match ? { year: Number.parseInt(match[1], 10), month: Number.parseInt(match[2], 10) } : null;
+}
+
+function formatGoogleAnalyticsMonthQuery(year: number, month: number) {
+  return `${year}-${String(month).padStart(2, "0")}`;
+}
+
+function resolveGoogleAnalyticsMonthSelection(input: {
+  gaRange?: string | null;
+  gaFrom?: string | null;
+  gaTo?: string | null;
+  gaFromMonth?: string | null;
+  gaFromYear?: string | null;
+  gaToMonth?: string | null;
+  gaToYear?: string | null;
+}, referenceDate = new Date()) {
+  const ranges = getGoogleAnalyticsMonthRanges(referenceDate);
+  const firstRange = ranges[0];
+  const lastRange = ranges.at(-1);
+  const validMonths = new Set(ranges.map((range) => formatMonthKey(range.startDate)));
+  const defaultRange = getGoogleAnalyticsDefaultRange(referenceDate);
+  const defaultFrom = formatMonthKey(defaultRange.startDate);
+  const defaultTo = formatMonthKey(defaultRange.endDate);
+  const rawFrom =
+    parseGoogleAnalyticsMonthYear(input.gaFromMonth, input.gaFromYear) ??
+    parseGoogleAnalyticsMonthKey(input.gaFrom);
+  const rawTo =
+    parseGoogleAnalyticsMonthYear(input.gaToMonth, input.gaToYear) ??
+    parseGoogleAnalyticsMonthKey(input.gaTo);
+  const hasCompleteMonthRangeQuery =
+    input.gaRange === "months" &&
+    rawFrom != null &&
+    rawTo != null;
+  const fromMonth = rawFrom ? formatGoogleAnalyticsMonthQuery(rawFrom.year, rawFrom.month) : defaultFrom;
+  const toMonth = rawTo ? formatGoogleAnalyticsMonthQuery(rawTo.year, rawTo.month) : defaultTo;
+  const boundedFrom = validMonths.has(fromMonth) ? fromMonth : (firstRange ? formatMonthKey(firstRange.startDate) : defaultFrom);
+  const boundedTo = validMonths.has(toMonth) ? toMonth : (lastRange ? formatMonthKey(lastRange.startDate) : defaultTo);
+
+  if (boundedFrom > boundedTo) {
+    const [year, month] = boundedTo.split("-").map(Number);
+
+    return { fromMonth: month, fromYear: year, toMonth: month, toYear: year, mode: hasCompleteMonthRangeQuery ? "months" : "currentMonth" };
+  }
+
+  const [fromYear, fromMonthNumber] = boundedFrom.split("-").map(Number);
+  const [toYear, toMonthNumber] = boundedTo.split("-").map(Number);
+
+  return {
+    fromMonth: fromMonthNumber,
+    fromYear,
+    toMonth: toMonthNumber,
+    toYear,
+    mode: hasCompleteMonthRangeQuery ? "months" : "currentMonth",
+  };
+}
+
+function resolveGoogleAnalyticsSelectedDateRange(
+  selection: ReturnType<typeof resolveGoogleAnalyticsMonthSelection>,
+  referenceDate = new Date(),
+) {
+  if (selection.mode === "currentMonth") {
+    return getGoogleAnalyticsDefaultRange(referenceDate);
+  }
+
+  const ranges = getGoogleAnalyticsMonthRanges(referenceDate);
+  const fromMonth = formatGoogleAnalyticsMonthQuery(selection.fromYear, selection.fromMonth);
+  const toMonth = formatGoogleAnalyticsMonthQuery(selection.toYear, selection.toMonth);
+  const selected = ranges.filter((range) => {
+    const monthKey = formatMonthKey(range.startDate);
+
+    return monthKey >= fromMonth && monthKey <= toMonth;
+  });
+  const first = selected[0];
+  const last = selected.at(-1);
+
+  return first && last ? { startDate: first.startDate, endDate: last.endDate } : null;
+}
+
+app.get<{ Querystring: { centre?: string; window?: string; panel?: string; sort?: string; waitlistSection?: string; googleAnalyticsSection?: string; gaRange?: string; gaFrom?: string; gaTo?: string; gaFromMonth?: string; gaFromYear?: string; gaToMonth?: string; gaToYear?: string; metaRefreshed?: string } }>("/", async (request, reply) => {
   const latestSnapshotSet = await readLatestAnalyticsSnapshotSet();
   const centre = Number.parseInt(String(request.query?.centre ?? ""), 10);
   const selectedWindowKey = resolveWindowKey(request.query?.window);
@@ -201,7 +315,12 @@ app.get<{ Querystring: { centre?: string; window?: string; panel?: string; sort?
       ? null
       : await readManualCentreCapacityByKey(resolvedSelectedCentreKey);
   const waitlistReport = await readWaitlistDiscoveryReport();
-  let metaAdsDashboardData = await readMetaAdsDashboardData();
+  let metaAdsDashboardData = await readMetaAdsDashboardData({
+    fromDate: windowStartDate,
+    toDate: latestRunDate,
+  });
+  const googleAnalyticsMonthSelection = resolveGoogleAnalyticsMonthSelection(request.query);
+  const googleAnalyticsDateRange = resolveGoogleAnalyticsSelectedDateRange(googleAnalyticsMonthSelection);
   let googleAnalyticsSnapshot = await readLatestGoogleAnalyticsDailySnapshot(env.GOOGLE_ANALYTICS_PROPERTY_ID);
 
   if (
@@ -210,11 +329,77 @@ app.get<{ Querystring: { centre?: string; window?: string; panel?: string; sort?
     !isRecentMetaAdsSnapshot(metaAdsDashboardData.latestPullAt)
   ) {
     await refreshMetaAdsIfConfigured();
-    metaAdsDashboardData = await readMetaAdsDashboardData();
+    metaAdsDashboardData = await readMetaAdsDashboardData({
+      fromDate: windowStartDate,
+      toDate: latestRunDate,
+    });
   }
 
   if (focusPanelId === "google-analytics") {
-    googleAnalyticsSnapshot = await ensureGoogleAnalyticsSnapshotIfConfigured() ?? googleAnalyticsSnapshot;
+    let googleAnalyticsConfig;
+
+    try {
+      googleAnalyticsConfig = getGoogleAnalyticsConfig(env);
+    } catch (error) {
+      app.log.error({ error }, "Google Analytics monthly snapshot blocked by missing server configuration");
+    }
+
+    if (googleAnalyticsConfig) {
+      try {
+        if (googleAnalyticsDateRange && googleAnalyticsMonthSelection.mode === "months") {
+          const monthlySnapshots = await readGoogleAnalyticsRangeSnapshots(
+            googleAnalyticsConfig.propertyId,
+            googleAnalyticsDateRange.startDate,
+            googleAnalyticsDateRange.endDate,
+          );
+
+          googleAnalyticsSnapshot =
+            aggregateGoogleAnalyticsSnapshots(
+              monthlySnapshots,
+              googleAnalyticsConfig.propertyId,
+              googleAnalyticsDateRange.startDate,
+              googleAnalyticsDateRange.endDate,
+            ) ?? googleAnalyticsSnapshot;
+        } else if (googleAnalyticsDateRange) {
+          googleAnalyticsSnapshot =
+            await readGoogleAnalyticsRangeSnapshot(
+              googleAnalyticsConfig.propertyId,
+              googleAnalyticsDateRange.startDate,
+              googleAnalyticsDateRange.endDate,
+            ) ??
+            await ensureDailyGoogleAnalyticsSnapshot(googleAnalyticsConfig) ??
+            googleAnalyticsSnapshot;
+        }
+
+        void ensureGoogleAnalyticsMonthlySnapshots(googleAnalyticsConfig)
+          .then((snapshots) => {
+            app.log.info(
+              {
+                propertyId: googleAnalyticsConfig.propertyId,
+                snapshotCount: snapshots.length,
+              },
+              "Google Analytics monthly preload completed",
+            );
+          })
+          .catch((error) => {
+            app.log.error(
+              {
+                error: error instanceof Error ? { message: error.message, stack: error.stack } : error,
+              },
+              "Google Analytics monthly preload failed",
+            );
+          });
+      } catch (error) {
+        app.log.error(
+          {
+            error: error instanceof Error ? { message: error.message, stack: error.stack } : error,
+          },
+          "Google Analytics monthly snapshot failed",
+        );
+
+        googleAnalyticsSnapshot = await ensureGoogleAnalyticsSnapshotIfConfigured() ?? googleAnalyticsSnapshot;
+      }
+    }
   }
 
   const currentMetaRecommendationNotifications = buildMetaRecommendationNotificationInputs(
@@ -242,10 +427,16 @@ app.get<{ Querystring: { centre?: string; window?: string; panel?: string; sort?
         waitlistSnapshotSet: latestSnapshotSet,
         waitlistReport,
         waitlistSection: request.query?.waitlistSection ?? null,
+        googleAnalyticsSection: request.query?.googleAnalyticsSection ?? null,
         metaConfigStatus,
         metaAdsDashboardData,
         googleAnalyticsConfigStatus,
         googleAnalyticsSnapshot,
+        googleAnalyticsRangeMode: googleAnalyticsMonthSelection.mode,
+        googleAnalyticsFromMonth: String(googleAnalyticsMonthSelection.fromMonth),
+        googleAnalyticsFromYear: String(googleAnalyticsMonthSelection.fromYear),
+        googleAnalyticsToMonth: String(googleAnalyticsMonthSelection.toMonth),
+        googleAnalyticsToYear: String(googleAnalyticsMonthSelection.toYear),
         metaRecommendationNotifications,
         metaRecommendationNotificationCount,
         metaRecommendationNotes,
@@ -254,7 +445,7 @@ app.get<{ Querystring: { centre?: string; window?: string; panel?: string; sort?
     );
 });
 
-app.get<{ Querystring: { centre?: string; window?: string; sort?: string } }>("/actions/refresh-google-analytics", async (request, reply) => {
+app.get<{ Querystring: { centre?: string; window?: string; sort?: string; gaRange?: string; gaFrom?: string; gaTo?: string; gaFromMonth?: string; gaFromYear?: string; gaToMonth?: string; gaToYear?: string } }>("/actions/refresh-google-analytics", async (request, reply) => {
   let googleAnalyticsConfig;
 
   try {
@@ -267,7 +458,7 @@ app.get<{ Querystring: { centre?: string; window?: string; sort?: string } }>("/
   }
 
   try {
-    await refreshGoogleAnalyticsSnapshot(googleAnalyticsConfig);
+    await ensureGoogleAnalyticsMonthlySnapshots(googleAnalyticsConfig);
   } catch (error) {
     app.log.error(
       {
@@ -288,6 +479,16 @@ app.get<{ Querystring: { centre?: string; window?: string; sort?: string } }>("/
 
   params.set("window", resolveWindowKey(request.query?.window));
   params.set("panel", "google-analytics");
+
+  const googleAnalyticsMonthSelection = resolveGoogleAnalyticsMonthSelection(request.query);
+
+  if (googleAnalyticsMonthSelection.mode === "months") {
+    params.set("gaRange", "months");
+    params.set("gaFromMonth", String(googleAnalyticsMonthSelection.fromMonth));
+    params.set("gaFromYear", String(googleAnalyticsMonthSelection.fromYear));
+    params.set("gaToMonth", String(googleAnalyticsMonthSelection.toMonth));
+    params.set("gaToYear", String(googleAnalyticsMonthSelection.toYear));
+  }
 
   if (request.query?.sort) {
     params.set("sort", request.query.sort);

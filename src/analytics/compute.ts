@@ -38,6 +38,26 @@ function clampRatio(value: number) {
   return Math.max(0, value);
 }
 
+function calculateAverageBookedChildrenPerDay(
+  bookingDatesByChildKey: CentreExtractionBundle["bookingDatesByChildKey"],
+) {
+  const bookedDates = new Set<string>();
+  let bookedChildDays = 0;
+
+  for (const dates of Object.values(bookingDatesByChildKey)) {
+    for (const date of dates) {
+      bookedDates.add(date);
+      bookedChildDays += 1;
+    }
+  }
+
+  if (bookedDates.size === 0) {
+    return 0;
+  }
+
+  return Number((bookedChildDays / bookedDates.size).toFixed(2));
+}
+
 function calculateAgeInYears(birthDate: string, referenceDate: Date) {
   const birth = new Date(birthDate);
 
@@ -243,6 +263,10 @@ export function computeServiceAnalyticsSnapshot(
       ) / FULL_TIME_WEEKLY_MINUTES
     ).toFixed(2),
   );
+  const bookedAverageDailyCount = calculateAverageBookedChildrenPerDay(
+    bundle.bookingDatesByChildKey,
+  );
+  const bookedUtilisationRatio = clampRatio(bookedAverageDailyCount / licensedCapacity);
   let enrolledUnder2Count = 0;
   let enrolledOver2Count = 0;
 
@@ -358,6 +382,8 @@ export function computeServiceAnalyticsSnapshot(
     date: referenceDate.toISOString().slice(0, 10),
     enrolledCount,
     enrolledFteCount,
+    bookedAverageDailyCount,
+    bookedUtilisationRatio,
     enrolledUnder2Count,
     enrolledOver2Count,
     licensedCapacity,

@@ -6,6 +6,9 @@ import type { CentreExtractionBundle } from "../src/infocare/extraction.js";
 
 function buildBundle(
   waitingListChildren: CentreExtractionBundle["waitingListChildren"],
+  enrolledChildren: CentreExtractionBundle["enrolledChildren"] = [],
+  bookingMinutesByChildKey: CentreExtractionBundle["bookingMinutesByChildKey"] = {},
+  bookingDatesByChildKey: CentreExtractionBundle["bookingDatesByChildKey"] = {},
 ): CentreExtractionBundle {
   return {
     centre: {
@@ -15,10 +18,11 @@ function buildBundle(
       ignored: false,
       lastSyncedAt: "2026-05-01T00:00:00.000Z",
     },
-    enrolledChildren: [],
+    enrolledChildren,
     waitingListChildren,
     licenses: [{ max_children: 40 }],
-    bookingMinutesByChildKey: {},
+    bookingMinutesByChildKey,
+    bookingDatesByChildKey,
     extractedAt: "2026-05-05T00:00:00.000Z",
   };
 }
@@ -64,4 +68,32 @@ test("waitlist age falls back to starting_date only when application_date is abs
 
   assert.equal(snapshot.waitlistOldestEntryDays, 10);
   assert.equal(snapshot.waitlistAverageEntryDays, 10);
+});
+
+test("enrolment ratio uses enrolled headcount against licensed capacity", () => {
+  const snapshot = computeServiceAnalyticsSnapshot(
+    buildBundle(
+      [],
+      Array.from({ length: 45 }, (_, index) => ({
+        child_key: index + 1,
+        birth_date: "2022-01-01",
+      })),
+      Object.fromEntries(Array.from({ length: 45 }, (_, index) => [index + 1, 20 * 60])),
+      Object.fromEntries(
+        Array.from({ length: 45 }, (_, index) => [
+          index + 1,
+          index < 20 ? ["2026-05-01", "2026-05-02"] : ["2026-05-01"],
+        ]),
+      ),
+    ),
+    40,
+    { licensedCapacity: 40, source: "api" },
+    new Date("2026-05-01T00:00:00.000Z"),
+  );
+
+  assert.equal(snapshot.enrolledCount, 45);
+  assert.equal(snapshot.enrolledFteCount, 18);
+  assert.equal(snapshot.bookedAverageDailyCount, 32.5);
+  assert.equal(snapshot.bookedUtilisationRatio, 0.8125);
+  assert.equal(snapshot.enrolmentRatio, 1.125);
 });

@@ -767,6 +767,55 @@ button {
   gap: 8px;
 }
 
+.google-analytics-filter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 8px;
+}
+
+.google-analytics-filter fieldset {
+  display: flex;
+  align-items: end;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.google-analytics-filter legend {
+  margin: 0;
+  padding: 0;
+  color: var(--color-ghost);
+  text-transform: uppercase;
+}
+
+.google-analytics-filter label {
+  display: grid;
+  gap: 4px;
+  color: var(--color-ghost);
+  text-transform: uppercase;
+}
+
+.google-analytics-filter select {
+  min-height: 2.25rem;
+  border: var(--button-border);
+  padding: 0 0.6rem;
+  color: var(--color-text);
+  background: var(--color-surface);
+  font: inherit;
+}
+
+.google-analytics-filter option:disabled {
+  color: var(--color-muted);
+}
+
+.google-analytics-filter button {
+  width: 2.25rem;
+  padding: 0;
+}
+
 .google-analytics-summary__item {
   display: grid;
   gap: 6px;
@@ -830,6 +879,25 @@ button {
   align-items: baseline;
   justify-content: space-between;
   gap: 8px;
+}
+
+.google-analytics-section__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.google-analytics-section__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.google-analytics-section-open {
+  min-height: 1.9rem;
+  padding: 0 0.65rem;
+  white-space: nowrap;
 }
 
 .google-analytics-section__header h3 {
@@ -1461,5 +1529,351 @@ button {
 
   .analytics-table {
     min-width: 680px;
+  }
+}
+
+@media print {
+  @page {
+    margin: 12mm;
+  }
+
+  *,
+  *::before,
+  *::after {
+    box-shadow: none !important;
+    text-shadow: none !important;
+  }
+
+  html,
+  body {
+    width: auto !important;
+    height: auto !important;
+    overflow: visible !important;
+    background: #fff !important;
+    color: #000 !important;
+  }
+
+  body {
+    font-size: 11pt;
+    line-height: 1.35;
+  }
+
+  .app-shell,
+  .app-shell--focus,
+  .app-shell__left,
+  .app-shell__right,
+  .left-grid,
+  .panel,
+  .panel--focus,
+  .panel__body,
+  .analytics-table-shell,
+  .analytics-table-wrap,
+  .waitlist-quality,
+  .waitlist-quality__grid,
+  .waitlist-quality__section,
+  .waitlist-chart,
+  .waitlist-chart__canvas-wrap,
+  .waitlist-table-wrap,
+  .recent-demand-grid,
+  .meta-ads-panel,
+  .meta-ads-section,
+  .meta-ads-table-wrap,
+  .meta-ads-recommendations,
+  .google-analytics-panel,
+  .google-analytics-section,
+  .google-analytics-table-wrap,
+  .chat-shell,
+  .chat-shell__messages {
+    display: block !important;
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    overflow: visible !important;
+  }
+
+  .app-shell {
+    padding: 0 !important;
+  }
+
+  .left-grid,
+  .panel__body,
+  .analytics-table-shell,
+  .waitlist-quality,
+  .waitlist-quality__grid,
+  .recent-demand-grid,
+  .meta-ads-panel,
+  .google-analytics-panel {
+    gap: 0 !important;
+  }
+
+  .panel,
+  .panel-border-a,
+  .panel__header,
+  .panel__body,
+  .compact-stats__item,
+  .waitlist-quality__section,
+  .waitlist-threshold-state,
+  .meta-ads-config-state,
+  .meta-ads-summary__item,
+  .meta-ads-section,
+  .meta-ads-recommendations > li,
+  .google-analytics-config-state,
+  .google-analytics-summary__item,
+  .google-analytics-section,
+  .analytics-table-wrap,
+  .waitlist-table-wrap,
+  .meta-ads-table-wrap,
+  .google-analytics-table-wrap {
+    border: 0 !important;
+    background: #fff !important;
+    color: #000 !important;
+  }
+
+  .panel__header {
+    margin-bottom: 10px;
+    padding: 0;
+  }
+
+  .panel__header-row,
+  .panel__header-aside,
+  .panel__meta,
+  .google-analytics-section__title,
+  .google-analytics-filter,
+  .analytics-toolbar,
+  .analytics-toolbar__actions,
+  .waitlist-quality__stats,
+  .compact-stats,
+  .meta-ads-summary,
+  .google-analytics-summary,
+  .google-analytics-panel__meta {
+    display: flex !important;
+    flex-wrap: wrap !important;
+    align-items: baseline !important;
+    gap: 6px 12px !important;
+  }
+
+  .panel__actions,
+  .analytics-toolbar__actions,
+  .chat-shell__composer,
+  .google-analytics-filter,
+  button,
+  .panel-action-button,
+  .panel-action-link,
+  .analytics-table__email-action,
+  .meta-ads-notification__title-actions,
+  .meta-ads-notification__controls {
+    display: none !important;
+  }
+
+  .panel__title,
+  .google-analytics-section__header h3,
+  .meta-ads-section h3,
+  .waitlist-quality__section h3,
+  .recent-demand-grid h4,
+  .compact-stats__value,
+  .analytics-table__service,
+  .meta-ads-recommendations strong,
+  .meta-ads-delivery-notices strong,
+  .google-analytics-summary__item strong,
+  .meta-ads-summary__item strong,
+  .meta-ads-config-state strong,
+  .google-analytics-config-state strong {
+    color: #000 !important;
+  }
+
+  .panel__title,
+  .google-analytics-section__header h3,
+  .meta-ads-section h3,
+  .waitlist-quality__section h3,
+  .recent-demand-grid h4 {
+    max-width: 100%;
+    overflow-wrap: normal !important;
+    word-break: keep-all !important;
+    hyphens: none !important;
+    white-space: nowrap !important;
+  }
+
+  .panel__meta,
+  .compact-stats__label,
+  .analytics-table__explanation,
+  .analytics-table__reason,
+  .waitlist-quality__section h3,
+  .recent-demand-grid h4,
+  .meta-ads-section h3,
+  .meta-ads-section__header span,
+  .meta-ads-summary__item span,
+  .meta-ads-summary__item small,
+  .meta-ads-recommendations span,
+  .meta-ads-delivery-notices span,
+  .google-analytics-section__header h3,
+  .google-analytics-section__header span,
+  .google-analytics-summary__item span,
+  .google-analytics-panel__meta span,
+  .google-analytics-table td span,
+  .google-analytics-panel__empty,
+  .meta-ads-empty,
+  .meta-ads-table__empty,
+  .waitlist-chart__empty {
+    color: #111 !important;
+  }
+
+  .google-analytics-summary {
+    display: none !important;
+  }
+
+  html[data-print-mode="dashboard"] .app-shell__right,
+  html[data-print-mode="dashboard"] .panel--chat,
+  html[data-print-mode="chat"] .app-shell__left,
+  html[data-print-mode="chat"] .left-grid,
+  html[data-print-mode="chat"] .panel:not(.panel--chat) {
+    display: none !important;
+  }
+
+  html[data-print-mode="chat"] .app-shell,
+  html[data-print-mode="chat"] .app-shell__right,
+  html[data-print-mode="chat"] .panel--chat,
+  html[data-print-mode="chat"] .chat-shell,
+  html[data-print-mode="chat"] .chat-shell__messages {
+    display: block !important;
+    width: auto !important;
+    height: auto !important;
+    overflow: visible !important;
+  }
+
+  .compact-stats__item,
+  .waitlist-quality__section,
+  .meta-ads-section,
+  .google-analytics-section,
+  .meta-ads-recommendations > li {
+    margin: 0 0 14px !important;
+    padding: 0 !important;
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+
+  .waitlist-quality__section--recent {
+    page-break-inside: auto;
+    break-inside: auto;
+  }
+
+  .recent-demand-grid section {
+    margin: 0 0 14px !important;
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+
+  .recent-demand-grid h4 {
+    break-after: avoid;
+    page-break-after: avoid;
+  }
+
+  .recent-demand-grid h4 + .waitlist-chart {
+    break-before: avoid;
+    page-break-before: avoid;
+  }
+
+  .analytics-table,
+  .waitlist-table,
+  .meta-ads-table,
+  .google-analytics-table {
+    width: 100% !important;
+    min-width: 0 !important;
+    border-collapse: collapse !important;
+    page-break-inside: auto;
+  }
+
+  .analytics-table th,
+  .analytics-table td,
+  .waitlist-table th,
+  .waitlist-table td,
+  .meta-ads-table th,
+  .meta-ads-table td,
+  .google-analytics-table th,
+  .google-analytics-table td {
+    border: 0 !important;
+    border-bottom: 1px solid #d0d0d0 !important;
+    color: #000 !important;
+    background: #fff !important;
+    white-space: normal !important;
+    overflow-wrap: break-word;
+  }
+
+  .analytics-table th,
+  .waitlist-table th,
+  .meta-ads-table th,
+  .google-analytics-table th {
+    position: static !important;
+    border-bottom: 1.5px solid #777 !important;
+    color: #000 !important;
+    font-weight: var(--font-weight-strong);
+    overflow-wrap: normal !important;
+    word-break: keep-all !important;
+    hyphens: none !important;
+    white-space: nowrap !important;
+  }
+
+  .google-analytics-table__volume {
+    display: none !important;
+  }
+
+  .analytics-table tr,
+  .waitlist-table tr,
+  .meta-ads-table tr,
+  .google-analytics-table tr {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+
+  .google-analytics-bar {
+    border: 0 !important;
+    background: #ddd !important;
+  }
+
+  .waitlist-threshold-state__bar--good,
+  .waitlist-threshold-state__swatch--good {
+    background: #bdbdbd !important;
+  }
+
+  .waitlist-threshold-state__bar--long,
+  .waitlist-threshold-state__swatch--long {
+    background: #5f5f5f !important;
+  }
+
+  .waitlist-chart__canvas-wrap {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+
+  html[data-print-mode="chat"] .panel--chat .panel__title {
+    font-size: 15pt;
+  }
+
+  html[data-print-mode="chat"] .chat-message {
+    width: min(100%, 170mm);
+    margin: 0 0 10px !important;
+    padding: 0 !important;
+    border: 0 !important;
+    color: #000 !important;
+    text-align: left;
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+
+  html[data-print-mode="chat"] .chat-message--user,
+  html[data-print-mode="chat"] .chat-message[data-message-role="user"],
+  html[data-print-mode="chat"] .chat-prompt {
+    box-sizing: border-box;
+    margin-left: auto !important;
+    padding: 8px 10px !important;
+    border-radius: 8px;
+    background: #eee !important;
+    text-align: right;
+  }
+
+  html[data-print-mode="chat"] .chat-message__role {
+    color: #555 !important;
   }
 }

@@ -68,6 +68,8 @@ model ServiceAnalyticsSnapshot {
   date                          DateTime
   enrolledCount                 Int
   enrolledFteCount              Decimal              @default(0) @db.Decimal(8, 4)
+  bookedAverageDailyCount       Decimal              @default(0) @db.Decimal(8, 4)
+  bookedUtilisationRatio        Decimal              @default(0) @db.Decimal(8, 4)
   enrolledUnder2Count           Int                  @default(0)
   enrolledOver2Count            Int                  @default(0)
   licensedCapacity              Int
@@ -289,6 +291,8 @@ model GoogleAnalyticsDailySnapshot {
   id                     Int      @id @default(autoincrement())
   propertyId             String
   snapshotDate           DateTime
+  rangeStartDate         DateTime
+  rangeEndDate           DateTime
   pulledAt               DateTime
   activeUsers            Int?
   sessions               Int?
@@ -303,8 +307,9 @@ model GoogleAnalyticsDailySnapshot {
   updatedAt              DateTime @updatedAt
   pages                  GoogleAnalyticsPageSnapshot[]
 
-  @@unique([propertyId, snapshotDate])
+  @@unique([propertyId, rangeStartDate, rangeEndDate])
   @@index([propertyId, snapshotDate(sort: Desc)])
+  @@index([propertyId, rangeStartDate, rangeEndDate])
   @@index([pulledAt(sort: Desc)])
 }
 
@@ -313,6 +318,8 @@ model GoogleAnalyticsPageSnapshot {
   snapshotId      Int
   propertyId      String
   snapshotDate    DateTime
+  rangeStartDate  DateTime
+  rangeEndDate    DateTime
   pagePath        String
   pageTitle       String?
   activeUsers     Int?
@@ -325,5 +332,6 @@ model GoogleAnalyticsPageSnapshot {
 
   @@unique([snapshotId, pagePath])
   @@index([propertyId, snapshotDate(sort: Desc)])
+  @@index([propertyId, rangeStartDate, rangeEndDate])
   @@index([snapshotId, screenPageViews(sort: Desc)])
 }

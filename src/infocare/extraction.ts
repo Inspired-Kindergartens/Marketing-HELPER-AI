@@ -24,6 +24,7 @@ export type CentreExtractionBundle = {
   waitingListChildren: InfocareChild[];
   licenses: InfocareLicense[];
   bookingMinutesByChildKey: Record<number, number>;
+  bookingDatesByChildKey: Record<number, string[]>;
   extractedAt: string;
 };
 
@@ -118,6 +119,10 @@ function calculateBookingMinutes(booking: InfocareBooking) {
   }, 0);
 }
 
+function hasBookedTime(booking: InfocareBooking) {
+  return calculateBookingMinutes(booking) > 0;
+}
+
 export async function fetchCentreChildList(
   request: ChildListRequest,
   client: InfocareClientLike = createInfocareClient(),
@@ -208,6 +213,18 @@ export async function extractCentreBundle(
       bookings.reduce((sum, booking) => sum + calculateBookingMinutes(booking), 0),
     ]),
   );
+  const bookingDatesByChildKey = Object.fromEntries(
+    bookingLists.map(({ childKey, bookings }) => [
+      childKey,
+      [
+        ...new Set(
+          bookings
+            .filter((booking) => booking.date && hasBookedTime(booking))
+            .map((booking) => booking.date as string),
+        ),
+      ],
+    ]),
+  );
 
   return {
     centre,
@@ -215,6 +232,7 @@ export async function extractCentreBundle(
     waitingListChildren,
     licenses,
     bookingMinutesByChildKey,
+    bookingDatesByChildKey,
     extractedAt: new Date().toISOString(),
   };
 }

@@ -26,6 +26,14 @@ import { renderLayout } from "./layout.js";
 type AnalyticsRow = NonNullable<LatestSnapshotSet>["snapshots"][number];
 type ServiceSort = "critical" | "asc" | "desc";
 type WaitlistSection = "threshold" | "hierarchy" | null;
+type GoogleAnalyticsSection = "pages" | null;
+type GoogleAnalyticsRangeSelection = {
+  mode: "currentMonth" | "months";
+  fromMonth: number;
+  fromYear: number;
+  toMonth: number;
+  toYear: number;
+};
 
 const PANEL_DEFINITIONS = [
   { id: "analytics", title: "Infocare Analytics", className: "panel--system" },
@@ -46,10 +54,16 @@ type AppShellOptions = {
   waitlistSnapshotSet?: LatestSnapshotSet | null;
   waitlistReport?: WaitlistDiscoveryReport | null;
   waitlistSection?: string | null;
+  googleAnalyticsSection?: string | null;
   metaConfigStatus?: MetaConfigStatus | null;
   metaAdsDashboardData?: MetaAdsDashboardData | null;
   googleAnalyticsConfigStatus?: GoogleAnalyticsConfigStatus | null;
   googleAnalyticsSnapshot?: GoogleAnalyticsDailySnapshotView | null;
+  googleAnalyticsRangeMode?: string | null;
+  googleAnalyticsFromMonth?: string | null;
+  googleAnalyticsFromYear?: string | null;
+  googleAnalyticsToMonth?: string | null;
+  googleAnalyticsToYear?: string | null;
   metaRecommendationNotifications?: MetaRecommendationNotificationView[];
   metaRecommendationNotificationCount?: number;
   metaRecommendationNotes?: MetaRecommendationNoteView[];
@@ -73,14 +87,19 @@ function serializeJsonForScript(value: unknown) {
   return JSON.stringify(value).replaceAll("<", "\\u003c");
 }
 
-function formatCapacityWithPercent(
-  enrolledCount: number,
-  _enrolledFteCount: number,
-  licensedCapacity: number,
-) {
-  const utilisationRatio = licensedCapacity > 0 ? Math.max(0, enrolledCount / licensedCapacity) : 0;
+function formatEnrolmentCapacity(row: AnalyticsRow) {
+  const bookedPercent =
+    row.bookedUtilisationRatio > 0 ? ` ${formatPercent(row.bookedUtilisationRatio)}` : "";
 
-  return `${enrolledCount}/${licensedCapacity} ${formatPercent(utilisationRatio)}`;
+  return `${row.enrolledCount}/${row.licensedCapacity}${bookedPercent}`;
+}
+
+function formatEstimatedPlaces(row: AnalyticsRow) {
+  if (row.bookedAverageDailyCount <= 0 || row.licensedCapacity <= 0) {
+    return "-";
+  }
+
+  return String(Math.max(0, Math.round(row.licensedCapacity - row.bookedAverageDailyCount)));
 }
 
 function formatAgeBandCapacity(enrolledCount: number, licensedCapacity?: number | null) {
@@ -133,6 +152,115 @@ function resolveWaitlistSection(input?: string | null): WaitlistSection {
   }
 
   return null;
+}
+
+function resolveGoogleAnalyticsSection(input?: string | null): GoogleAnalyticsSection {
+  if (input === "pages") {
+    return input;
+  }
+
+  return null;
+}
+
+function getGoogleAnalyticsBounds(referenceDate = new Date()) {
+  const start = new Date(Date.UTC(2025, 4, 1));
+  const today = new Date(referenceDate);
+
+  return {
+    minYear: start.getUTCFullYear(),
+    minMonth: start.getUTCMonth() + 1,
+    maxYear: today.getUTCFullYear(),
+    maxMonth: today.getUTCMonth() + 1,
+  };
+}
+
+function getGoogleAnalyticsDefaultMonthSelection(referenceDate = new Date()) {
+  const endDate = new Date(Date.UTC(referenceDate.getUTCFullYear(), referenceDate.getUTCMonth(), referenceDate.getUTCDate()));
+  const startDate = new Date(Date.UTC(endDate.getUTCFullYear(), endDate.getUTCMonth(), 1));
+
+  return {
+    fromMonth: startDate.getUTCMonth() + 1,
+    fromYear: startDate.getUTCFullYear(),
+    toMonth: endDate.getUTCMonth() + 1,
+    toYear: endDate.getUTCFullYear(),
+  };
+}
+
+function parseGoogleAnalyticsMonth(input?: string | null) {
+  const value = Number.parseInt(String(input ?? ""), 10);
+
+  return Number.isInteger(value) && value >= 1 && value <= 12 ? value : null;
+}
+
+function parseGoogleAnalyticsYear(input?: string | null) {
+  const value = Number.parseInt(String(input ?? ""), 10);
+
+  return Number.isInteger(value) ? value : null;
+}
+
+function formatGoogleAnalyticsMonthKey(year: number, month: number) {
+  return `${year}-${String(month).padStart(2, "0")}`;
+}
+
+function isGoogleAnalyticsMonthAllowed(year: number, month: number, referenceDate = new Date()) {
+  const bounds = getGoogleAnalyticsBounds(referenceDate);
+
+  if (year < bounds.minYear || year > bounds.maxYear) {
+    return false;
+  }
+
+  if (year === bounds.minYear && month < bounds.minMonth) {
+    return false;
+  }
+
+  return !(year === bounds.maxYear && month > bounds.maxMonth);
+}
+
+function resolveGoogleAnalyticsRangeSelection(
+  input: {
+    mode?: string | null;
+    fromMonth?: string | null;
+    fromYear?: string | null;
+    toMonth?: string | null;
+    toYear?: string | null;
+  } = {},
+): GoogleAnalyticsRangeSelection {
+  const defaults = getGoogleAnalyticsDefaultMonthSelection();
+  const fromMonth = parseGoogleAnalyticsMonth(input.fromMonth) ?? defaults.fromMonth;
+  const fromYear = parseGoogleAnalyticsYear(input.fromYear) ?? defaults.fromYear;
+  const toMonth = parseGoogleAnalyticsMonth(input.toMonth) ?? defaults.toMonth;
+  const toYear = parseGoogleAnalyticsYear(input.toYear) ?? defaults.toYear;
+  const boundedFrom = isGoogleAnalyticsMonthAllowed(fromYear, fromMonth)
+    ? { month: fromMonth, year: fromYear }
+    : { month: defaults.fromMonth, year: defaults.fromYear };
+  const boundedTo = isGoogleAnalyticsMonthAllowed(toYear, toMonth)
+    ? { month: toMonth, year: toYear }
+    : { month: defaults.toMonth, year: defaults.toYear };
+
+  if (
+    formatGoogleAnalyticsMonthKey(boundedFrom.year, boundedFrom.month) >
+    formatGoogleAnalyticsMonthKey(boundedTo.year, boundedTo.month)
+  ) {
+    return {
+      mode: input.mode === "months" ? "months" : "currentMonth",
+      fromMonth: boundedTo.month,
+      fromYear: boundedTo.year,
+      toMonth: boundedTo.month,
+      toYear: boundedTo.year,
+    };
+  }
+
+  return {
+    mode: input.mode === "months" ? "months" : "currentMonth",
+    fromMonth: boundedFrom.month,
+    fromYear: boundedFrom.year,
+    toMonth: boundedTo.month,
+    toYear: boundedTo.year,
+  };
+}
+
+function formatGoogleAnalyticsRangeLabel(snapshot: GoogleAnalyticsDailySnapshotView) {
+  return `${formatDateOnly(snapshot.rangeStartDate)} to ${formatDateOnly(snapshot.rangeEndDate)}`;
 }
 
 function sortAnalyticsRows(rows: readonly AnalyticsRow[], serviceSort: ServiceSort) {
@@ -1003,6 +1131,20 @@ function buildWaitlistSectionQuery(
   return params.toString();
 }
 
+function buildGoogleAnalyticsSectionQuery(
+  selectedCentreKey: number | null | undefined,
+  selectedWindowKey: WindowKey,
+  serviceSort: ServiceSort,
+  googleAnalyticsSection: Exclude<GoogleAnalyticsSection, null>,
+  googleAnalyticsRange?: GoogleAnalyticsRangeSelection,
+) {
+  const params = new URLSearchParams(buildQueryString(selectedCentreKey, selectedWindowKey, serviceSort, "google-analytics", googleAnalyticsRange));
+
+  params.set("googleAnalyticsSection", googleAnalyticsSection);
+
+  return params.toString();
+}
+
 function renderWaitlistSectionHeader(
   title: string,
   selectedCentreKey: number | null | undefined,
@@ -1232,6 +1374,7 @@ function buildQueryString(
   selectedWindowKey: WindowKey,
   serviceSort: ServiceSort,
   focusPanelId?: string | null,
+  googleAnalyticsRange?: GoogleAnalyticsRangeSelection,
 ) {
   const params = new URLSearchParams();
 
@@ -1249,6 +1392,16 @@ function buildQueryString(
     params.set("panel", focusPanelId);
   }
 
+  if (googleAnalyticsRange) {
+    if (googleAnalyticsRange.mode === "months") {
+      params.set("gaRange", "months");
+      params.set("gaFromMonth", String(googleAnalyticsRange.fromMonth));
+      params.set("gaFromYear", String(googleAnalyticsRange.fromYear));
+      params.set("gaToMonth", String(googleAnalyticsRange.toMonth));
+      params.set("gaToYear", String(googleAnalyticsRange.toYear));
+    }
+  }
+
   return params.toString();
 }
 
@@ -1258,11 +1411,16 @@ function buildPanelActions(
   selectedWindowKey: WindowKey,
   serviceSort: ServiceSort,
   focusPanelId?: string | null,
+  googleAnalyticsRange?: GoogleAnalyticsRangeSelection,
 ) {
   if (panelId === "chat") {
-    return "";
+    return `<button class="panel-action-button" type="button" data-print-mode="chat" aria-label="Print AI Chat" title="Print AI Chat"><i class="bi bi-printer ui-icon" aria-hidden="true"></i></button>`;
   }
 
+  const dashboardPrintAction =
+    !focusPanelId && panelId === "analytics"
+      ? `<button class="panel-action-button" type="button" data-print-mode="dashboard" aria-label="Print console" title="Print console"><i class="bi bi-printer ui-icon" aria-hidden="true"></i></button>`
+      : "";
   const analyticsRefreshAction =
     panelId === "analytics"
       ? `<a class="panel-action-button" href="/actions/refresh-snapshot?${buildQueryString(selectedCentreKey, "3M", "critical")}" aria-label="Download latest Infocare analytics snapshot" title="Download latest Infocare analytics snapshot"><i class="bi bi-download ui-icon" aria-hidden="true"></i></a>`
@@ -1273,17 +1431,38 @@ function buildPanelActions(
       : "";
   const googleAnalyticsRefreshAction =
     panelId === "google-analytics"
-      ? `<a class="panel-action-button" href="/actions/refresh-google-analytics?${buildQueryString(selectedCentreKey, selectedWindowKey, serviceSort)}" aria-label="Download latest Google Analytics data" title="Download latest Google Analytics data"><i class="bi bi-download ui-icon" aria-hidden="true"></i></a>`
+      ? `<a class="panel-action-button" href="/actions/refresh-google-analytics?${buildQueryString(selectedCentreKey, selectedWindowKey, serviceSort, null, googleAnalyticsRange)}" aria-label="Download latest Google Analytics data" title="Download latest Google Analytics data"><i class="bi bi-download ui-icon" aria-hidden="true"></i></a>`
       : "";
   const fullscreenAction = `<button class="panel-action-button" type="button" data-fullscreen-toggle aria-label="Enter fullscreen" title="Enter fullscreen"><i class="bi bi-fullscreen ui-icon" aria-hidden="true"></i></button>`;
+  const printAction = `<button class="panel-action-button" type="button" data-print-page aria-label="Print window" title="Print window"><i class="bi bi-printer ui-icon" aria-hidden="true"></i></button>`;
 
   if (focusPanelId === panelId) {
-    return `${analyticsRefreshAction}${metaRefreshAction}${googleAnalyticsRefreshAction}${fullscreenAction}<a class="panel-action-link" href="/?${buildQueryString(selectedCentreKey, selectedWindowKey, serviceSort)}"><i class="bi bi-arrow-left-short ui-icon" aria-hidden="true"></i><span>Return to dashboard</span></a>`;
+    return `${analyticsRefreshAction}${metaRefreshAction}${googleAnalyticsRefreshAction}${printAction}${fullscreenAction}<a class="panel-action-link" href="/?${buildQueryString(selectedCentreKey, selectedWindowKey, serviceSort, null, googleAnalyticsRange)}"><i class="bi bi-arrow-left-short ui-icon" aria-hidden="true"></i><span>Return to dashboard</span></a>`;
   }
 
-  const popupQuery = buildQueryString(selectedCentreKey, selectedWindowKey, serviceSort, panelId);
+  const popupQuery = buildQueryString(selectedCentreKey, selectedWindowKey, serviceSort, panelId, googleAnalyticsRange);
 
-  return `${analyticsRefreshAction}${metaRefreshAction}${googleAnalyticsRefreshAction}${fullscreenAction}<button class="panel-action-button" type="button" data-open-panel="${panelId}" data-panel-query="${popupQuery}" aria-label="Open window" title="Open window"><i class="bi bi-box-arrow-up-right ui-icon" aria-hidden="true"></i></button>`;
+  return `${dashboardPrintAction}${analyticsRefreshAction}${metaRefreshAction}${googleAnalyticsRefreshAction}${fullscreenAction}<button class="panel-action-button" type="button" data-open-panel="${panelId}" data-panel-query="${popupQuery}" aria-label="Open window" title="Open window"><i class="bi bi-box-arrow-up-right ui-icon" aria-hidden="true"></i></button>`;
+}
+
+function formatDocumentTitleTimestamp(date = new Date()) {
+  const pad = (value: number) => String(value).padStart(2, "0");
+
+  return [
+    date.getFullYear(),
+    pad(date.getMonth() + 1),
+    pad(date.getDate()),
+  ].join("-") + ` ${pad(date.getHours())}-${pad(date.getMinutes())}`;
+}
+
+function buildDocumentTitle(focusPanelId?: string | null) {
+  const panelTitle = focusPanelId
+    ? PANEL_DEFINITIONS.find((panel) => panel.id === focusPanelId)?.title
+    : null;
+
+  return panelTitle
+    ? `Marketing Helper - ${panelTitle} - ${formatDocumentTitleTimestamp()}`
+    : "Marketing Helper AI";
 }
 
 function buildWindowInsights(row: AnalyticsRow, history: CentreSnapshotHistoryEntry[], windowKey: WindowKey) {
@@ -1508,7 +1687,8 @@ function renderAnalyticsTable(
           <td class="analytics-table__service">
             ${escapeHtml(row.serviceName)}
           </td>
-          <td class="analytics-table__numeric">${formatCapacityWithPercent(row.enrolledCount, row.enrolledFteCount, row.licensedCapacity)}</td>
+          <td class="analytics-table__numeric">${formatEnrolmentCapacity(row)}</td>
+          <td class="analytics-table__numeric">${formatEstimatedPlaces(row)}</td>
           <td class="analytics-table__numeric">${formatAgeBandCapacity(row.enrolledUnder2Count, row.licensedUnder2Capacity)}</td>
           <td class="analytics-table__numeric">${formatAgeBandCapacity(row.enrolledOver2Count, row.licensedOver2Capacity)}</td>
           <td class="analytics-table__numeric">${formatWaitlistCoverage(row.waitlistCount)}</td>
@@ -1525,7 +1705,7 @@ function renderAnalyticsTable(
     rows ||
     `
       <tr>
-        <td colspan="9" class="analytics-table__empty">No analytics snapshot rows are available yet.</td>
+        <td colspan="10" class="analytics-table__empty">No analytics snapshot rows are available yet.</td>
       </tr>
     `;
 
@@ -1565,6 +1745,7 @@ function renderAnalyticsTable(
                 </div>
               </th>
               <th class="analytics-table__numeric">ENROL/MAX</th>
+              <th class="analytics-table__numeric">EST</th>
               <th class="analytics-table__numeric">U2</th>
               <th class="analytics-table__numeric">O2</th>
               <th class="analytics-table__numeric">Waitlist</th>
@@ -1723,7 +1904,6 @@ function renderMetaCoverageRows(
     ["Learning Limited", 2],
     ["Completed", 3],
     ["Not Delivering", 4],
-    ["Rejected", 5],
   ]);
   const centreNames = new Map((snapshotSet?.snapshots ?? []).map((row) => [row.centreKey, row.serviceName]));
   const getDisplayCentreName = (row: MetaAdsDashboardData["currentAds"][number]) =>
@@ -1765,7 +1945,7 @@ function renderMetaCoverageRows(
   if (rows.length === 0) {
     return `
       <tr>
-        <td colspan="9" class="meta-ads-table__empty">No current matched adverts found for the selected Meta delivery states.</td>
+        <td colspan="9" class="meta-ads-table__empty">No matched adverts found for the selected period and Meta delivery states.</td>
       </tr>
     `;
   }
@@ -2042,7 +2222,7 @@ function renderMetaAdsPanel(
         <div class="meta-ads-summary__item">
           <span>Completed</span>
           <strong>${metaAdsDashboardData?.completedCampaignCount ?? 0}</strong>
-          <small>Ended in last 30 days</small>
+          <small>Ended adverts</small>
         </div>
         <div class="meta-ads-summary__item">
           <span>Not Delivering</span>
@@ -2055,8 +2235,9 @@ function renderMetaAdsPanel(
           <small>Policy issue</small>
         </div>
         <div class="meta-ads-summary__item">
-          <span>Amount spent 30d</span>
+          <span>Amount spent</span>
           <strong>${formatMoney(metaAdsDashboardData?.totalSpend30d ?? 0)}</strong>
+          <small>${escapeHtml(formatWindowPeriodLabel(selectedWindowKey))}</small>
         </div>
       </div>
 
@@ -2064,8 +2245,8 @@ function renderMetaAdsPanel(
 
       <section class="meta-ads-section meta-ads-section--wide meta-ads-section--recent">
         <div class="meta-ads-section__header">
-          <h3>Recent Ads Running</h3>
-          <span>${metaAdsDashboardData?.latestPullAt ? `current ads from last pull ${formatTimestamp(metaAdsDashboardData.latestPullAt)}` : "no pull yet"}</span>
+          <h3>Ads In Period</h3>
+          <span>${metaAdsDashboardData?.latestPullAt ? `last Meta pull ${formatTimestamp(metaAdsDashboardData.latestPullAt)}` : "no pull yet"}</span>
         </div>
         <div class="meta-ads-table-wrap">
           <table class="meta-ads-table">
@@ -2142,6 +2323,21 @@ function getCentrePageMatchTokens(serviceName: string) {
     .filter((token) => token.length >= 4);
 }
 
+function getMetaAdPageMatchTokens(ad: MetaAdsDashboardData["currentAds"][number]) {
+  return normalizePageMatchText(`${ad.adSetName} ${ad.adName} ${ad.campaignName}`)
+    .split(" ")
+    .filter((token) => token.length >= 4)
+    .filter((token) => !["advert", "campaign", "kindergarten", "enrolment", "enrolments", "april"].includes(token));
+}
+
+function getMetaAdDisplayName(ad: MetaAdsDashboardData["currentAds"][number]) {
+  return ad.adSetName !== "-"
+    ? ad.adSetName
+    : ad.campaignName !== "-"
+      ? ad.campaignName
+      : ad.adName;
+}
+
 function renderGoogleAnalyticsPageRows(pages: GoogleAnalyticsPageSnapshotView[], limit = 12) {
   const visiblePages = pages.slice(0, limit);
   const maxViews = Math.max(...visiblePages.map((page) => page.screenPageViews ?? 0), 1);
@@ -2164,7 +2360,7 @@ function renderGoogleAnalyticsPageRows(pages: GoogleAnalyticsPageSnapshotView[],
           <td class="google-analytics-table__numeric">${formatInteger(views)}</td>
           <td class="google-analytics-table__numeric">${formatInteger(page.activeUsers)}</td>
           <td class="google-analytics-table__numeric">${formatInteger(page.sessions)}</td>
-          <td><span class="google-analytics-bar" style="--bar-width: ${width}%"></span></td>
+          <td class="google-analytics-table__volume"><span class="google-analytics-bar" style="--bar-width: ${width}%"></span></td>
         </tr>
       `;
     })
@@ -2176,22 +2372,41 @@ function buildMetaRelatedGoogleAnalyticsPages(
   metaAdsDashboardData: MetaAdsDashboardData | null | undefined,
   googleAnalyticsSnapshot: GoogleAnalyticsDailySnapshotView,
 ) {
-  const activeAdCentreKeys = new Set(
+  const deliverySortRank = new Map([
+    ["Active", 0],
+    ["Learning", 1],
+    ["Learning Limited", 2],
+    ["Completed", 3],
+    ["Not Delivering", 4],
+  ]);
+  const adsByCentre = new Map<number, MetaAdsDashboardData["currentAds"]>();
+  const advertisedCentreKeys = new Set(
     (metaAdsDashboardData?.currentAds ?? [])
-      .filter((ad) => ad.centreKey != null && !isBeforeToday(ad.endsAt))
+      .filter((ad) => ad.centreKey != null)
       .map((ad) => ad.centreKey as number),
   );
 
+  for (const ad of metaAdsDashboardData?.currentAds ?? []) {
+    if (ad.centreKey == null) {
+      continue;
+    }
+
+    const ads = adsByCentre.get(ad.centreKey) ?? [];
+
+    ads.push(ad);
+    adsByCentre.set(ad.centreKey, ads);
+  }
+
   for (const coverage of metaAdsDashboardData?.centreCoverage ?? []) {
     if (coverage.activeCampaignCount > 0) {
-      activeAdCentreKeys.add(coverage.centreKey);
+      advertisedCentreKeys.add(coverage.centreKey);
     }
   }
 
-  const centreRows = (snapshotSet?.snapshots ?? []).filter((row) => activeAdCentreKeys.has(row.centreKey));
-
-  return centreRows
+  const centreRows = (snapshotSet?.snapshots ?? []).filter((row) => advertisedCentreKeys.has(row.centreKey));
+  const rows = centreRows
     .map((centre) => {
+      const ads = adsByCentre.get(centre.centreKey) ?? [];
       const tokens = getCentrePageMatchTokens(centre.serviceName);
       const matchedPages = googleAnalyticsSnapshot.pages.filter((page) => {
         const pageText = normalizePageMatchText(`${page.pagePath} ${page.pageTitle ?? ""}`);
@@ -2202,14 +2417,62 @@ function buildMetaRelatedGoogleAnalyticsPages(
         (left, right) => (right.screenPageViews ?? 0) - (left.screenPageViews ?? 0),
       )[0];
       const coverage = metaAdsDashboardData?.centreCoverage.find((row) => row.centreKey === centre.centreKey);
+      const deliveryStatuses = [...new Set(ads.map((ad) => ad.status))]
+        .sort((left, right) => (deliverySortRank.get(left) ?? 999) - (deliverySortRank.get(right) ?? 999));
 
       return {
-        centre,
+        name: centre.serviceName,
         page: topPage ?? null,
-        activeCampaignCount: coverage?.activeCampaignCount ?? 0,
+        adCount: ads.length || coverage?.activeCampaignCount || 0,
+        delivery: deliveryStatuses.length > 0 ? deliveryStatuses.join(", ") : "-",
       };
     })
-    .filter((row) => row.page != null || row.activeCampaignCount > 0)
+    .filter((row) => row.page != null || row.adCount > 0);
+  const unkeyedAdGroups = new Map<string, MetaAdsDashboardData["currentAds"]>();
+
+  for (const ad of metaAdsDashboardData?.currentAds ?? []) {
+    if (ad.centreKey != null) {
+      continue;
+    }
+
+    const displayName = getMetaAdDisplayName(ad);
+    const ads = unkeyedAdGroups.get(displayName) ?? [];
+
+    ads.push(ad);
+    unkeyedAdGroups.set(displayName, ads);
+  }
+
+  for (const [displayName, ads] of unkeyedAdGroups) {
+    const tokens = [...new Set(ads.flatMap(getMetaAdPageMatchTokens))];
+
+    if (tokens.length === 0) {
+      continue;
+    }
+
+    const matchedPages = googleAnalyticsSnapshot.pages.filter((page) => {
+      const pageText = normalizePageMatchText(`${page.pagePath} ${page.pageTitle ?? ""}`);
+
+      return tokens.some((token) => pageText.includes(token));
+    });
+    const topPage = matchedPages.sort(
+      (left, right) => (right.screenPageViews ?? 0) - (left.screenPageViews ?? 0),
+    )[0];
+    const deliveryStatuses = [...new Set(ads.map((ad) => ad.status))]
+      .sort((left, right) => (deliverySortRank.get(left) ?? 999) - (deliverySortRank.get(right) ?? 999));
+
+    if (!topPage) {
+      continue;
+    }
+
+    rows.push({
+      name: displayName,
+      page: topPage,
+      adCount: ads.length,
+      delivery: deliveryStatuses.length > 0 ? deliveryStatuses.join(", ") : "-",
+    });
+  }
+
+  return rows
     .sort((left, right) => (right.page?.screenPageViews ?? 0) - (left.page?.screenPageViews ?? 0));
 }
 
@@ -2221,14 +2484,15 @@ function renderMetaRelatedGoogleAnalyticsRows(
   const rows = buildMetaRelatedGoogleAnalyticsPages(snapshotSet, metaAdsDashboardData, googleAnalyticsSnapshot);
 
   if (rows.length === 0) {
-    return `<tr><td colspan="6" class="google-analytics-table__empty">No active Meta ad centre pages matched yet.</td></tr>`;
+    return `<tr><td colspan="7" class="google-analytics-table__empty">No Meta ad centre pages matched for the selected period yet.</td></tr>`;
   }
 
   return rows
     .map((row) => `
       <tr>
-        <td><strong>${escapeHtml(row.centre.serviceName)}</strong></td>
-        <td>${row.activeCampaignCount}</td>
+        <td><strong>${escapeHtml(row.name)}</strong></td>
+        <td>${row.adCount}</td>
+        <td>${escapeHtml(row.delivery)}</td>
         <td>
           ${
             row.page
@@ -2257,20 +2521,190 @@ function renderGoogleAnalyticsConfigEmptyState(configStatus?: GoogleAnalyticsCon
   `;
 }
 
+function renderGoogleAnalyticsRangeFilter(
+  selectedCentreKey: number | null | undefined,
+  selectedWindowKey: WindowKey,
+  serviceSort: ServiceSort,
+  googleAnalyticsRange: GoogleAnalyticsRangeSelection,
+  googleAnalyticsSection: GoogleAnalyticsSection,
+) {
+  const bounds = getGoogleAnalyticsBounds();
+  const months = Array.from({ length: 12 }, (_, index) => ({
+    value: index + 1,
+    label: new Date(Date.UTC(2026, index, 1)).toLocaleDateString("en-NZ", { month: "short", timeZone: "UTC" }),
+  }));
+  const years = Array.from(
+    { length: bounds.maxYear - bounds.minYear + 1 },
+    (_, index) => bounds.minYear + index,
+  );
+  const renderMonthOptions = (selectedMonth: number) =>
+    months
+      .map((option) => `<option value="${option.value}"${option.value === selectedMonth ? " selected" : ""}>${escapeHtml(option.label)}</option>`)
+      .join("");
+  const renderYearOptions = (selectedYear: number) =>
+    years
+      .map((year) => `<option value="${year}"${year === selectedYear ? " selected" : ""}>${year}</option>`)
+      .join("");
+
+  return `
+    <form class="google-analytics-filter" method="get" action="/" autocomplete="off">
+      ${selectedCentreKey != null ? `<input type="hidden" name="centre" value="${selectedCentreKey}">` : ""}
+      <input type="hidden" name="window" value="${selectedWindowKey}">
+      ${serviceSort !== "critical" ? `<input type="hidden" name="sort" value="${serviceSort}">` : ""}
+      <input type="hidden" name="panel" value="google-analytics">
+      ${googleAnalyticsSection ? `<input type="hidden" name="googleAnalyticsSection" value="${googleAnalyticsSection}">` : ""}
+      <input type="hidden" name="gaRange" value="months">
+      <fieldset data-ga-month-bound data-min-year="${bounds.minYear}" data-min-month="${bounds.minMonth}" data-max-year="${bounds.maxYear}" data-max-month="${bounds.maxMonth}">
+        <legend>From</legend>
+        <label>
+          <span>Month</span>
+          <select name="gaFromMonth" data-ga-month-select data-selected-value="${googleAnalyticsRange.fromMonth}" autocomplete="off">${renderMonthOptions(googleAnalyticsRange.fromMonth)}</select>
+        </label>
+        <label>
+          <span>Year</span>
+          <select name="gaFromYear" data-ga-year-select data-selected-value="${googleAnalyticsRange.fromYear}" autocomplete="off">${renderYearOptions(googleAnalyticsRange.fromYear)}</select>
+        </label>
+      </fieldset>
+      <fieldset data-ga-month-bound data-min-year="${bounds.minYear}" data-min-month="${bounds.minMonth}" data-max-year="${bounds.maxYear}" data-max-month="${bounds.maxMonth}">
+        <legend>To</legend>
+        <label>
+          <span>Month</span>
+          <select name="gaToMonth" data-ga-month-select data-selected-value="${googleAnalyticsRange.toMonth}" autocomplete="off">${renderMonthOptions(googleAnalyticsRange.toMonth)}</select>
+        </label>
+        <label>
+          <span>Year</span>
+          <select name="gaToYear" data-ga-year-select data-selected-value="${googleAnalyticsRange.toYear}" autocomplete="off">${renderYearOptions(googleAnalyticsRange.toYear)}</select>
+        </label>
+      </fieldset>
+      <button type="submit" aria-label="Apply Google Analytics date range" title="Apply date range"><i class="bi bi-funnel ui-icon" aria-hidden="true"></i></button>
+      <script>
+        (() => {
+          for (const group of document.querySelectorAll("[data-ga-month-bound]")) {
+            const yearSelect = group.querySelector("[data-ga-year-select]");
+            const monthSelect = group.querySelector("[data-ga-month-select]");
+
+            if (!(yearSelect instanceof HTMLSelectElement) || !(monthSelect instanceof HTMLSelectElement)) {
+              continue;
+            }
+
+            yearSelect.value = yearSelect.getAttribute("data-selected-value") || yearSelect.value;
+            monthSelect.value = monthSelect.getAttribute("data-selected-value") || monthSelect.value;
+
+            const minYear = Number(group.getAttribute("data-min-year"));
+            const minMonth = Number(group.getAttribute("data-min-month"));
+            const maxYear = Number(group.getAttribute("data-max-year"));
+            const maxMonth = Number(group.getAttribute("data-max-month"));
+            const syncMonths = () => {
+              const year = Number(yearSelect.value);
+              let firstEnabled = null;
+
+              for (const option of monthSelect.options) {
+                const month = Number(option.value);
+                const disabled = (year === minYear && month < minMonth) || (year === maxYear && month > maxMonth);
+
+                option.disabled = disabled;
+
+                if (!disabled && firstEnabled == null) {
+                  firstEnabled = option.value;
+                }
+              }
+
+              if (monthSelect.selectedOptions[0]?.disabled && firstEnabled != null) {
+                monthSelect.value = firstEnabled;
+              }
+            };
+
+            yearSelect.addEventListener("change", syncMonths);
+            syncMonths();
+          }
+        })();
+      </script>
+    </form>
+  `;
+}
+
 function renderGoogleAnalyticsPanel(
   snapshot?: GoogleAnalyticsDailySnapshotView | null,
   configStatus?: GoogleAnalyticsConfigStatus | null,
   snapshotSet?: LatestSnapshotSet | null,
   metaAdsDashboardData?: MetaAdsDashboardData | null,
+  selectedCentreKey?: number | null,
+  selectedWindowKey: WindowKey = "3M",
+  serviceSort: ServiceSort = "critical",
+  googleAnalyticsSection: GoogleAnalyticsSection = null,
+  googleAnalyticsRange: GoogleAnalyticsRangeSelection = resolveGoogleAnalyticsRangeSelection(),
 ) {
   const hasSnapshot = Boolean(snapshot);
+  const rangeLabel = snapshot ? formatGoogleAnalyticsRangeLabel(snapshot) : "No stored range";
+  const pagesSection = snapshot
+    ? `
+      <section class="google-analytics-section">
+        <div class="google-analytics-section__header">
+          <div class="google-analytics-section__title">
+            <h3>Most Visited Pages</h3>
+            ${
+              googleAnalyticsSection
+                ? ""
+                : `<button class="panel-action-button google-analytics-section-open" type="button" data-open-panel="google-analytics" data-panel-query="${escapeHtml(buildGoogleAnalyticsSectionQuery(selectedCentreKey, selectedWindowKey, serviceSort, "pages", googleAnalyticsRange))}" aria-label="Open Most Visited Pages window" title="Open window"><i class="bi bi-box-arrow-up-right ui-icon" aria-hidden="true"></i><span>Open</span></button>`
+            }
+          </div>
+          <div class="google-analytics-section__actions">
+            <span>${escapeHtml(rangeLabel)}</span>
+          </div>
+        </div>
+        <div class="google-analytics-table-wrap">
+          <table class="google-analytics-table">
+            <thead>
+              <tr>
+                <th>Page</th>
+                <th class="google-analytics-table__numeric">Views</th>
+                <th class="google-analytics-table__numeric">Users</th>
+                <th class="google-analytics-table__numeric">Sessions</th>
+                <th class="google-analytics-table__volume">Volume</th>
+              </tr>
+            </thead>
+            <tbody>${renderGoogleAnalyticsPageRows(snapshot.pages)}</tbody>
+          </table>
+        </div>
+      </section>
+    `
+    : "";
+  const metaCentrePagesSection = snapshot
+    ? `
+      <section class="google-analytics-section">
+        <div class="google-analytics-section__header">
+          <h3>Meta Ad Centre Pages</h3>
+          <span>Matched from active Meta ad centres</span>
+        </div>
+        <div class="google-analytics-table-wrap">
+          <table class="google-analytics-table">
+            <thead>
+              <tr>
+                <th>Centre</th>
+                <th>Ads</th>
+                <th>Delivery</th>
+                <th>Matched page</th>
+                <th class="google-analytics-table__numeric">Views</th>
+                <th class="google-analytics-table__numeric">Users</th>
+                <th class="google-analytics-table__numeric">Engagement</th>
+              </tr>
+            </thead>
+            <tbody>${renderMetaRelatedGoogleAnalyticsRows(snapshotSet ?? null, metaAdsDashboardData, snapshot)}</tbody>
+          </table>
+        </div>
+      </section>
+    `
+    : "";
 
   return `
-    <div class="google-analytics-panel">
+    <div class="google-analytics-panel${googleAnalyticsSection ? " google-analytics-panel--section-focus" : ""}">
       ${renderGoogleAnalyticsConfigEmptyState(configStatus)}
+      ${renderGoogleAnalyticsRangeFilter(selectedCentreKey, selectedWindowKey, serviceSort, googleAnalyticsRange, googleAnalyticsSection)}
       ${
         hasSnapshot && snapshot
-          ? `
+          ? googleAnalyticsSection === "pages"
+            ? pagesSection
+            : `
             <div class="google-analytics-summary">
               <div class="google-analytics-summary__item">
                 <span>Active users</span>
@@ -2307,50 +2741,11 @@ function renderGoogleAnalyticsPanel(
             </div>
             <div class="google-analytics-panel__meta">
               <span>Property ${escapeHtml(snapshot.propertyId)}</span>
-              <span>Snapshot ${formatDateOnly(snapshot.snapshotDate)}</span>
+              <span>Range ${escapeHtml(formatGoogleAnalyticsRangeLabel(snapshot))}</span>
               <span>Pulled ${formatTimestamp(snapshot.pulledAt)}</span>
             </div>
-            <section class="google-analytics-section">
-              <div class="google-analytics-section__header">
-                <h3>Most Visited Pages</h3>
-                <span>Last 30 days</span>
-              </div>
-              <div class="google-analytics-table-wrap">
-                <table class="google-analytics-table">
-                  <thead>
-                    <tr>
-                      <th>Page</th>
-                      <th class="google-analytics-table__numeric">Views</th>
-                      <th class="google-analytics-table__numeric">Users</th>
-                      <th class="google-analytics-table__numeric">Sessions</th>
-                      <th>Volume</th>
-                    </tr>
-                  </thead>
-                  <tbody>${renderGoogleAnalyticsPageRows(snapshot.pages)}</tbody>
-                </table>
-              </div>
-            </section>
-            <section class="google-analytics-section">
-              <div class="google-analytics-section__header">
-                <h3>Meta Ad Centre Pages</h3>
-                <span>Matched from active Meta ad centres</span>
-              </div>
-              <div class="google-analytics-table-wrap">
-                <table class="google-analytics-table">
-                  <thead>
-                    <tr>
-                      <th>Centre</th>
-                      <th>Ads</th>
-                      <th>Matched page</th>
-                      <th class="google-analytics-table__numeric">Views</th>
-                      <th class="google-analytics-table__numeric">Users</th>
-                      <th class="google-analytics-table__numeric">Engagement</th>
-                    </tr>
-                  </thead>
-                  <tbody>${renderMetaRelatedGoogleAnalyticsRows(snapshotSet ?? null, metaAdsDashboardData, snapshot)}</tbody>
-                </table>
-              </div>
-            </section>
+            ${pagesSection}
+            ${metaCentrePagesSection}
           `
           : `<p class="google-analytics-panel__empty">Open this panel to take the first daily Google Analytics snapshot.</p>`
       }
@@ -2873,6 +3268,30 @@ function renderBreakoutScript() {
             return;
           }
 
+          const printButton = target.closest("[data-print-page]");
+
+          if (printButton instanceof HTMLButtonElement) {
+            event.preventDefault();
+            window.print();
+            return;
+          }
+
+          const printModeButton = target.closest("[data-print-mode]");
+
+          if (printModeButton instanceof HTMLButtonElement) {
+            event.preventDefault();
+            const mode = printModeButton.getAttribute("data-print-mode") || "";
+
+            document.documentElement.dataset.printMode = mode;
+            window.print();
+            window.setTimeout(() => {
+              if (document.documentElement.dataset.printMode === mode) {
+                delete document.documentElement.dataset.printMode;
+              }
+            }, 1000);
+            return;
+          }
+
           const row = target.closest("[data-row-href]");
 
           if (row instanceof HTMLTableRowElement && !target.closest("a, button, textarea, input, label")) {
@@ -2885,6 +3304,9 @@ function renderBreakoutScript() {
         });
 
         document.addEventListener("fullscreenchange", setFullscreenButtonState);
+        window.addEventListener("afterprint", () => {
+          delete document.documentElement.dataset.printMode;
+        });
 
         document.addEventListener("change", (event) => {
           const target = event.target;
@@ -2931,8 +3353,11 @@ function renderWaitlistChartScript() {
           return;
         }
 
-        const gridColor = "rgba(212, 212, 212, 0.12)";
-        const tickColor = "#d4d4d4";
+        const screenGridColor = "rgba(212, 212, 212, 0.12)";
+        const screenTickColor = "#d4d4d4";
+        const printGridColor = "#e2e2e2";
+        const printTickColor = "#000000";
+        const charts = [];
         const colorMap = {
           short: "#7fbe6f",
           typical: "#4bc2c3",
@@ -2947,6 +3372,18 @@ function renderWaitlistChartScript() {
 
         function resolveColor(key, fallbackIndex) {
           return colorMap[key] || palette[fallbackIndex % palette.length];
+        }
+
+        function isPrinting() {
+          return window.matchMedia?.("print").matches || document.documentElement.classList.contains("is-printing");
+        }
+
+        function getChartTextColor() {
+          return isPrinting() ? printTickColor : screenTickColor;
+        }
+
+        function getChartGridColor() {
+          return isPrinting() ? printGridColor : screenGridColor;
         }
 
         function readConfig(script) {
@@ -2984,12 +3421,12 @@ function renderWaitlistChartScript() {
               scales: {
                 x: {
                   beginAtZero: true,
-                  grid: { color: gridColor },
-                  ticks: { color: tickColor, precision: 0 },
+                  grid: { color: getChartGridColor() },
+                  ticks: { color: getChartTextColor(), precision: 0 },
                 },
                 y: {
                   grid: { display: false },
-                  ticks: { color: tickColor, autoSkip: false },
+                  ticks: { color: getChartTextColor(), autoSkip: false },
                 },
               },
             },
@@ -3016,20 +3453,20 @@ function renderWaitlistChartScript() {
               plugins: {
                 legend: {
                   position: "bottom",
-                  labels: { color: tickColor, boxWidth: 10 },
+                  labels: { color: getChartTextColor(), boxWidth: 10 },
                 },
               },
               scales: {
                 x: {
                   stacked: true,
                   beginAtZero: true,
-                  grid: { color: gridColor },
-                  ticks: { color: tickColor, precision: 0 },
+                  grid: { color: getChartGridColor() },
+                  ticks: { color: getChartTextColor(), precision: 0 },
                 },
                 y: {
                   stacked: true,
                   grid: { display: false },
-                  ticks: { color: tickColor, autoSkip: false },
+                  ticks: { color: getChartTextColor(), autoSkip: false },
                 },
               },
             },
@@ -3054,7 +3491,7 @@ function renderWaitlistChartScript() {
               plugins: {
                 legend: {
                   position: "right",
-                  labels: { color: tickColor, boxWidth: 10 },
+                  labels: { color: getChartTextColor(), boxWidth: 10 },
                 },
                 tooltip: {
                   callbacks: {
@@ -3083,6 +3520,48 @@ function renderWaitlistChartScript() {
                 : createBarConfig(config);
 
           new Chart(canvas, chartConfig);
+          charts.push(Chart.getChart(canvas));
+        }
+
+        function applyPrintChartColors(printMode) {
+          document.documentElement.classList.toggle("is-printing", printMode);
+
+          for (const chart of charts) {
+            if (!chart) {
+              continue;
+            }
+
+            const textColor = printMode ? printTickColor : screenTickColor;
+            const gridColor = printMode ? printGridColor : screenGridColor;
+            const scales = chart.options.scales || {};
+
+            for (const scale of Object.values(scales)) {
+              if (scale?.ticks) {
+                scale.ticks.color = textColor;
+              }
+
+              if (scale?.grid && scale.grid.display !== false) {
+                scale.grid.color = gridColor;
+              }
+            }
+
+            const legendLabels = chart.options.plugins?.legend?.labels;
+
+            if (legendLabels) {
+              legendLabels.color = textColor;
+            }
+
+            chart.update("none");
+          }
+        }
+
+        window.addEventListener("beforeprint", () => applyPrintChartColors(true));
+        window.addEventListener("afterprint", () => applyPrintChartColors(false));
+
+        const printMedia = window.matchMedia?.("print");
+
+        if (printMedia?.addEventListener) {
+          printMedia.addEventListener("change", (event) => applyPrintChartColors(event.matches));
         }
       })();
     </script>
@@ -3102,6 +3581,14 @@ export function renderAppShell(
   const waitlistSnapshotSet = options.waitlistSnapshotSet ?? snapshotSet;
   const waitlistReport = options.waitlistReport ?? null;
   const waitlistSection = resolveWaitlistSection(options.waitlistSection);
+  const googleAnalyticsSection = resolveGoogleAnalyticsSection(options.googleAnalyticsSection);
+  const googleAnalyticsRange = resolveGoogleAnalyticsRangeSelection({
+    mode: options.googleAnalyticsRangeMode,
+    fromMonth: options.googleAnalyticsFromMonth,
+    fromYear: options.googleAnalyticsFromYear,
+    toMonth: options.googleAnalyticsToMonth,
+    toYear: options.googleAnalyticsToYear,
+  });
   const metaConfigStatus = options.metaConfigStatus ?? null;
   const googleAnalyticsConfigStatus = options.googleAnalyticsConfigStatus ?? null;
   const googleAnalyticsSnapshot = options.googleAnalyticsSnapshot ?? null;
@@ -3109,7 +3596,7 @@ export function renderAppShell(
     id: panel.id,
     title: panel.title,
     className: panel.className,
-    actions: buildPanelActions(panel.id, selectedCentreKey, selectedWindowKey, serviceSort, focusPanelId),
+    actions: buildPanelActions(panel.id, selectedCentreKey, selectedWindowKey, serviceSort, focusPanelId, googleAnalyticsRange),
     meta:
       panel.id === "analytics"
         ? `
@@ -3121,7 +3608,7 @@ export function renderAppShell(
           : panel.id === "waitlist"
             ? `<span>${waitlistReport?.generatedAt ? `report ${formatTimestamp(waitlistReport.generatedAt)}` : `last pulled ${formatDaysSince(waitlistSnapshotSet?.createdAt)}`}</span>`
             : panel.id === "google-analytics"
-              ? `<span>${googleAnalyticsSnapshot ? `snapshot ${formatDateOnly(googleAnalyticsSnapshot.snapshotDate)}` : "no snapshot"}</span>`
+              ? `<span>${googleAnalyticsSnapshot ? `range ${formatGoogleAnalyticsRangeLabel(googleAnalyticsSnapshot)}` : "no snapshot"}</span>`
               : "",
     children:
       panel.id === "analytics"
@@ -3153,6 +3640,11 @@ export function renderAppShell(
               googleAnalyticsConfigStatus,
               snapshotSet,
               options.metaAdsDashboardData,
+              selectedCentreKey,
+              selectedWindowKey,
+              serviceSort,
+              focusPanelId === "google-analytics" ? googleAnalyticsSection : null,
+              googleAnalyticsRange,
             )
           : renderAiChatPanel(
               snapshotSet,
@@ -3167,13 +3659,14 @@ export function renderAppShell(
     panels: panelContent,
     focusPanelId,
   });
+  const documentTitle = buildDocumentTitle(focusPanelId);
 
   return `<!DOCTYPE html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Marketing Helper AI</title>
+    <title>${escapeHtml(documentTitle)}</title>
     <link rel="stylesheet" href="/vendor/bootstrap-icons.css" />
     <link rel="stylesheet" href="/app.css" />
   </head>

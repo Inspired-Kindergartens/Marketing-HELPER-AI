@@ -1,9 +1,11 @@
 import type { GoogleAnalyticsConfig } from "./config.js";
 import { GoogleAnalyticsClient, type GoogleAnalyticsRunReportResponse } from "./client.js";
 import {
-  readGoogleAnalyticsDailySnapshotForDate,
+  readGoogleAnalyticsRangeSnapshot,
   upsertGoogleAnalyticsDailySnapshot,
 } from "../storage/google-analytics-store.js";
+
+export const GOOGLE_ANALYTICS_MONTH_RANGE_START = "2025-05-01";
 
 const GOOGLE_ANALYTICS_METRICS = [
   "activeUsers",
@@ -48,30 +50,62 @@ function parseRowMetricValue(
 function getDateOnly(value: Date) {
   const date = new Date(value);
 
-  date.setHours(0, 0, 0, 0);
-
-  return date;
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
 }
 
-export async function refreshGoogleAnalyticsSnapshot(config: GoogleAnalyticsConfig, referenceDate = new Date()) {
+function formatGoogleAnalyticsDate(value: Date) {
+  return value.toISOString().slice(0, 10);
+}
+
+function getDefaultRange(referenceDate: Date) {
+  const endDate = getDateOnly(referenceDate);
+  const startDate = new Date(Date.UTC(endDate.getUTCFullYear(), endDate.getUTCMonth(), 1));
+
+  return { startDate, endDate };
+}
+
+export function getGoogleAnalyticsMonthRanges(referenceDate = new Date()) {
+  const start = getDateOnly(new Date(GOOGLE_ANALYTICS_MONTH_RANGE_START));
+  const today = getDateOnly(referenceDate);
+  const ranges: { startDate: Date; endDate: Date }[] = [];
+
+  if (today < start) {
+    return ranges;
+  }
+
+  let cursor = new Date(start);
+
+  while (cursor <= today) {
+    const monthStart = new Date(cursor);
+    const monthEnd = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth() + 1, 0));
+    const endDate = monthEnd > today ? today : monthEnd;
+
+    ranges.push({ startDate: monthStart, endDate });
+    cursor = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth() + 1, 1));
+  }
+
+  return ranges;
+}
+
+export async function refreshGoogleAnalyticsRangeSnapshot(
+  config: GoogleAnalyticsConfig,
+  rangeStartDate: string | Date,
+  rangeEndDate: string | Date,
+) {
   const client = new GoogleAnalyticsClient(config);
   const pulledAt = new Date();
+  const rangeStart = getDateOnly(new Date(rangeStartDate));
+  const rangeEnd = getDateOnly(new Date(rangeEndDate));
+  const dateRange = {
+    startDate: formatGoogleAnalyticsDate(rangeStart),
+    endDate: formatGoogleAnalyticsDate(rangeEnd),
+  };
   const report = await client.runReport({
-    dateRanges: [
-      {
-        startDate: "30daysAgo",
-        endDate: "yesterday",
-      },
-    ],
+    dateRanges: [dateRange],
     metrics: GOOGLE_ANALYTICS_METRICS.map((name) => ({ name })),
   });
   const pageReport = await client.runReport({
-    dateRanges: [
-      {
-        startDate: "30daysAgo",
-        endDate: "yesterday",
-      },
-    ],
+    dateRanges: [dateRange],
     dimensions: [{ name: "pagePath" }, { name: "pageTitle" }],
     metrics: GOOGLE_ANALYTICS_PAGE_METRICS.map((name) => ({ name })),
     orderBys: [{ metric: { metricName: "screenPageViews" }, desc: true }],
@@ -134,7 +168,9 @@ export async function refreshGoogleAnalyticsSnapshot(config: GoogleAnalyticsConf
 
   return upsertGoogleAnalyticsDailySnapshot({
     propertyId: config.propertyId,
-    snapshotDate: getDateOnly(referenceDate),
+    snapshotDate: rangeEnd,
+    rangeStartDate: rangeStart,
+    rangeEndDate: rangeEnd,
     pulledAt,
     activeUsers: parseMetricValue(report, "activeUsers"),
     sessions: parseMetricValue(report, "sessions"),
@@ -149,12 +185,38 @@ export async function refreshGoogleAnalyticsSnapshot(config: GoogleAnalyticsConf
   });
 }
 
+export async function refreshGoogleAnalyticsSnapshot(config: GoogleAnalyticsConfig, referenceDate = new Date()) {
+  const { startDate, endDate } = getDefaultRange(referenceDate);
+
+  return refreshGoogleAnalyticsRangeSnapshot(config, startDate, endDate);
+}
+
 export async function ensureDailyGoogleAnalyticsSnapshot(config: GoogleAnalyticsConfig, referenceDate = new Date()) {
-  const existing = await readGoogleAnalyticsDailySnapshotForDate(config.propertyId, referenceDate);
+  const { startDate, endDate } = getDefaultRange(referenceDate);
+  const existing = await readGoogleAnalyticsRangeSnapshot(config.propertyId, startDate, endDate);
 
   if (existing && existing.pages.length > 0) {
     return existing;
   }
 
-  return refreshGoogleAnalyticsSnapshot(config, referenceDate);
+  return refreshGoogleAnalyticsRangeSnapshot(config, startDate, endDate);
+}
+
+export async function ensureGoogleAnalyticsMonthlySnapshots(
+  config: GoogleAnalyticsConfig,
+  referenceDate = new Date(),
+) {
+  const snapshots = [];
+
+  for (const range of getGoogleAnalyticsMonthRanges(referenceDate)) {
+    const existing = await readGoogleAnalyticsRangeSnapshot(config.propertyId, range.startDate, range.endDate);
+
+    snapshots.push(
+      existing && existing.pages.length > 0
+        ? existing
+        : await refreshGoogleAnalyticsRangeSnapshot(config, range.startDate, range.endDate),
+    );
+  }
+
+  return snapshots;
 }

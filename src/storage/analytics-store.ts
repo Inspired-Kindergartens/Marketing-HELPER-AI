@@ -129,6 +129,8 @@ function mapSnapshot(record: {
   date: Date;
   enrolledCount: number;
   enrolledFteCount: { toString(): string };
+  bookedAverageDailyCount: { toString(): string };
+  bookedUtilisationRatio: { toString(): string };
   enrolledUnder2Count: number;
   enrolledOver2Count: number;
   licensedCapacity: number;
@@ -158,6 +160,8 @@ function mapSnapshot(record: {
     date: toDateOnlyString(record.date),
     enrolledCount: record.enrolledCount,
     enrolledFteCount: toNumber(record.enrolledFteCount),
+    bookedAverageDailyCount: toNumber(record.bookedAverageDailyCount),
+    bookedUtilisationRatio: toNumber(record.bookedUtilisationRatio),
     enrolledUnder2Count: record.enrolledUnder2Count,
     enrolledOver2Count: record.enrolledOver2Count,
     licensedCapacity: record.licensedCapacity,
@@ -296,6 +300,8 @@ async function replaceSnapshotRows(
       date: new Date(snapshot.date),
       enrolledCount: snapshot.enrolledCount,
       enrolledFteCount: snapshot.enrolledFteCount,
+      bookedAverageDailyCount: snapshot.bookedAverageDailyCount,
+      bookedUtilisationRatio: snapshot.bookedUtilisationRatio,
       enrolledUnder2Count: snapshot.enrolledUnder2Count,
       enrolledOver2Count: snapshot.enrolledOver2Count,
       licensedCapacity: snapshot.licensedCapacity,
@@ -419,11 +425,28 @@ export async function readWindowAnalyticsSnapshotSet(
       const count = entries.length;
       const average = (selector: (entry: ServiceAnalyticsSnapshot) => number) =>
         entries.reduce((sum, entry) => sum + selector(entry), 0) / count;
+      const averageKnown = (selector: (entry: ServiceAnalyticsSnapshot) => number) => {
+        const knownEntries = entries.filter((entry) => selector(entry) > 0);
+
+        if (knownEntries.length === 0) {
+          return 0;
+        }
+
+        return (
+          knownEntries.reduce((sum, entry) => sum + selector(entry), 0) / knownEntries.length
+        );
+      };
 
       return {
         ...latest,
         enrolledCount: Math.round(average((entry) => entry.enrolledCount)),
         enrolledFteCount: Number(average((entry) => entry.enrolledFteCount).toFixed(2)),
+        bookedAverageDailyCount: Number(
+          averageKnown((entry) => entry.bookedAverageDailyCount).toFixed(2),
+        ),
+        bookedUtilisationRatio: Number(
+          averageKnown((entry) => entry.bookedUtilisationRatio).toFixed(4),
+        ),
         enrolledUnder2Count: latestValidAgeBandEntry.enrolledUnder2Count,
         enrolledOver2Count: latestValidAgeBandEntry.enrolledOver2Count,
         licensedUnder2Capacity: latestValidAgeBandEntry.licensedUnder2Capacity,

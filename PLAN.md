@@ -1,5 +1,12 @@
 # PLAN
 
+## Google Analytics Month Range Snapshots
+
+- [x] Add explicit Google Analytics range storage so snapshots are keyed by property, start date, and end date instead of only the pull/snapshot day.
+- [x] Preload month-by-month Google Analytics snapshots from May 2025 through the current month, with the current month ending at the latest available day.
+- [x] Add a Google Analytics panel filter with From month/year and To month/year selectors. Future months must not be selectable.
+- [x] Render selected month ranges from stored monthly snapshots, aggregating summary metrics and page rows across the chosen range.
+
 ## Goal
 
 Build a useful `META Ads` panel that connects read-only Meta Ads API data to Infocare analytics, so advertising activity can be compared against enrolment, waitlist, available places, and demand pressure.

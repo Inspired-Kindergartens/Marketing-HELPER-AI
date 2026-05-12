@@ -112,6 +112,8 @@ export const serviceAnalyticsSnapshotSchema = z.object({
   date: isoDateSchema,
   enrolledCount: z.number().int(),
   enrolledFteCount: z.number(),
+  bookedAverageDailyCount: z.number(),
+  bookedUtilisationRatio: z.number(),
   enrolledUnder2Count: z.number().int(),
   enrolledOver2Count: z.number().int(),
   licensedCapacity: z.number().int(),
