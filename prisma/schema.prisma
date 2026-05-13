@@ -88,6 +88,7 @@ model ServiceAnalyticsSnapshot {
   agedOutCount                  Int
   approachingFiveCount          Int
   approachingFiveCountsByWindow Json                 @default("{\"1W\":0,\"2W\":0,\"3W\":0,\"1M\":0,\"2M\":0,\"3M\":0,\"6M\":0,\"12M\":0}")
+  replacementPressureCountsByWindow Json             @default("{\"1W\":0,\"2W\":0,\"3W\":0,\"1M\":0,\"2M\":0,\"3M\":0,\"6M\":0,\"12M\":0}")
   replacementPressure           Int
   waitlistCoverRatio            Decimal              @db.Decimal(8, 4)
   urgencyScore                  Decimal              @db.Decimal(8, 4)

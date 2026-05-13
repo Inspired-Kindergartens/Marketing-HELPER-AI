@@ -132,6 +132,7 @@ export const serviceAnalyticsSnapshotSchema = z.object({
   agedOutCount: z.number().int(),
   approachingFiveCount: z.number().int(),
   approachingFiveCountsByWindow: windowScopedCountsSchema,
+  replacementPressureCountsByWindow: windowScopedCountsSchema.optional(),
   replacementPressure: z.number().int(),
   waitlistCoverRatio: z.number(),
   urgencyScore: z.number(),

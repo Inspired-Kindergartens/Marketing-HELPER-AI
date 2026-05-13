@@ -67,6 +67,7 @@ type AppShellOptions = {
   metaRecommendationNotifications?: MetaRecommendationNotificationView[];
   metaRecommendationNotificationCount?: number;
   metaRecommendationNotes?: MetaRecommendationNoteView[];
+  latestMetaRecommendationNotesForCentre?: MetaNotificationHistoryRow[];
   centreContacts?: CentreContact[];
 };
 
@@ -131,7 +132,7 @@ function getScopedApproachingFiveCount(row: ServiceAnalyticsSnapshot, windowKey:
 }
 
 function getScopedReplacementPressure(row: ServiceAnalyticsSnapshot, windowKey: WindowKey) {
-  return (
+  return row.replacementPressureCountsByWindow?.[windowKey] ?? (
     row.agedOutCount +
     getScopedKnownLeavingCount(row, windowKey) +
     getScopedApproachingFiveCount(row, windowKey)
@@ -1405,6 +1406,37 @@ function buildQueryString(
   return params.toString();
 }
 
+function renderAnalyticsToolbarActions(
+  selectedCentreKey: number | null | undefined,
+  selectedWindowKey: WindowKey,
+  serviceSort: ServiceSort,
+) {
+  const selectedCentreValue = selectedCentreKey == null ? null : selectedCentreKey;
+  const ascSortHref = `/?${buildQueryString(selectedCentreValue, selectedWindowKey, "asc")}`;
+  const descSortHref = `/?${buildQueryString(selectedCentreValue, selectedWindowKey, "desc")}`;
+
+  return `
+    <div class="analytics-toolbar__actions">
+      <a
+        class="analytics-toolbar__icon-action"
+        href="/?${buildQueryString(selectedCentreValue, "3M", "critical")}"
+        aria-label="Reset analytics view"
+        title="Reset analytics view"
+      ><i class="bi bi-arrow-counterclockwise ui-icon" aria-hidden="true"></i></a>
+      ${WINDOW_OPTIONS.map((option) => {
+        const className =
+          option.key === selectedWindowKey
+            ? "analytics-toolbar__window analytics-toolbar__window--active"
+            : "analytics-toolbar__window";
+
+        return `<a class="${className}" href="/?${buildQueryString(selectedCentreValue, option.key, serviceSort)}">${option.label}</a>`;
+      }).join("")}
+      <a class="analytics-toolbar__window${serviceSort === "asc" ? " analytics-toolbar__window--active" : ""}" href="${ascSortHref}" aria-label="Sort service A to Z">&uarr;</a>
+      <a class="analytics-toolbar__window${serviceSort === "desc" ? " analytics-toolbar__window--active" : ""}" href="${descSortHref}" aria-label="Sort service Z to A">&darr;</a>
+    </div>
+  `;
+}
+
 function buildPanelActions(
   panelId: string,
   selectedCentreKey: number | null | undefined,
@@ -1417,6 +1449,10 @@ function buildPanelActions(
     return `<button class="panel-action-button" type="button" data-print-mode="chat" aria-label="Print AI Chat" title="Print AI Chat"><i class="bi bi-printer ui-icon" aria-hidden="true"></i></button>`;
   }
 
+  const analyticsViewActions =
+    panelId === "analytics"
+      ? renderAnalyticsToolbarActions(selectedCentreKey, selectedWindowKey, serviceSort)
+      : "";
   const dashboardPrintAction =
     !focusPanelId && panelId === "analytics"
       ? `<button class="panel-action-button" type="button" data-print-mode="dashboard" aria-label="Print console" title="Print console"><i class="bi bi-printer ui-icon" aria-hidden="true"></i></button>`
@@ -1437,12 +1473,12 @@ function buildPanelActions(
   const printAction = `<button class="panel-action-button" type="button" data-print-page aria-label="Print window" title="Print window"><i class="bi bi-printer ui-icon" aria-hidden="true"></i></button>`;
 
   if (focusPanelId === panelId) {
-    return `${analyticsRefreshAction}${metaRefreshAction}${googleAnalyticsRefreshAction}${printAction}${fullscreenAction}<a class="panel-action-link" href="/?${buildQueryString(selectedCentreKey, selectedWindowKey, serviceSort, null, googleAnalyticsRange)}"><i class="bi bi-arrow-left-short ui-icon" aria-hidden="true"></i><span>Return to dashboard</span></a>`;
+    return `${analyticsViewActions}${analyticsRefreshAction}${metaRefreshAction}${googleAnalyticsRefreshAction}${printAction}${fullscreenAction}<a class="panel-action-link" href="/?${buildQueryString(selectedCentreKey, selectedWindowKey, serviceSort, null, googleAnalyticsRange)}"><i class="bi bi-arrow-left-short ui-icon" aria-hidden="true"></i><span>Return to dashboard</span></a>`;
   }
 
   const popupQuery = buildQueryString(selectedCentreKey, selectedWindowKey, serviceSort, panelId, googleAnalyticsRange);
 
-  return `${dashboardPrintAction}${analyticsRefreshAction}${metaRefreshAction}${googleAnalyticsRefreshAction}${fullscreenAction}<button class="panel-action-button" type="button" data-open-panel="${panelId}" data-panel-query="${popupQuery}" aria-label="Open window" title="Open window"><i class="bi bi-box-arrow-up-right ui-icon" aria-hidden="true"></i></button>`;
+  return `${analyticsViewActions}${dashboardPrintAction}${analyticsRefreshAction}${metaRefreshAction}${googleAnalyticsRefreshAction}${fullscreenAction}<button class="panel-action-button" type="button" data-open-panel="${panelId}" data-panel-query="${popupQuery}" aria-label="Open window" title="Open window"><i class="bi bi-box-arrow-up-right ui-icon" aria-hidden="true"></i></button>`;
 }
 
 function formatDocumentTitleTimestamp(date = new Date()) {
@@ -1668,18 +1704,22 @@ function renderAnalyticsTable(
   selectedWindowKey: WindowKey,
   serviceSort: ServiceSort,
   centreContacts: CentreContact[] = [],
+  metaAdsDashboardData?: MetaAdsDashboardData | null,
 ) {
   const analyticsRows = sortAnalyticsRows(snapshotSet?.snapshots ?? [], serviceSort);
   const selectedCentreValue = selectedCentreKey == null ? null : selectedCentreKey;
   const criticalSortHref = `/?${buildQueryString(selectedCentreValue, selectedWindowKey, "critical")}`;
   const ascSortHref = `/?${buildQueryString(selectedCentreValue, selectedWindowKey, "asc")}`;
   const descSortHref = `/?${buildQueryString(selectedCentreValue, selectedWindowKey, "desc")}`;
+  const coverage = getMetaCoverageByCentre(metaAdsDashboardData);
   const rows = analyticsRows
     .map(
       (row) => {
         const contact = matchCentreContact(row.serviceName, centreContacts);
+        const recommendation = getMetaRecommendation(row, selectedWindowKey, coverage);
+        const notificationId = createMetaNotificationId(row, selectedWindowKey, recommendation);
         const emailAction = contact
-          ? `<a class="analytics-table__email-action" href="${escapeHtml(buildMetaAdvertEmailHref(contact))}" title="Email centre about a Facebook advert" aria-label="Email ${escapeHtml(row.serviceName)} about a Facebook advert"><i class="bi bi-envelope ui-icon" aria-hidden="true"></i></a>`
+          ? `<a class="analytics-table__email-action" data-analytics-email data-notification-id="${escapeHtml(notificationId)}" data-centre-name="${escapeHtml(row.serviceName)}" href="${escapeHtml(buildMetaAdvertEmailHref(contact))}" title="Email centre about a Facebook advert" aria-label="Email ${escapeHtml(row.serviceName)} about a Facebook advert"><i class="bi bi-envelope ui-icon" aria-hidden="true"></i></a>`
           : "";
 
         return `
@@ -1711,26 +1751,6 @@ function renderAnalyticsTable(
 
   return `
     <div class="analytics-table-shell">
-      <div class="analytics-toolbar">
-        <div class="analytics-toolbar__actions">
-          <a
-            class="analytics-toolbar__icon-action"
-            href="/?${buildQueryString(selectedCentreValue, "3M", "critical")}"
-            aria-label="Reset analytics view"
-            title="Reset analytics view"
-          ><i class="bi bi-arrow-counterclockwise ui-icon" aria-hidden="true"></i></a>
-          ${WINDOW_OPTIONS.map((option) => {
-            const className =
-              option.key === selectedWindowKey
-                ? "analytics-toolbar__window analytics-toolbar__window--active"
-                : "analytics-toolbar__window";
-
-            return `<a class="${className}" href="/?${buildQueryString(selectedCentreValue, option.key, serviceSort)}">${option.label}</a>`;
-          }).join("")}
-          <a class="analytics-toolbar__window${serviceSort === "asc" ? " analytics-toolbar__window--active" : ""}" href="${ascSortHref}" aria-label="Sort service A to Z">↑</a>
-          <a class="analytics-toolbar__window${serviceSort === "desc" ? " analytics-toolbar__window--active" : ""}" href="${descSortHref}" aria-label="Sort service Z to A">↓</a>
-        </div>
-      </div>
       <div class="analytics-table-wrap">
         <table class="analytics-table">
           <thead>
@@ -1793,6 +1813,7 @@ function renderSelectedCentreNarrative(
   centreHistory: CentreSnapshotHistoryEntry[],
   annualHistory: CentreSnapshotHistoryEntry[],
   manualCapacity?: ManualCentreCapacity | null,
+  latestMetaRecommendationNotesForCentre: MetaNotificationHistoryRow[] = [],
 ) {
   const selectedRow = resolveSelectedRow(snapshotSet, selectedCentreKey);
 
@@ -1822,6 +1843,32 @@ function renderSelectedCentreNarrative(
       <ul>
         ${guidanceItems.map((item) => `<li>${item}</li>`).join("")}
       </ul>
+      ${renderLatestMetaRecommendationNotesForChat(latestMetaRecommendationNotesForCentre)}
+    </div>
+  `;
+}
+
+function renderLatestMetaRecommendationNotesForChat(notes: MetaNotificationHistoryRow[]) {
+  if (notes.length === 0) {
+    return "";
+  }
+
+  return `
+    <div class="chat-message__meta-notes">
+      <strong>Latest META Ads notes</strong>
+      <ol>
+        ${notes
+          .slice(0, 3)
+          .map(
+            (note) => `
+              <li>
+                <span>${formatDateOnly(note.occurredAt)}</span>
+                <p>${escapeHtml(note.message)}</p>
+              </li>
+            `,
+          )
+          .join("")}
+      </ol>
     </div>
   `;
 }
@@ -1833,6 +1880,7 @@ function renderAiChatPanel(
   centreHistory: CentreSnapshotHistoryEntry[],
   annualHistory: CentreSnapshotHistoryEntry[],
   manualCapacity?: ManualCentreCapacity | null,
+  latestMetaRecommendationNotesForCentre: MetaNotificationHistoryRow[] = [],
 ) {
   return `
     <div class="chat-shell">
@@ -1844,6 +1892,7 @@ function renderAiChatPanel(
           centreHistory,
           annualHistory,
           manualCapacity,
+          latestMetaRecommendationNotesForCentre,
         )}
       </div>
       <div class="chat-shell__composer">
@@ -2050,8 +2099,7 @@ function renderMetaRecommendations(
       }
 
       return right.openPlaces + right.replacementPressure - (left.openPlaces + left.replacementPressure);
-    })
-    .slice(0, 6);
+    });
 
   if (recommendations.length === 0) {
     return `
@@ -3146,6 +3194,45 @@ function renderBreakoutScript() {
             return;
           }
 
+          const analyticsEmail = target.closest("[data-analytics-email]");
+
+          if (analyticsEmail instanceof HTMLAnchorElement) {
+            const centreName = analyticsEmail.getAttribute("data-centre-name") || "this centre";
+            const notificationId = analyticsEmail.getAttribute("data-notification-id") || "";
+
+            setTimeout(async () => {
+              const confirmed = window.confirm("Did you send the email to " + centreName + "?");
+
+              if (!confirmed || !notificationId) {
+                return;
+              }
+
+              const response = await fetch("/api/meta-recommendation-notes", {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                },
+                body: JSON.stringify({ notificationId, text: "Email sent for initiating campaign" }),
+              });
+
+              if (!response.ok) {
+                return;
+              }
+
+              const payload = await response.json();
+              const notification = document.querySelector('[data-meta-notification-id="' + CSS.escape(notificationId) + '"]');
+              const notesList = notification?.querySelector("[data-meta-notes]");
+
+              if (notesList instanceof HTMLOListElement && payload.note) {
+                notesList.prepend(createMetaNoteElement(payload.note));
+              }
+
+              await loadMetaHistoryPage(1);
+            }, 0);
+
+            return;
+          }
+
           const addNoteButton = target.closest("[data-meta-note-add]");
 
           if (addNoteButton instanceof HTMLButtonElement) {
@@ -3298,7 +3385,19 @@ function renderBreakoutScript() {
             const href = row.getAttribute("data-row-href");
 
             if (href) {
-              window.location.href = href;
+              let openerNavigated = false;
+
+              try {
+                if (window.opener && !window.opener.closed) {
+                  window.opener.location.href = href;
+                  try { window.opener.focus(); } catch (error) {}
+                  openerNavigated = true;
+                }
+              } catch (error) {}
+
+              if (!openerNavigated) {
+                window.location.href = href;
+              }
             }
           }
         });
@@ -3612,7 +3711,7 @@ export function renderAppShell(
               : "",
     children:
       panel.id === "analytics"
-        ? renderAnalyticsTable(snapshotSet, selectedCentreKey, selectedWindowKey, serviceSort, options.centreContacts ?? [])
+        ? renderAnalyticsTable(snapshotSet, selectedCentreKey, selectedWindowKey, serviceSort, options.centreContacts ?? [], options.metaAdsDashboardData)
         : panel.id === "waitlist"
           ? renderWaitlistQualityPanel(
               waitlistSnapshotSet,
@@ -3653,6 +3752,7 @@ export function renderAppShell(
               centreHistory,
               annualHistory,
               options.manualCapacity,
+              options.latestMetaRecommendationNotesForCentre ?? [],
             ),
   }));
   const layout = renderLayout({

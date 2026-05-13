@@ -30,6 +30,7 @@ export const BLOCKED_INFOCARE_MODE_PREFIXES = [
 
 const INFOCARE_BASE_URL =
   "https://infocare.digiweb.net.nz/charley/servlet/RubyServlet";
+const RETRY_DELAYS_MS = [10_000];
 
 const requestModeSchema = z
   .string()
@@ -72,6 +73,14 @@ function isBlockedMode(mode: string) {
   );
 }
 
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetryableInfocareMessage(message: string) {
+  return message.toLowerCase().includes("rate limit");
+}
+
 export function validateInfocareMode(mode: string): InfocareMode {
   const parsedMode = requestModeSchema.parse(mode.trim());
 
@@ -109,53 +118,76 @@ export function createInfocareClient(options: RequestInitOptions = {}) {
 
       try {
         const validatedMode = validateInfocareMode(mode);
-        const response = await fetchImpl(env.INFOCARE_BASE_URL, {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            accept: "application/json",
-          },
-          body: JSON.stringify({
-            username: env.INFOCAREUSER,
-            password: env.INFOCAREPASS,
+        let lastError: Error | null = null;
+
+        for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt += 1) {
+          const response = await fetchImpl(env.INFOCARE_BASE_URL, {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              accept: "application/json",
+            },
+            body: JSON.stringify({
+              username: env.INFOCAREUSER,
+              password: env.INFOCAREPASS,
+              mode: validatedMode,
+              parameters,
+            }),
+          });
+
+          const responseText = await response.text();
+
+          if (!response.ok) {
+            lastError = new Error(
+              `Infocare request failed with status ${response.status} ${response.statusText}: ${responseText}`,
+            );
+
+            if (response.status === 429 && attempt < RETRY_DELAYS_MS.length) {
+              await sleep(RETRY_DELAYS_MS[attempt] ?? 0);
+              continue;
+            }
+
+            throw lastError;
+          }
+
+          let parsedJson: unknown;
+
+          try {
+            parsedJson = JSON.parse(responseText);
+          } catch {
+            throw new Error("Infocare response was not valid JSON.");
+          }
+
+          const parsedResponse = infocareEnvelopeSchema.parse(parsedJson);
+
+          if (parsedResponse.msg_status.toLowerCase() === "error") {
+            lastError = new Error(parsedResponse.message ?? "Infocare returned an error response.");
+
+            if (
+              isRetryableInfocareMessage(lastError.message) &&
+              attempt < RETRY_DELAYS_MS.length
+            ) {
+              await sleep(RETRY_DELAYS_MS[attempt] ?? 0);
+              continue;
+            }
+
+            throw lastError;
+          }
+
+          await appendInfocareAuditEvent({
+            at: new Date().toISOString(),
+            event: "infocare_request",
             mode: validatedMode,
-            parameters,
-          }),
-        });
+            outcome: "success",
+            durationMs: Date.now() - startedAt,
+            responseBytes: Buffer.byteLength(responseText, "utf8"),
+            parameterKeys,
+          });
 
-        const responseText = await response.text();
-
-        if (!response.ok) {
-          throw new Error(
-            `Infocare request failed with status ${response.status} ${response.statusText}: ${responseText}`,
-          );
+          return parsedResponse as TResponse;
         }
 
-        let parsedJson: unknown;
-
-        try {
-          parsedJson = JSON.parse(responseText);
-        } catch {
-          throw new Error("Infocare response was not valid JSON.");
-        }
-
-        const parsedResponse = infocareEnvelopeSchema.parse(parsedJson);
-
-        if (parsedResponse.msg_status.toLowerCase() === "error") {
-          throw new Error(parsedResponse.message ?? "Infocare returned an error response.");
-        }
-
-        await appendInfocareAuditEvent({
-          at: new Date().toISOString(),
-          event: "infocare_request",
-          mode: validatedMode,
-          outcome: "success",
-          durationMs: Date.now() - startedAt,
-          responseBytes: Buffer.byteLength(responseText, "utf8"),
-          parameterKeys,
-        });
-
-        return parsedResponse as TResponse;
+        throw lastError ?? new Error("Infocare request failed.");
       } catch (error) {
         await appendInfocareAuditEvent({
           at: new Date().toISOString(),

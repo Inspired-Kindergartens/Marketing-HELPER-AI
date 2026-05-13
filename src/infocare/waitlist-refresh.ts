@@ -13,6 +13,8 @@ import type { CentreReference, InfocareChild } from "./models.js";
 import { readWaitlistDiscoveryReport } from "./waitlist-report.js";
 
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+const WAITLIST_CHILD_LIST_DELAY_MS = 650;
+const WAITLIST_CENTRE_DELAY_MS = 850;
 
 type CentreWaitlistSummary = {
   centreKey: number;
@@ -269,24 +271,23 @@ async function collectCentreSummary(
   client: ReturnType<typeof createInfocareClient>,
 ) {
   const dateRange = buildExtractionDateRange(referenceDate);
-  const [enrolledChildren, waitingListChildren] = await Promise.all([
-    fetchCentreChildList(
-      {
-        centreKey: centre.centreKey,
-        category: CURRENT_ENROLMENTS_CATEGORY,
-        dateRange,
-      },
-      client,
-    ),
-    fetchCentreChildList(
-      {
-        centreKey: centre.centreKey,
-        category: WAITING_LIST_CATEGORY,
-        dateRange,
-      },
-      client,
-    ),
-  ]);
+  const enrolledChildren = await fetchCentreChildList(
+    {
+      centreKey: centre.centreKey,
+      category: CURRENT_ENROLMENTS_CATEGORY,
+      dateRange,
+    },
+    client,
+  );
+  await sleep(WAITLIST_CHILD_LIST_DELAY_MS);
+  const waitingListChildren = await fetchCentreChildList(
+    {
+      centreKey: centre.centreKey,
+      category: WAITING_LIST_CATEGORY,
+      dateRange,
+    },
+    client,
+  );
   const waitAges: number[] = [];
   const waitlistEntries: { waitDays: number; birthDate?: string | null }[] = [];
   let usableStartingDateCount = 0;
@@ -355,7 +356,7 @@ export async function generateWaitlistReportMarkdown(referenceDate: Date = new D
       });
     }
 
-    await sleep(index === centres.length - 1 ? 0 : 175);
+    await sleep(index === centres.length - 1 ? 0 : WAITLIST_CENTRE_DELAY_MS);
   }
 
   if (errors.length > 0) {

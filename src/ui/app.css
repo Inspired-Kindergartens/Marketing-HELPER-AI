@@ -243,7 +243,7 @@ button {
 .analytics-toolbar__actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 4px;
   align-items: center;
 }
 
@@ -253,13 +253,14 @@ button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  min-height: 2.25rem;
-  padding: 0 0.85rem;
+  gap: 4px;
+  min-height: 1.75rem;
+  padding: 0 0.5rem;
   border: var(--button-border);
   color: var(--color-green);
   background: var(--color-surface);
   font: inherit;
+  font-size: var(--font-size-small);
   text-decoration: none;
   white-space: nowrap;
   cursor: pointer;
@@ -267,8 +268,8 @@ button {
 
 .analytics-toolbar__icon-action,
 .analytics-toolbar__window[aria-label^="Sort service"] {
-  min-width: 2.5rem;
-  padding: 0 0.7rem;
+  min-width: 1.75rem;
+  padding: 0 0.4rem;
 }
 
 .analytics-toolbar__actions a[href^="/actions/refresh-centres"] {
@@ -690,9 +691,6 @@ button {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   grid-auto-rows: auto;
   gap: 10px;
-  min-height: 0;
-  height: 100%;
-  overflow: auto;
   font-size: var(--font-size-small);
 }
 
@@ -1006,22 +1004,12 @@ button {
 }
 
 .meta-ads-section {
-  min-height: 220px;
   display: flex;
   flex-direction: column;
   gap: 8px;
-  overflow: visible;
   border: 1px solid var(--color-border);
   background: var(--color-surface);
   padding: 10px;
-}
-
-.meta-ads-section--recommendations {
-  min-height: 440px;
-}
-
-.meta-ads-section--recent {
-  min-height: 510px;
 }
 
 .meta-ads-section--wide {
@@ -1044,8 +1032,6 @@ button {
 }
 
 .meta-ads-table-wrap {
-  min-height: 0;
-  overflow: auto;
   border: 1px solid var(--color-border);
   background: var(--color-surface-dark);
 }
@@ -1140,6 +1126,48 @@ button {
   white-space: pre-wrap;
 }
 
+.app-shell:not(.app-shell--focus) .panel--meta-ads .meta-ads-table--history {
+  min-width: 0;
+  table-layout: fixed;
+}
+
+.app-shell:not(.app-shell--focus) .panel--meta-ads .meta-ads-table--history th,
+.app-shell:not(.app-shell--focus) .panel--meta-ads .meta-ads-table--history td {
+  vertical-align: top;
+  white-space: normal;
+}
+
+.app-shell:not(.app-shell--focus) .panel--meta-ads .meta-ads-table--history th:nth-child(1) {
+  width: 15%;
+}
+
+.app-shell:not(.app-shell--focus) .panel--meta-ads .meta-ads-table--history th:nth-child(2),
+.app-shell:not(.app-shell--focus) .panel--meta-ads .meta-ads-table--history th:nth-child(5) {
+  width: 8%;
+}
+
+.app-shell:not(.app-shell--focus) .panel--meta-ads .meta-ads-table--history th:nth-child(3) {
+  width: 16%;
+}
+
+.app-shell:not(.app-shell--focus) .panel--meta-ads .meta-ads-table--history th:nth-child(4) {
+  width: 23%;
+}
+
+.app-shell:not(.app-shell--focus) .panel--meta-ads .meta-ads-table--history th:nth-child(6),
+.app-shell:not(.app-shell--focus) .panel--meta-ads .meta-ads-table--history th:nth-child(7),
+.app-shell:not(.app-shell--focus) .panel--meta-ads .meta-ads-table--history th:nth-child(8) {
+  width: 7%;
+}
+
+.app-shell:not(.app-shell--focus) .panel--meta-ads .meta-ads-table--history th:nth-child(9) {
+  width: 9%;
+}
+
+.app-shell:not(.app-shell--focus) .panel--meta-ads .meta-ads-history__message {
+  min-width: 0;
+}
+
 .meta-ads-history tr[data-meta-history-row] {
   cursor: pointer;
 }
@@ -1151,11 +1179,8 @@ button {
 .meta-ads-recommendations {
   display: grid;
   gap: 8px;
-  flex: 1;
-  min-height: 0;
   margin: 0;
   padding: 0;
-  overflow: auto;
   list-style: none;
 }
 
@@ -1366,6 +1391,36 @@ button {
   margin-top: 8px;
 }
 
+.chat-message__meta-notes {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--color-border-muted);
+}
+
+.chat-message__meta-notes strong {
+  display: block;
+  margin-bottom: 8px;
+}
+
+.chat-message__meta-notes ol {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.chat-message__meta-notes li + li {
+  margin-top: 10px;
+}
+
+.chat-message__meta-notes span {
+  display: block;
+  color: var(--color-ghost);
+  font-size: var(--font-size-small);
+}
+
+.chat-message__meta-notes p {
+  margin: 2px 0 0;
+}
+
 .chat-message__role {
   font-size: var(--font-size-small);
   color: var(--color-ghost);
@@ -1423,6 +1478,10 @@ button {
 
 .panel--meta-ads {
   grid-area: status;
+}
+
+.panel--meta-ads .panel__body {
+  overflow: auto;
 }
 
 .panel--google-analytics {

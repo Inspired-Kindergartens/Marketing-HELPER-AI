@@ -193,6 +193,79 @@ function calculateApproachingFiveCountsByWindow(
   return counts;
 }
 
+function isLeavingWithinWindow(
+  child: CentreExtractionBundle["enrolledChildren"][number],
+  referenceDate: Date,
+  days: number,
+) {
+  if (!child.leaving_date) {
+    return false;
+  }
+
+  const leavingDate = new Date(child.leaving_date);
+
+  return !Number.isNaN(leavingDate.getTime()) && leavingDate >= referenceDate && leavingDate <= addDays(referenceDate, days);
+}
+
+function isAgedOutAtReferenceDate(
+  child: CentreExtractionBundle["enrolledChildren"][number],
+  referenceDate: Date,
+) {
+  if (!child.birth_date) {
+    return false;
+  }
+
+  const age = calculateAgeInYears(child.birth_date, referenceDate);
+
+  return age !== null && age >= 5;
+}
+
+function isApproachingFiveWithinWindow(
+  child: CentreExtractionBundle["enrolledChildren"][number],
+  referenceDate: Date,
+  days: number,
+) {
+  if (!child.birth_date) {
+    return false;
+  }
+
+  const birthDate = new Date(child.birth_date);
+
+  if (Number.isNaN(birthDate.getTime())) {
+    return false;
+  }
+
+  const fifthBirthday = new Date(birthDate);
+  fifthBirthday.setUTCFullYear(fifthBirthday.getUTCFullYear() + 5);
+
+  return fifthBirthday >= referenceDate && fifthBirthday <= addDays(referenceDate, days);
+}
+
+function calculateReplacementPressureCountsByWindow(
+  children: readonly CentreExtractionBundle["enrolledChildren"][number][],
+  referenceDate: Date,
+) {
+  const counts = buildEmptyWindowScopedCounts();
+
+  for (const option of WINDOW_OPTIONS) {
+    const childKeys = new Set<number>();
+
+    for (const child of children) {
+      if (
+        isLeavingWithinWindow(child, referenceDate, option.days) ||
+        isAgedOutAtReferenceDate(child, referenceDate) ||
+        isApproachingFiveWithinWindow(child, referenceDate, option.days)
+      ) {
+        childKeys.add(child.child_key);
+      }
+    }
+
+    counts[option.key] = childKeys.size;
+  }
+
+  return counts;
+}
+
 export function determineUrgencyBand(urgencyScore: number): UrgencyBand {
   if (urgencyScore >= 75) {
     return "Critical";
@@ -363,7 +436,11 @@ export function computeServiceAnalyticsSnapshot(
     referenceDate,
   );
   const approachingFiveCount = approachingFiveCountsByWindow["3M"];
-  const replacementPressure = knownLeavingCount + agedOutCount + approachingFiveCount;
+  const replacementPressureCountsByWindow = calculateReplacementPressureCountsByWindow(
+    bundle.enrolledChildren,
+    referenceDate,
+  );
+  const replacementPressure = replacementPressureCountsByWindow["3M"];
   const enrolmentRatio = clampRatio(enrolledCount / licensedCapacity);
   const availablePlaces = Math.max(licensedCapacity - enrolledCount, 0);
   const waitlistCoverRatio = waitlistCount / Math.max(replacementPressure, 1);
@@ -402,6 +479,7 @@ export function computeServiceAnalyticsSnapshot(
     agedOutCount,
     approachingFiveCount,
     approachingFiveCountsByWindow,
+    replacementPressureCountsByWindow,
     replacementPressure,
     waitlistCoverRatio,
     urgencyScore,

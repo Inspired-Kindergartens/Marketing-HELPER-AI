@@ -7,6 +7,7 @@ import type { WaitlistDiscoveryReport } from "../src/infocare/waitlist-report.js
 import type { LatestSnapshotSet } from "../src/storage/analytics-store.js";
 import type { GoogleAnalyticsDailySnapshotView } from "../src/storage/google-analytics-store.js";
 import type { MetaAdsDashboardData } from "../src/storage/meta-store.js";
+import type { MetaNotificationHistoryRow } from "../src/storage/meta-recommendation-notifications-store.js";
 
 function readChartConfig(html: string, chartId: string) {
   const pattern = new RegExp(`<script type="application/json" data-waitlist-chart="${chartId}">([\\s\\S]*?)</script>`);
@@ -442,10 +443,167 @@ test("dashboard and chat panels expose scoped print actions", () => {
   assert.match(html, /delete document\.documentElement\.dataset\.printMode/);
 });
 
+test("ai chat includes the latest three meta ads notes for the selected centre", () => {
+  const snapshotSet: LatestSnapshotSet = {
+    runDate: "2026-05-12T00:00:00.000Z",
+    source: "test",
+    createdAt: "2026-05-12T00:00:00.000Z",
+    snapshots: [
+      {
+        centreKey: 117,
+        serviceName: "Harbour View Kindergarten",
+        date: "2026-05-12",
+        enrolledCount: 20,
+        enrolledFteCount: 10,
+        bookedAverageDailyCount: 18,
+        bookedUtilisationRatio: 0.45,
+        enrolledUnder2Count: 0,
+        enrolledOver2Count: 20,
+        licensedCapacity: 40,
+        licensedUnder2Capacity: null,
+        licensedOver2Capacity: 40,
+        enrolmentRatio: 0.5,
+        waitlistCount: 2,
+        waitlistUnder5Count: 2,
+        waitlistTurning5ThisYearCount: 0,
+        waitlistAged5PlusCount: 0,
+        waitlistUnknownAgeCount: 0,
+        waitlistOldestEntryDays: null,
+        waitlistAverageEntryDays: null,
+        knownLeavingCount: 0,
+        knownLeavingCountsByWindow: { "1W": 0, "2W": 0, "3W": 0, "1M": 0, "2M": 0, "3M": 0, "6M": 0, "12M": 0 },
+        agedOutCount: 0,
+        approachingFiveCount: 0,
+        approachingFiveCountsByWindow: { "1W": 0, "2W": 0, "3W": 0, "1M": 0, "2M": 0, "3M": 0, "6M": 0, "12M": 0 },
+        replacementPressure: 0,
+        waitlistCoverRatio: 1,
+        urgencyScore: 1,
+        urgencyBand: "Stable",
+      },
+    ],
+  };
+  const latestMetaRecommendationNotesForCentre: MetaNotificationHistoryRow[] = [
+    {
+      kind: "Note",
+      centreKey: 117,
+      centreName: "Harbour View Kindergarten",
+      notificationId: "one",
+      heading: "Needs ads",
+      message: "Called centre about advert copy.",
+      status: "Active",
+      openPlaces: "",
+      waitlist: "",
+      pressure: "",
+      occurredAt: "2026-05-12T12:00:00.000Z",
+    },
+    {
+      kind: "Note",
+      centreKey: 117,
+      centreName: "Harbour View Kindergarten",
+      notificationId: "two",
+      heading: "Needs ads",
+      message: "Draft creative ready for review.",
+      status: "Active",
+      openPlaces: "",
+      waitlist: "",
+      pressure: "",
+      occurredAt: "2026-05-11T12:00:00.000Z",
+    },
+    {
+      kind: "Note",
+      centreKey: 117,
+      centreName: "Harbour View Kindergarten",
+      notificationId: "three",
+      heading: "Needs ads",
+      message: "Budget approved by team.",
+      status: "Dismissed",
+      openPlaces: "",
+      waitlist: "",
+      pressure: "",
+      occurredAt: "2026-05-10T12:00:00.000Z",
+    },
+    {
+      kind: "Note",
+      centreKey: 117,
+      centreName: "Harbour View Kindergarten",
+      notificationId: "four",
+      heading: "Needs ads",
+      message: "Older note should not render.",
+      status: "Dismissed",
+      openPlaces: "",
+      waitlist: "",
+      pressure: "",
+      occurredAt: "2026-05-09T12:00:00.000Z",
+    },
+  ];
+
+  const html = renderAppShell(snapshotSet, {
+    selectedCentreKey: 117,
+    latestMetaRecommendationNotesForCentre,
+  });
+
+  assert.match(html, /Latest META Ads notes/);
+  assert.match(html, /12\/05\/2026/);
+  assert.match(html, /Called centre about advert copy\./);
+  assert.match(html, /Draft creative ready for review\./);
+  assert.match(html, /Budget approved by team\./);
+  assert.doesNotMatch(html, /Older note should not render\./);
+});
+
 test("focused breakout panels set print-friendly document title", () => {
   const html = renderAppShell(null, { focusPanelId: "waitlist" });
 
   assert.match(html, /<title>Marketing Helper - Waitlist Quality - \d{4}-\d{2}-\d{2} \d{2}-\d{2}<\/title>/);
+});
+
+test("ai chat leaving pressure message uses deduped replacement pressure", () => {
+  const snapshotSet: LatestSnapshotSet = {
+    runDate: "2026-05-12T00:00:00.000Z",
+    source: "test",
+    createdAt: "2026-05-12T00:00:00.000Z",
+    snapshots: [
+      {
+        centreKey: 117,
+        serviceName: "Harbour View Kindergarten",
+        date: "2026-05-12",
+        enrolledCount: 20,
+        enrolledFteCount: 10,
+        bookedAverageDailyCount: 18,
+        bookedUtilisationRatio: 0.45,
+        enrolledUnder2Count: 0,
+        enrolledOver2Count: 20,
+        licensedCapacity: 40,
+        licensedUnder2Capacity: null,
+        licensedOver2Capacity: 40,
+        enrolmentRatio: 0.5,
+        waitlistCount: 2,
+        waitlistUnder5Count: 2,
+        waitlistTurning5ThisYearCount: 0,
+        waitlistAged5PlusCount: 0,
+        waitlistUnknownAgeCount: 0,
+        waitlistOldestEntryDays: null,
+        waitlistAverageEntryDays: null,
+        knownLeavingCount: 3,
+        knownLeavingCountsByWindow: { "1W": 0, "2W": 0, "3W": 0, "1M": 0, "2M": 0, "3M": 3, "6M": 3, "12M": 3 },
+        agedOutCount: 1,
+        approachingFiveCount: 2,
+        approachingFiveCountsByWindow: { "1W": 0, "2W": 0, "3W": 0, "1M": 0, "2M": 0, "3M": 2, "6M": 2, "12M": 2 },
+        replacementPressureCountsByWindow: { "1W": 0, "2W": 0, "3W": 0, "1M": 0, "2M": 0, "3M": 4, "6M": 4, "12M": 4 },
+        replacementPressure: 4,
+        waitlistCoverRatio: 0.5,
+        urgencyScore: 50,
+        urgencyBand: "High",
+      },
+    ],
+  };
+
+  const html = renderAppShell(snapshotSet, {
+    selectedCentreKey: 117,
+    selectedWindowKey: "3M",
+  });
+
+  assert.match(html, /4 across Leaving, Near 5, and Age 5\+/);
+  assert.doesNotMatch(html, /6 across Leaving, Near 5, and Age 5\+/);
 });
 
 test("google analytics print styles hide stats and volume column", () => {

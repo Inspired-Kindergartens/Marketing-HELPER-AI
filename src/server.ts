@@ -23,7 +23,6 @@ import {
   readCentreSnapshotHistory,
   readLatestAnalyticsSnapshotSet,
   readManualCentreCapacityByKey,
-  readWindowAnalyticsSnapshotSet,
 } from "./storage/analytics-store.js";
 import { readCentreContactList } from "./storage/centre-contact-store.js";
 import {
@@ -37,6 +36,7 @@ import {
   buildMetaRecommendationNotificationInputs,
   countMetaRecommendationNotifications,
   dismissMetaRecommendationNotification,
+  readLatestMetaRecommendationNotesForCentre,
   readMetaNotificationHistoryPage,
   readMetaRecommendationNotifications,
   syncMetaRecommendationNotifications,
@@ -288,10 +288,7 @@ app.get<{ Querystring: { centre?: string; window?: string; panel?: string; sort?
 
   const latestRunDate = latestSnapshotSet ? new Date(latestSnapshotSet.runDate) : new Date();
   const windowStartDate = resolveWindowStartDate(latestRunDate, selectedWindowKey);
-  const snapshotSet =
-    latestSnapshotSet == null
-      ? null
-      : (await readWindowAnalyticsSnapshotSet(windowStartDate, latestRunDate)) ?? latestSnapshotSet;
+  const snapshotSet = latestSnapshotSet;
   const resolvedSelectedCentreKey =
     selectedCentreKey ??
     snapshotSet?.snapshots[0]?.centreKey ??
@@ -411,6 +408,10 @@ app.get<{ Querystring: { centre?: string; window?: string; panel?: string; sort?
   const metaRecommendationNotifications = await readMetaRecommendationNotifications();
   const metaRecommendationNotificationCount = await countMetaRecommendationNotifications();
   const metaRecommendationNotes = await readActiveMetaRecommendationNotes();
+  const latestMetaRecommendationNotesForCentre =
+    resolvedSelectedCentreKey == null
+      ? []
+      : await readLatestMetaRecommendationNotesForCentre(resolvedSelectedCentreKey, 3);
   const centreContacts = await readCentreContactList();
 
   return reply
@@ -440,6 +441,7 @@ app.get<{ Querystring: { centre?: string; window?: string; panel?: string; sort?
         metaRecommendationNotifications,
         metaRecommendationNotificationCount,
         metaRecommendationNotes,
+        latestMetaRecommendationNotesForCentre,
         centreContacts,
       }),
     );

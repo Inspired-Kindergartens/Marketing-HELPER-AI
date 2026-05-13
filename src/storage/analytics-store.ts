@@ -99,6 +99,19 @@ function averageWindowScopedCounts(
   return counts;
 }
 
+function getFallbackReplacementPressureCounts(entry: ServiceAnalyticsSnapshot): WindowScopedCounts {
+  return {
+    "1W": entry.agedOutCount + entry.knownLeavingCountsByWindow["1W"] + entry.approachingFiveCountsByWindow["1W"],
+    "2W": entry.agedOutCount + entry.knownLeavingCountsByWindow["2W"] + entry.approachingFiveCountsByWindow["2W"],
+    "3W": entry.agedOutCount + entry.knownLeavingCountsByWindow["3W"] + entry.approachingFiveCountsByWindow["3W"],
+    "1M": entry.agedOutCount + entry.knownLeavingCountsByWindow["1M"] + entry.approachingFiveCountsByWindow["1M"],
+    "2M": entry.agedOutCount + entry.knownLeavingCountsByWindow["2M"] + entry.approachingFiveCountsByWindow["2M"],
+    "3M": entry.agedOutCount + entry.knownLeavingCountsByWindow["3M"] + entry.approachingFiveCountsByWindow["3M"],
+    "6M": entry.agedOutCount + entry.knownLeavingCountsByWindow["6M"] + entry.approachingFiveCountsByWindow["6M"],
+    "12M": entry.agedOutCount + entry.knownLeavingCountsByWindow["12M"] + entry.approachingFiveCountsByWindow["12M"],
+  };
+}
+
 function mapCentreReference(record: {
   centreKey: number;
   name: string;
@@ -149,6 +162,7 @@ function mapSnapshot(record: {
   agedOutCount: number;
   approachingFiveCount: number;
   approachingFiveCountsByWindow: Prisma.JsonValue;
+  replacementPressureCountsByWindow: Prisma.JsonValue | null;
   replacementPressure: number;
   waitlistCoverRatio: { toString(): string };
   urgencyScore: { toString(): string };
@@ -182,6 +196,9 @@ function mapSnapshot(record: {
     agedOutCount: record.agedOutCount,
     approachingFiveCount: record.approachingFiveCount,
     approachingFiveCountsByWindow: parseWindowScopedCounts(record.approachingFiveCountsByWindow),
+    replacementPressureCountsByWindow: parseWindowScopedCounts(
+      record.replacementPressureCountsByWindow,
+    ),
     replacementPressure: record.replacementPressure,
     waitlistCoverRatio: toNumber(record.waitlistCoverRatio),
     urgencyScore: toNumber(record.urgencyScore),
@@ -321,6 +338,9 @@ async function replaceSnapshotRows(
       approachingFiveCount: snapshot.approachingFiveCount,
       approachingFiveCountsByWindow:
         snapshot.approachingFiveCountsByWindow as Prisma.InputJsonValue,
+      replacementPressureCountsByWindow:
+        (snapshot.replacementPressureCountsByWindow ??
+          getFallbackReplacementPressureCounts(snapshot)) as Prisma.InputJsonValue,
       replacementPressure: snapshot.replacementPressure,
       waitlistCoverRatio: snapshot.waitlistCoverRatio,
       urgencyScore: snapshot.urgencyScore,
@@ -484,6 +504,12 @@ export async function readWindowAnalyticsSnapshotSet(
         approachingFiveCountsByWindow: averageWindowScopedCounts(
           entries,
           (entry) => entry.approachingFiveCountsByWindow,
+        ),
+        replacementPressureCountsByWindow: averageWindowScopedCounts(
+          entries,
+          (entry) =>
+            entry.replacementPressureCountsByWindow ??
+            getFallbackReplacementPressureCounts(entry),
         ),
         replacementPressure: Math.round(average((entry) => entry.replacementPressure)),
         waitlistCoverRatio: Number(average((entry) => entry.waitlistCoverRatio).toFixed(2)),
