@@ -36,19 +36,23 @@ import {
   buildMetaRecommendationNotificationInputs,
   countMetaRecommendationNotifications,
   dismissMetaRecommendationNotification,
+  type MetaRecommendationNotificationInput,
   readLatestMetaRecommendationNotesForCentre,
   readMetaNotificationHistoryPage,
   readMetaRecommendationNotifications,
   syncMetaRecommendationNotifications,
+  upsertMetaRecommendationNotification,
 } from "./storage/meta-recommendation-notifications-store.js";
 import {
   createMetaRecommendationNote,
   readActiveMetaRecommendationNotes,
+  readLatestMetaRecommendationNotesForNotification,
   restoreMetaRecommendationNote,
   softDeleteMetaRecommendationNote,
 } from "./storage/meta-recommendation-notes-store.js";
 import {
   renderAppShell,
+  renderMetaRecommendationNotePopup,
   renderMetaNotificationHistoryPagination,
   renderMetaNotificationHistoryRows,
 } from "./ui/app-shell.js";
@@ -277,6 +281,74 @@ function resolveGoogleAnalyticsSelectedDateRange(
   return first && last ? { startDate: first.startDate, endDate: last.endDate } : null;
 }
 
+function parseNumber(value: unknown, fallback = 0) {
+  const parsed = Number(value);
+
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function parseInteger(value: unknown, fallback = 0) {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+
+  return Number.isInteger(parsed) ? parsed : fallback;
+}
+
+function getMetaRecommendationPriority(recommendation: string) {
+  if (recommendation === "Needs ads" || recommendation === "Prepare campaign") {
+    return 3;
+  }
+
+  if (recommendation === "Ads active, monitor" || recommendation === "Review spend") {
+    return 2;
+  }
+
+  return 1;
+}
+
+function parseMetaNotificationContext(input: {
+  notificationId?: unknown;
+  centreKey?: unknown;
+  centreName?: unknown;
+  windowKey?: unknown;
+  recommendation?: unknown;
+  heading?: unknown;
+  message?: unknown;
+  priority?: unknown;
+  openPlaces?: unknown;
+  actionableWaitlist?: unknown;
+  waitlistCount?: unknown;
+  replacementPressure?: unknown;
+  activeCampaignCount?: unknown;
+  spend30d?: unknown;
+}): MetaRecommendationNotificationInput | null {
+  const notificationId = String(input.notificationId ?? "").trim();
+  const [, , parsedWindowKey, parsedCentreKey] = notificationId.split(":");
+  const centreKey = parseInteger(input.centreKey, parseInteger(parsedCentreKey, 0));
+  const recommendation = String(input.recommendation ?? input.heading ?? "").trim();
+  const centreName = String(input.centreName ?? "").trim();
+  const windowKey = String(input.windowKey ?? parsedWindowKey ?? "").trim();
+
+  if (!notificationId || centreKey <= 0 || !centreName || !windowKey || !recommendation) {
+    return null;
+  }
+
+  return {
+    notificationId,
+    centreKey,
+    centreName,
+    windowKey,
+    recommendation,
+    message: String(input.message ?? "").trim(),
+    priority: parseInteger(input.priority, getMetaRecommendationPriority(recommendation)),
+    openPlaces: parseInteger(input.openPlaces, 0),
+    actionableWaitlist: parseInteger(input.actionableWaitlist, 0),
+    waitlistCount: parseInteger(input.waitlistCount, 0),
+    replacementPressure: parseInteger(input.replacementPressure, 0),
+    activeCampaignCount: parseInteger(input.activeCampaignCount, 0),
+    spend30d: parseNumber(input.spend30d, 0),
+  };
+}
+
 app.get<{ Querystring: { centre?: string; window?: string; panel?: string; sort?: string; waitlistSection?: string; googleAnalyticsSection?: string; gaRange?: string; gaFrom?: string; gaTo?: string; gaFromMonth?: string; gaFromYear?: string; gaToMonth?: string; gaToYear?: string; metaRefreshed?: string } }>("/", async (request, reply) => {
   const latestSnapshotSet = await readLatestAnalyticsSnapshotSet();
   const centre = Number.parseInt(String(request.query?.centre ?? ""), 10);
@@ -447,6 +519,48 @@ app.get<{ Querystring: { centre?: string; window?: string; panel?: string; sort?
     );
 });
 
+app.get<{ Querystring: {
+  notificationId?: string;
+  centreName?: string;
+  heading?: string;
+  message?: string;
+  centreKey?: string;
+  windowKey?: string;
+  recommendation?: string;
+  priority?: string;
+  openPlaces?: string;
+  actionableWaitlist?: string;
+  waitlistCount?: string;
+  replacementPressure?: string;
+  activeCampaignCount?: string;
+  spend30d?: string;
+} }>(
+  "/meta-note-popup",
+  async (request, reply) => {
+    const notificationId = String(request.query?.notificationId ?? "").trim();
+
+    if (!notificationId) {
+      reply.code(400);
+
+      return reply.type("text/plain; charset=utf-8").send("notificationId is required.");
+    }
+
+    const notes = await readLatestMetaRecommendationNotesForNotification(notificationId, 3);
+    const notification = parseMetaNotificationContext({ ...request.query, notificationId });
+
+    return reply.type("text/html; charset=utf-8").send(
+      renderMetaRecommendationNotePopup({
+        notificationId,
+        centreName: String(request.query?.centreName ?? "").trim(),
+        heading: String(request.query?.heading ?? "").trim(),
+        message: String(request.query?.message ?? "").trim(),
+        notes,
+        notification,
+      }),
+    );
+  },
+);
+
 app.get<{ Querystring: { centre?: string; window?: string; sort?: string; gaRange?: string; gaFrom?: string; gaTo?: string; gaFromMonth?: string; gaFromYear?: string; gaToMonth?: string; gaToYear?: string } }>("/actions/refresh-google-analytics", async (request, reply) => {
   let googleAnalyticsConfig;
 
@@ -524,6 +638,32 @@ app.get<{ Querystring: { page?: string; pageSize?: string; centre?: string; kind
   };
 });
 
+app.get<{ Querystring: { centre?: string; limit?: string } }>("/api/meta-recommendation-notes/latest", async (request, reply) => {
+  const centreKey = Number.parseInt(String(request.query?.centre ?? ""), 10);
+  const limit = Number.parseInt(String(request.query?.limit ?? "3"), 10);
+
+  if (!Number.isInteger(centreKey) || centreKey <= 0) {
+    reply.code(400);
+
+    return { error: "Valid centre is required." };
+  }
+
+  const rows = await readLatestMetaRecommendationNotesForCentre(
+    centreKey,
+    Number.isInteger(limit) ? limit : 3,
+  );
+
+  return {
+    notes: rows.map((row) => ({
+      notificationId: row.notificationId,
+      text: row.message,
+      submittedAt: row.occurredAt,
+      heading: row.heading,
+      centreName: row.centreName,
+    })),
+  };
+});
+
 app.post<{ Body: { notificationId?: string } }>("/api/meta-recommendation-notifications/dismiss", async (request, reply) => {
   const notificationId = String(request.body?.notificationId ?? "").trim();
 
@@ -538,7 +678,7 @@ app.post<{ Body: { notificationId?: string } }>("/api/meta-recommendation-notifi
   return { notification };
 });
 
-app.post<{ Body: { notificationId?: string; text?: string } }>("/api/meta-recommendation-notes", async (request, reply) => {
+app.post<{ Body: { notificationId?: string; text?: string; notification?: Partial<MetaRecommendationNotificationInput> | null } }>("/api/meta-recommendation-notes", async (request, reply) => {
   const notificationId = String(request.body?.notificationId ?? "").trim();
   const text = String(request.body?.text ?? "").trim();
 
@@ -546,6 +686,14 @@ app.post<{ Body: { notificationId?: string; text?: string } }>("/api/meta-recomm
     reply.code(400);
 
     return { error: "notificationId and text are required." };
+  }
+
+  const notification = request.body?.notification
+    ? parseMetaNotificationContext({ ...request.body.notification, notificationId })
+    : null;
+
+  if (notification) {
+    await upsertMetaRecommendationNotification(notification);
   }
 
   const note = await createMetaRecommendationNote({ notificationId, text });
@@ -673,6 +821,12 @@ app.get("/app.css", async (_request, reply) => {
   const css = await readFile(join(process.cwd(), "src", "ui", "app.css"), "utf8");
 
   return reply.type("text/css; charset=utf-8").send(css);
+});
+
+app.get("/favicon.ico", async (_request, reply) => {
+  const icon = await readFile(join(process.cwd(), "assets", "images", "ico.png"));
+
+  return reply.type("image/png").send(icon);
 });
 
 app.get("/vendor/bootstrap-icons.css", async (_request, reply) => {

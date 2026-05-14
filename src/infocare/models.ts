@@ -121,6 +121,7 @@ export const serviceAnalyticsSnapshotSchema = z.object({
   licensedOver2Capacity: z.number().int().nullable().optional(),
   enrolmentRatio: z.number(),
   waitlistCount: z.number().int(),
+  waitlistUnder2Count: z.number().int().optional().default(0),
   waitlistUnder5Count: z.number().int(),
   waitlistTurning5ThisYearCount: z.number().int(),
   waitlistAged5PlusCount: z.number().int(),

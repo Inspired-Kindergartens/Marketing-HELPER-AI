@@ -151,6 +151,7 @@ function mapSnapshot(record: {
   licensedOver2Capacity: number | null;
   enrolmentRatio: { toString(): string };
   waitlistCount: number;
+  waitlistUnder2Count?: number | null;
   waitlistUnder5Count: number;
   waitlistTurning5ThisYearCount: number;
   waitlistAged5PlusCount: number;
@@ -183,6 +184,7 @@ function mapSnapshot(record: {
     licensedOver2Capacity: record.licensedOver2Capacity,
     enrolmentRatio: toNumber(record.enrolmentRatio),
     waitlistCount: record.waitlistCount,
+    waitlistUnder2Count: record.waitlistUnder2Count ?? 0,
     waitlistUnder5Count: record.waitlistUnder5Count,
     waitlistTurning5ThisYearCount: record.waitlistTurning5ThisYearCount,
     waitlistAged5PlusCount: record.waitlistAged5PlusCount,
@@ -326,6 +328,7 @@ async function replaceSnapshotRows(
       licensedOver2Capacity: snapshot.licensedOver2Capacity,
       enrolmentRatio: snapshot.enrolmentRatio,
       waitlistCount: snapshot.waitlistCount,
+      waitlistUnder2Count: snapshot.waitlistUnder2Count ?? 0,
       waitlistUnder5Count: snapshot.waitlistUnder5Count,
       waitlistTurning5ThisYearCount: snapshot.waitlistTurning5ThisYearCount,
       waitlistAged5PlusCount: snapshot.waitlistAged5PlusCount,
@@ -472,6 +475,7 @@ export async function readWindowAnalyticsSnapshotSet(
         licensedUnder2Capacity: latestValidAgeBandEntry.licensedUnder2Capacity,
         licensedOver2Capacity: latestValidAgeBandEntry.licensedOver2Capacity,
         waitlistCount: Math.round(average((entry) => entry.waitlistCount)),
+        waitlistUnder2Count: Math.round(average((entry) => entry.waitlistUnder2Count ?? 0)),
         waitlistUnder5Count: Math.round(average((entry) => entry.waitlistUnder5Count)),
         waitlistTurning5ThisYearCount: Math.round(
           average((entry) => entry.waitlistTurning5ThisYearCount),

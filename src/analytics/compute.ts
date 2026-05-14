@@ -364,6 +364,7 @@ export function computeServiceAnalyticsSnapshot(
     }
   }
   const waitlistCount = bundle.waitingListChildren.length;
+  let waitlistUnder2Count = 0;
   let waitlistUnder5Count = 0;
   let waitlistTurning5ThisYearCount = 0;
   let waitlistAged5PlusCount = 0;
@@ -380,6 +381,10 @@ export function computeServiceAnalyticsSnapshot(
     if (age === null) {
       waitlistUnknownAgeCount += 1;
       continue;
+    }
+
+    if (age < 2) {
+      waitlistUnder2Count += 1;
     }
 
     if (age >= 5) {
@@ -468,6 +473,7 @@ export function computeServiceAnalyticsSnapshot(
     licensedOver2Capacity: capacitySource?.maxO2 ?? null,
     enrolmentRatio,
     waitlistCount,
+    waitlistUnder2Count,
     waitlistUnder5Count,
     waitlistTurning5ThisYearCount,
     waitlistAged5PlusCount,

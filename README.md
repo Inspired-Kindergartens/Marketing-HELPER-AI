@@ -132,6 +132,7 @@ Interpretation:
 
 - A higher `EST` suggests there may be practical room in the weekly booking pattern.
 - Treat this as a planning signal, not a promise of available licence places on every day.
+- `EST` is also used as a small factor in the default priority listing, but it is weighted below known Leaving pressure.
 
 ### U2
 
@@ -178,11 +179,11 @@ Example:
 
 The total is the raw Infocare waiting list count for the centre.
 
-The first number estimates entries in the short-to-typical wait range. The current estimate uses the observed waitlist profile constants in `src/analytics/waitlist-profile.ts`: 212 short-or-typical entries out of 549 dated entries. That is about 38.6% of the total waitlist.
+The first number estimates entries in the short-to-typical wait range. The current estimate uses the observed waitlist profile constants in `src/analytics/waitlist-profile.ts`: 212 short-or-typical entries out of 549 dated entries. That is about 38.6% of the eligible waitlist. For centres with no under-2 (`U2`) capacity, under-two waitlist children are first removed from the eligible count before this estimate is applied, because those children are not currently serviceable by that centre.
 
 Interpretation:
 
-- `12/30` means 30 total waitlist records, with roughly 12 estimated to be more actionable based on the wait-age distribution.
+- `12/30` means 30 total waitlist records, with roughly 12 estimated to be more actionable based on the wait-age distribution and age-band eligibility.
 - A big raw waitlist is not automatically strong demand. Older, stale, duplicated, or no-longer-relevant entries can inflate it.
 - The Waitlist Quality panel gives more detail about whether the queue looks fresh or stale.
 
@@ -222,7 +223,16 @@ Shows an email action when the centre can be matched to a contact from the centr
 
 ## Urgency Ranking
 
-The default table order is not alphabetical. The app first calculates a raw urgency signal from:
+The default table order is not alphabetical. The Infocare Analytics priority listing is weighted toward centres with known children leaving and low actionable waitlist cover. The current priority-listing weights are:
+
+- **65%** - Leaving vs actionable waitlist gap. This is the number of selected-window `Leaving` children not covered by the estimated actionable waitlist.
+- **20%** - Raw selected-window `Leaving` count.
+- **10%** - `EST`, the estimated booked-day open places. This is capped at 20 estimated places so it can influence the list without dominating it.
+- **5%** - Low waitlist signal. The estimated actionable waitlist is the main input, with total raw waitlist also considered when it is low.
+
+The selected window (`1W` through `12M`) changes the Leaving count used in this priority listing.
+
+Separately, the app stores an urgency band for each snapshot. That stored band is calculated from:
 
 - available headcount places,
 - waitlist count,
@@ -232,7 +242,7 @@ The default table order is not alphabetical. The app first calculates a raw urge
 - whether waitlist cover is low,
 - whether both under-2 and over-2 capacity paths are available.
 
-It then sorts centres by that raw signal and converts the ordering into a scaled score from 0 to 100. Bands are:
+Those stored snapshot scores are converted into a scaled score from 0 to 100. Bands are:
 
 - **Critical** - 75 or above.
 - **High** - 50 to 74.
@@ -268,6 +278,8 @@ Use FTE to understand booked-hours load. Use `ENROL/MAX` to understand headcount
 ## Waitlist Quality
 
 The Waitlist Quality panel checks whether raw waitlist totals are reliable demand signals.
+
+For centres that do not offer under-2 (`U2`) places, under-two waitlist children are excluded from the actionable waitlist estimate before the short-plus-typical wait profile is applied. The raw total remains visible as the denominator.
 
 ### `<163d/Total`
 

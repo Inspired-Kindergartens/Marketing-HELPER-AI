@@ -219,6 +219,67 @@ button {
   line-height: var(--line-height-tight);
 }
 
+.ui-info-tooltip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-muted);
+  cursor: help;
+  outline: none;
+  text-transform: none;
+}
+
+.ui-info-tooltip__icon {
+  font-size: 0.78rem;
+  line-height: 1;
+}
+
+.ui-info-tooltip__content {
+  position: absolute;
+  top: calc(100% + 8px);
+  z-index: 20;
+  box-sizing: border-box;
+  width: 260px;
+  max-width: min(260px, 70vw);
+  padding: 8px 10px;
+  border: 1px solid var(--color-border-panel);
+  background: var(--color-panel-inset);
+  color: var(--color-text);
+  font-size: 0.72rem;
+  font-weight: var(--font-weight-body);
+  line-height: var(--line-height-compact);
+  text-align: left;
+  text-transform: none;
+  white-space: normal;
+  box-shadow: 0 10px 22px rgb(0 0 0 / 45%);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-3px);
+  transition:
+    opacity 120ms ease,
+    transform 120ms ease;
+}
+
+.ui-info-tooltip--start .ui-info-tooltip__content {
+  left: 0;
+}
+
+.ui-info-tooltip--end .ui-info-tooltip__content {
+  right: 0;
+}
+
+.ui-info-tooltip:hover,
+.ui-info-tooltip:focus-visible {
+  color: var(--color-active-soft);
+}
+
+.ui-info-tooltip:hover .ui-info-tooltip__content,
+.ui-info-tooltip:focus-visible .ui-info-tooltip__content {
+  opacity: 1;
+  transform: translateY(0);
+}
+
 .panel__body {
   min-height: 0;
   flex: 1;
@@ -283,20 +344,21 @@ button {
 
 .analytics-table-wrap {
   min-height: 0;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   border: 1px solid var(--color-border);
   background: var(--color-surface-dark);
 }
 
 .analytics-table {
   width: 100%;
-  min-width: 900px;
+  table-layout: fixed;
   border-collapse: collapse;
 }
 
 .analytics-table th,
 .analytics-table td {
-  padding: 10px 12px;
+  padding: 10px 8px;
   border-bottom: 1px solid var(--color-border-muted);
   text-align: left;
   white-space: nowrap;
@@ -312,6 +374,40 @@ button {
   text-transform: uppercase;
 }
 
+.analytics-table th:first-child,
+.analytics-table td:first-child {
+  width: 17%;
+}
+
+.analytics-table th:nth-child(2),
+.analytics-table td:nth-child(2),
+.analytics-table th:nth-child(5),
+.analytics-table td:nth-child(5),
+.analytics-table th:nth-child(6),
+.analytics-table td:nth-child(6) {
+  width: 11%;
+}
+
+.analytics-table th:nth-child(3),
+.analytics-table td:nth-child(3),
+.analytics-table th:nth-child(4),
+.analytics-table td:nth-child(4),
+.analytics-table th:nth-child(7),
+.analytics-table td:nth-child(7),
+.analytics-table th:nth-child(8),
+.analytics-table td:nth-child(8),
+.analytics-table th:nth-child(9),
+.analytics-table td:nth-child(9) {
+  width: 7%;
+}
+
+.analytics-table th:nth-child(10),
+.analytics-table td:nth-child(10),
+.analytics-table th:nth-child(11),
+.analytics-table td:nth-child(11) {
+  width: 5%;
+}
+
 .analytics-table__explanation {
   margin: 0;
   color: var(--color-ghost);
@@ -322,21 +418,41 @@ button {
   text-align: right;
 }
 
+.analytics-table__heading-label,
+.analytics-table__service-heading {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+}
+
+.analytics-table__service-heading {
+  justify-content: flex-start;
+}
+
 .analytics-table__action {
   width: 1%;
   text-align: center;
 }
 
-.analytics-table__email-action {
+.analytics-table__email-action,
+.analytics-table__note-action {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 2.25rem;
   min-height: 2.25rem;
   border: var(--button-border);
-  color: var(--color-green);
   background: var(--color-surface);
   text-decoration: none;
+}
+
+.analytics-table__email-action {
+  color: var(--color-green);
+}
+
+.analytics-table__note-action {
+  color: var(--color-active-soft);
 }
 
 .analytics-table tbody tr:hover {
@@ -353,7 +469,9 @@ button {
 
 .analytics-table__service {
   color: var(--color-text-strong);
-  white-space: normal;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .analytics-table__service-header {
@@ -410,6 +528,10 @@ button {
 }
 
 .compact-stats__label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
   font-size: var(--font-size-small);
   color: var(--color-ghost);
   text-transform: uppercase;
@@ -691,6 +813,7 @@ button {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   grid-auto-rows: auto;
   gap: 10px;
+  padding-top: 10px;
   font-size: var(--font-size-small);
 }
 
@@ -757,6 +880,8 @@ button {
   height: 100%;
   overflow: auto;
   font-size: var(--font-size-small);
+  box-sizing: border-box;
+  padding-right: 10px;
 }
 
 .google-analytics-summary {
@@ -1232,6 +1357,134 @@ button {
   text-decoration: none;
 }
 
+.email-confirm-dialog {
+  position: fixed;
+  inset: 50% auto auto 50%;
+  z-index: 1000;
+  transform: translate(-50%, -50%);
+  width: min(360px, calc(100vw - 32px));
+  padding: 16px;
+  border: 1px solid var(--color-border);
+  background: var(--color-panel-bg);
+  color: var(--color-text);
+  display: grid;
+  gap: 16px;
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.42);
+}
+
+.email-confirm-dialog p {
+  margin: 0;
+  color: var(--color-text-strong);
+}
+
+.email-confirm-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.email-confirm-dialog__actions button {
+  min-width: 72px;
+}
+
+.meta-note-popup-page {
+  min-height: 100vh;
+  padding: 18px;
+  background: var(--color-bg);
+}
+
+.meta-note-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgb(0 0 0 / 68%);
+}
+
+.meta-note-popup {
+  display: grid;
+  gap: 18px;
+  width: min(560px, 100%);
+  max-height: calc(100vh - 36px);
+  overflow: auto;
+  margin: 0 auto;
+}
+
+.meta-note-popup__header,
+.meta-note-popup__form,
+.meta-note-popup__reference {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--color-border);
+  background: var(--color-panel-bg);
+}
+
+.meta-note-popup__header span,
+.meta-note-popup__form label,
+.meta-note-popup__reference h2,
+.meta-note-popup__reference span {
+  color: var(--color-ghost);
+  font-size: var(--font-size-small);
+  text-transform: uppercase;
+}
+
+.meta-note-popup__header h1,
+.meta-note-popup__reference h2,
+.meta-note-popup__header p,
+.meta-note-popup__reference p,
+.meta-note-popup__status {
+  margin: 0;
+}
+
+.meta-note-popup__header h1 {
+  color: var(--color-text-strong);
+  font-size: 1.1rem;
+}
+
+.meta-note-popup__header strong {
+  color: var(--color-active-soft);
+}
+
+.meta-note-popup__header p,
+.meta-note-popup__reference p {
+  color: var(--color-text);
+  line-height: var(--line-height-compact);
+}
+
+.meta-note-popup__form textarea {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+.meta-note-popup__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.meta-note-popup__status {
+  min-height: 1.2em;
+  color: var(--color-active-soft);
+}
+
+.meta-note-popup__reference ol {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding-left: 20px;
+}
+
+.meta-note-popup__empty {
+  color: var(--color-empty);
+}
+
 .meta-ads-notification__actions {
   display: grid;
   gap: 8px;
@@ -1369,6 +1622,8 @@ button {
   min-height: 0;
   flex: 1;
   overflow: auto;
+  box-sizing: border-box;
+  padding-right: 10px;
 }
 
 .chat-message {
@@ -1472,6 +1727,16 @@ button {
   grid-area: system;
 }
 
+.panel--system .panel__body,
+.panel--google-analytics .panel__body,
+.panel--chat .panel__body {
+  padding-right: 0;
+}
+
+.panel--system .analytics-toolbar {
+  padding-right: 10px;
+}
+
 .panel--waitlist {
   grid-area: waitlist;
 }
@@ -1482,6 +1747,7 @@ button {
 
 .panel--meta-ads .panel__body {
   overflow: auto;
+  padding-top: 0;
 }
 
 .panel--google-analytics {
@@ -1509,7 +1775,7 @@ button {
   }
 
   .analytics-table {
-    min-width: 760px;
+    min-width: 0;
   }
 }
 
@@ -1587,7 +1853,7 @@ button {
   }
 
   .analytics-table {
-    min-width: 680px;
+    min-width: 0;
   }
 }
 

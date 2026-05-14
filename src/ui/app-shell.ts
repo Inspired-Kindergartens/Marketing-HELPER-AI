@@ -20,7 +20,10 @@ import type {
 } from "../storage/meta-recommendation-notifications-store.js";
 import type { MetaRecommendationNoteView } from "../storage/meta-recommendation-notes-store.js";
 import { matchCentreContact, type CentreContact } from "../storage/centre-contact-store.js";
-import { estimateShortPlusTypicalWaitlistCount } from "../analytics/waitlist-profile.js";
+import {
+  estimateActionableWaitlistCount,
+  estimateShortPlusTypicalWaitlistCount,
+} from "../analytics/waitlist-profile.js";
 import { renderLayout } from "./layout.js";
 
 type AnalyticsRow = NonNullable<LatestSnapshotSet>["snapshots"][number];
@@ -42,6 +45,14 @@ const PANEL_DEFINITIONS = [
   { id: "google-analytics", title: "Google Analytics", className: "panel--google-analytics" },
   { id: "chat", title: "AI Chat", className: "panel--chat" },
 ] as const;
+
+const PRIORITY_LEAVING_WAITLIST_GAP_WEIGHT = 0.65;
+const PRIORITY_LEAVING_COUNT_WEIGHT = 0.2;
+const PRIORITY_ESTIMATED_OPEN_PLACES_WEIGHT = 0.1;
+const PRIORITY_LOW_WAITLIST_WEIGHT = 0.05;
+const PRIORITY_LEAVING_CAP = 10;
+const PRIORITY_ESTIMATED_OPEN_PLACES_CAP = 20;
+const PRIORITY_LOW_WAITLIST_CAP = 10;
 
 type AppShellOptions = {
   selectedCentreKey?: number | null;
@@ -84,6 +95,15 @@ function escapeHtml(value: string) {
     .replaceAll("'", "&#39;");
 }
 
+function renderInfoTooltip(content: string, label = "More information", placement: "start" | "end" = "end") {
+  return `
+    <span class="ui-info-tooltip ui-info-tooltip--${placement}" tabindex="0" aria-label="${escapeHtml(label)}">
+      <i class="bi bi-info-circle ui-info-tooltip__icon" aria-hidden="true"></i>
+      <span class="ui-info-tooltip__content" role="tooltip">${escapeHtml(content)}</span>
+    </span>
+  `;
+}
+
 function serializeJsonForScript(value: unknown) {
   return JSON.stringify(value).replaceAll("<", "\\u003c");
 }
@@ -100,7 +120,7 @@ function formatEstimatedPlaces(row: AnalyticsRow) {
     return "-";
   }
 
-  return String(Math.max(0, Math.round(row.licensedCapacity - row.bookedAverageDailyCount)));
+  return String(getEstimatedOpenPlaces(row));
 }
 
 function formatAgeBandCapacity(enrolledCount: number, licensedCapacity?: number | null) {
@@ -115,12 +135,16 @@ function formatAgeBandCapacity(enrolledCount: number, licensedCapacity?: number 
   return `${enrolledCount}/${licensedCapacity}`;
 }
 
-function formatWaitlistCoverage(waitlistCount: number) {
-  return `${estimateShortPlusTypicalWaitlistCount(waitlistCount)}/${waitlistCount}`;
+function formatAnalyticsServiceDisplayName(serviceName: string) {
+  return serviceName.replace(/\s*Kindergarten[\s\S]*$/i, "").trim() || serviceName;
+}
+
+function formatWaitlistCoverage(row: AnalyticsRow) {
+  return `${getActionableWaitlistCount(row)}/${row.waitlistCount}`;
 }
 
 function getActionableWaitlistCount(row: AnalyticsRow) {
-  return estimateShortPlusTypicalWaitlistCount(row.waitlistCount);
+  return estimateActionableWaitlistCount(row);
 }
 
 function getScopedKnownLeavingCount(row: ServiceAnalyticsSnapshot, windowKey: WindowKey) {
@@ -264,7 +288,54 @@ function formatGoogleAnalyticsRangeLabel(snapshot: GoogleAnalyticsDailySnapshotV
   return `${formatDateOnly(snapshot.rangeStartDate)} to ${formatDateOnly(snapshot.rangeEndDate)}`;
 }
 
-function sortAnalyticsRows(rows: readonly AnalyticsRow[], serviceSort: ServiceSort) {
+function normalizePriorityValue(value: number, cap: number) {
+  if (!Number.isFinite(value) || value <= 0 || cap <= 0) {
+    return 0;
+  }
+
+  return Math.min(value, cap) / cap;
+}
+
+function getEstimatedOpenPlaces(row: AnalyticsRow) {
+  if (row.bookedAverageDailyCount <= 0 || row.licensedCapacity <= 0) {
+    return 0;
+  }
+
+  return Math.max(0, Math.round(row.licensedCapacity - row.bookedAverageDailyCount));
+}
+
+function getPriorityWaitlistGap(row: AnalyticsRow, windowKey: WindowKey) {
+  const scopedLeavingCount = getScopedKnownLeavingCount(row, windowKey);
+  const actionableWaitlistCount = getActionableWaitlistCount(row);
+
+  return Math.max(scopedLeavingCount - actionableWaitlistCount, 0);
+}
+
+function getLowWaitlistPriorityScore(row: AnalyticsRow) {
+  const actionableWaitlistCount = getActionableWaitlistCount(row);
+  const actionableScore =
+    1 - normalizePriorityValue(actionableWaitlistCount, PRIORITY_LOW_WAITLIST_CAP);
+  const totalScore =
+    1 - normalizePriorityValue(row.waitlistCount, PRIORITY_LOW_WAITLIST_CAP);
+
+  return actionableScore * 0.7 + totalScore * 0.3;
+}
+
+function getPriorityListingScore(row: AnalyticsRow, windowKey: WindowKey) {
+  const scopedLeavingCount = getScopedKnownLeavingCount(row, windowKey);
+
+  return (
+    normalizePriorityValue(getPriorityWaitlistGap(row, windowKey), PRIORITY_LEAVING_CAP) *
+      PRIORITY_LEAVING_WAITLIST_GAP_WEIGHT +
+    normalizePriorityValue(scopedLeavingCount, PRIORITY_LEAVING_CAP) *
+      PRIORITY_LEAVING_COUNT_WEIGHT +
+    normalizePriorityValue(getEstimatedOpenPlaces(row), PRIORITY_ESTIMATED_OPEN_PLACES_CAP) *
+      PRIORITY_ESTIMATED_OPEN_PLACES_WEIGHT +
+    getLowWaitlistPriorityScore(row) * PRIORITY_LOW_WAITLIST_WEIGHT
+  );
+}
+
+function sortAnalyticsRows(rows: readonly AnalyticsRow[], serviceSort: ServiceSort, windowKey: WindowKey) {
   const sorted = [...rows];
 
   if (serviceSort === "asc") {
@@ -275,7 +346,23 @@ function sortAnalyticsRows(rows: readonly AnalyticsRow[], serviceSort: ServiceSo
     return sorted.sort((left, right) => right.serviceName.localeCompare(left.serviceName));
   }
 
-  return sorted;
+  return sorted.sort((left, right) => {
+    const leftLeavingCount = getScopedKnownLeavingCount(left, windowKey);
+    const rightLeavingCount = getScopedKnownLeavingCount(right, windowKey);
+    const leftActionableWaitlist = getActionableWaitlistCount(left);
+    const rightActionableWaitlist = getActionableWaitlistCount(right);
+
+    return (
+      getPriorityListingScore(right, windowKey) - getPriorityListingScore(left, windowKey) ||
+      getPriorityWaitlistGap(right, windowKey) - getPriorityWaitlistGap(left, windowKey) ||
+      rightLeavingCount - leftLeavingCount ||
+      leftActionableWaitlist - rightActionableWaitlist ||
+      left.waitlistCount - right.waitlistCount ||
+      getEstimatedOpenPlaces(right) - getEstimatedOpenPlaces(left) ||
+      right.urgencyScore - left.urgencyScore ||
+      left.serviceName.localeCompare(right.serviceName)
+    );
+  });
 }
 
 function buildRankingReasons(row: AnalyticsRow, windowKey: WindowKey) {
@@ -1166,6 +1253,36 @@ function renderWaitlistSectionHeader(
   `;
 }
 
+const waitlistQualityStatInfo = {
+  under163:
+    "Estimated or reported waitlist entries under 163 days old, shown against total waitlist. These are treated as more likely to be current and actionable.",
+  over163:
+    "Estimated or reported waitlist entries 163 days or older, shown against total waitlist. A high share can mean the raw waitlist is stale or needs cleaning.",
+  startingDate:
+    "The indicated starting date for a child entering kindergarten. The value shows how many waitlist records include a usable starting date.",
+  oldest:
+    "Oldest waitlist entry age in days. Very high values can indicate stale records or families that may no longer be active prospects.",
+  median:
+    "Median waitlist age in days when a full waitlist report is available. A lower median means the waitlist is generally fresher.",
+} as const;
+
+function renderCompactStat(
+  label: string,
+  value: string,
+  info: string,
+  placement: "start" | "end" = "end",
+) {
+  return `
+    <div class="compact-stats__item">
+      <span class="compact-stats__label">
+        <span>${escapeHtml(label)}</span>
+        ${renderInfoTooltip(info, `${label} information`, placement)}
+      </span>
+      <span class="compact-stats__value">${escapeHtml(value)}</span>
+    </div>
+  `;
+}
+
 function renderWaitlistReportPanel(
   report: WaitlistDiscoveryReport,
   showAllRows: boolean,
@@ -1212,30 +1329,20 @@ function renderWaitlistReportPanel(
   return `
     <div class="waitlist-quality${waitlistSection ? " waitlist-quality--section-focus" : ""}">
       <div class="waitlist-quality__stats">
-        <div class="compact-stats__item">
-          <span class="compact-stats__label">&lt;163d/Total</span>
-          <span class="compact-stats__value">${under163Count}/${totalWaitlistCount}</span>
-        </div>
-        <div class="compact-stats__item">
-          <span class="compact-stats__label">163+d/Total</span>
-          <span class="compact-stats__value">${over163Count}/${totalWaitlistCount}</span>
-        </div>
+        ${renderCompactStat("<163d/Total", `${under163Count}/${totalWaitlistCount}`, waitlistQualityStatInfo.under163, "start")}
+        ${renderCompactStat("163+d/Total", `${over163Count}/${totalWaitlistCount}`, waitlistQualityStatInfo.over163, "start")}
         ${
           report.waitlistStartingDateCount != null
-            ? `<div class="compact-stats__item">
-                <span class="compact-stats__label">Starting date</span>
-                <span class="compact-stats__value">${report.waitlistStartingDateCount}/${totalWaitlistCount}</span>
-              </div>`
+            ? renderCompactStat(
+                "Starting date",
+                `${report.waitlistStartingDateCount}/${totalWaitlistCount}`,
+                waitlistQualityStatInfo.startingDate,
+                "start",
+              )
             : ""
         }
-        <div class="compact-stats__item">
-          <span class="compact-stats__label">Oldest</span>
-          <span class="compact-stats__value">${report.oldestDays ?? 0}d</span>
-        </div>
-        <div class="compact-stats__item">
-          <span class="compact-stats__label">Median</span>
-          <span class="compact-stats__value">${formatAverageDays(report.medianDays)}</span>
-        </div>
+        ${renderCompactStat("Oldest", `${report.oldestDays ?? 0}d`, waitlistQualityStatInfo.oldest)}
+        ${renderCompactStat("Median", formatAverageDays(report.medianDays), waitlistQualityStatInfo.median)}
       </div>
       <div class="waitlist-quality__grid">
         ${waitlistBody}
@@ -1324,26 +1431,11 @@ function renderWaitlistQualityPanel(
   return `
     <div class="waitlist-quality${waitlistSection ? " waitlist-quality--section-focus" : ""}">
       <div class="waitlist-quality__stats">
-        <div class="compact-stats__item">
-          <span class="compact-stats__label">&lt;163d/Total</span>
-          <span class="compact-stats__value">${under163Count}/${totalWaitlistCount}</span>
-        </div>
-        <div class="compact-stats__item">
-          <span class="compact-stats__label">163+d/Total</span>
-          <span class="compact-stats__value">${over163Count}/${totalWaitlistCount}</span>
-        </div>
-        <div class="compact-stats__item">
-          <span class="compact-stats__label">Starting date</span>
-          <span class="compact-stats__value">snapshot</span>
-        </div>
-        <div class="compact-stats__item">
-          <span class="compact-stats__label">Oldest</span>
-          <span class="compact-stats__value">${oldestEntryDays}d</span>
-        </div>
-        <div class="compact-stats__item">
-          <span class="compact-stats__label">Median</span>
-          <span class="compact-stats__value">-</span>
-        </div>
+        ${renderCompactStat("<163d/Total", `${under163Count}/${totalWaitlistCount}`, waitlistQualityStatInfo.under163, "start")}
+        ${renderCompactStat("163+d/Total", `${over163Count}/${totalWaitlistCount}`, waitlistQualityStatInfo.over163, "start")}
+        ${renderCompactStat("Starting date", "snapshot", waitlistQualityStatInfo.startingDate, "start")}
+        ${renderCompactStat("Oldest", `${oldestEntryDays}d`, waitlistQualityStatInfo.oldest)}
+        ${renderCompactStat("Median", "-", waitlistQualityStatInfo.median)}
       </div>
       <div class="waitlist-quality__grid">
         ${waitlistBody}
@@ -1698,6 +1790,24 @@ function buildWaitlistAgeQualityGuidance(row: AnalyticsRow) {
   return `The visible waitlist has a mixed age profile, so it should not be treated as a clean younger-child demand signal on its own.`;
 }
 
+const analyticsColumnInfo = {
+  service: "Centre name from Infocare. Click a row to select that centre and update the AI summary panel.",
+  enrolMax: "Enrolled headcount / licence capacity. Percentage is calculated as average booked children per day / licensed capacity, not FTE.",
+  est: "Estimated open places based on bookings: licensed capacity minus average booked children per day. Treat as a planning signal, not guaranteed daily availability.",
+  u2: "Under-2 enrolment against under-2 capacity. Capacity comes from Infocare licence data or a manual capacity override.",
+  o2: "Over-2 enrolment against over-2 capacity. Format and interpretation match U2, but for children aged two or older.",
+  waitlist: "Estimated actionable waitlist / total waitlist. The first number estimates entries in the short-to-typical wait range.",
+  age5: "Currently enrolled children who are already five or older at the snapshot date. This is a current count, not window-based.",
+  near5: "Enrolled children who will turn five inside the selected time window, such as the next 90 days when 3M is selected.",
+  leaving: "Enrolled children with a known future leaving date inside the selected time window. Past leaving dates are ignored.",
+  note: "Opens the matching Meta Ads recommendation note field for this centre and window.",
+  email: "Email action shown when the centre can be matched to a contact from the centre contact list.",
+} as const;
+
+function renderAnalyticsHeaderLabel(label: string, info: string, placement: "start" | "end" = "end") {
+  return `<span class="analytics-table__heading-label"><span>${escapeHtml(label)}</span>${renderInfoTooltip(info, `${label} column information`, placement)}</span>`;
+}
+
 function renderAnalyticsTable(
   snapshotSet: LatestSnapshotSet | null,
   selectedCentreKey: number | null | undefined,
@@ -1706,7 +1816,7 @@ function renderAnalyticsTable(
   centreContacts: CentreContact[] = [],
   metaAdsDashboardData?: MetaAdsDashboardData | null,
 ) {
-  const analyticsRows = sortAnalyticsRows(snapshotSet?.snapshots ?? [], serviceSort);
+  const analyticsRows = sortAnalyticsRows(snapshotSet?.snapshots ?? [], serviceSort, selectedWindowKey);
   const selectedCentreValue = selectedCentreKey == null ? null : selectedCentreKey;
   const criticalSortHref = `/?${buildQueryString(selectedCentreValue, selectedWindowKey, "critical")}`;
   const ascSortHref = `/?${buildQueryString(selectedCentreValue, selectedWindowKey, "asc")}`;
@@ -1718,23 +1828,30 @@ function renderAnalyticsTable(
         const contact = matchCentreContact(row.serviceName, centreContacts);
         const recommendation = getMetaRecommendation(row, selectedWindowKey, coverage);
         const notificationId = createMetaNotificationId(row, selectedWindowKey, recommendation);
+        const openPlaces = Math.max(row.licensedCapacity - row.enrolledCount, 0);
+        const actionableWaitlist = getActionableWaitlistCount(row);
+        const replacementPressure = getScopedReplacementPressure(row, selectedWindowKey);
+        const centreCoverage = coverage.get(row.centreKey);
+        const metaMessage = `${row.serviceName}: ${openPlaces} open, ${actionableWaitlist}/${row.waitlistCount} actionable waitlist, ${replacementPressure} pressure, ${centreCoverage?.activeCampaignCount ?? 0} active campaigns, ${formatMoney(centreCoverage?.spend30d ?? 0)} spend.`;
         const emailAction = contact
-          ? `<a class="analytics-table__email-action" data-analytics-email data-notification-id="${escapeHtml(notificationId)}" data-centre-name="${escapeHtml(row.serviceName)}" href="${escapeHtml(buildMetaAdvertEmailHref(contact))}" title="Email centre about a Facebook advert" aria-label="Email ${escapeHtml(row.serviceName)} about a Facebook advert"><i class="bi bi-envelope ui-icon" aria-hidden="true"></i></a>`
+          ? `<a class="analytics-table__email-action" data-email-confirm data-notification-id="${escapeHtml(notificationId)}" data-centre-name="${escapeHtml(row.serviceName)}" href="${escapeHtml(buildMetaAdvertEmailHref(contact))}" title="Email centre about a Facebook advert" aria-label="Email ${escapeHtml(row.serviceName)} about a Facebook advert"><i class="bi bi-envelope ui-icon" aria-hidden="true"></i></a>`
           : "";
+        const noteAction = `<button type="button" class="analytics-table__note-action" data-analytics-meta-note data-notification-id="${escapeHtml(notificationId)}" data-centre-key="${row.centreKey}" data-window-key="${escapeHtml(selectedWindowKey)}" data-meta-history-heading="${escapeHtml(recommendation)}" data-meta-history-message="${escapeHtml(metaMessage)}" data-centre-name="${escapeHtml(row.serviceName)}" data-open-places="${openPlaces}" data-actionable-waitlist="${actionableWaitlist}" data-waitlist-count="${row.waitlistCount}" data-replacement-pressure="${replacementPressure}" data-active-campaign-count="${centreCoverage?.activeCampaignCount ?? 0}" data-spend-30d="${centreCoverage?.spend30d ?? 0}" title="Add Meta Ads note" aria-label="Add Meta Ads note for ${escapeHtml(row.serviceName)}"><i class="bi bi-journal-plus ui-icon" aria-hidden="true"></i></button>`;
 
         return `
         <tr class="${row.centreKey === selectedCentreKey ? "analytics-table__row--selected analytics-table__row--clickable" : "analytics-table__row--clickable"}" data-row-href="/?${buildQueryString(row.centreKey, selectedWindowKey, serviceSort)}">
           <td class="analytics-table__service">
-            ${escapeHtml(row.serviceName)}
+            <span title="${escapeHtml(row.serviceName)}">${escapeHtml(formatAnalyticsServiceDisplayName(row.serviceName))}</span>
           </td>
           <td class="analytics-table__numeric">${formatEnrolmentCapacity(row)}</td>
           <td class="analytics-table__numeric">${formatEstimatedPlaces(row)}</td>
           <td class="analytics-table__numeric">${formatAgeBandCapacity(row.enrolledUnder2Count, row.licensedUnder2Capacity)}</td>
           <td class="analytics-table__numeric">${formatAgeBandCapacity(row.enrolledOver2Count, row.licensedOver2Capacity)}</td>
-          <td class="analytics-table__numeric">${formatWaitlistCoverage(row.waitlistCount)}</td>
+          <td class="analytics-table__numeric">${formatWaitlistCoverage(row)}</td>
           <td class="analytics-table__numeric">${row.agedOutCount}</td>
           <td class="analytics-table__numeric">${getScopedApproachingFiveCount(row, selectedWindowKey)}</td>
           <td class="analytics-table__numeric">${getScopedKnownLeavingCount(row, selectedWindowKey)}</td>
+          <td class="analytics-table__action">${noteAction}</td>
           <td class="analytics-table__action">${emailAction}</td>
         </tr>
       `;
@@ -1745,7 +1862,7 @@ function renderAnalyticsTable(
     rows ||
     `
       <tr>
-        <td colspan="10" class="analytics-table__empty">No analytics snapshot rows are available yet.</td>
+        <td colspan="11" class="analytics-table__empty">No analytics snapshot rows are available yet.</td>
       </tr>
     `;
 
@@ -1757,22 +1874,26 @@ function renderAnalyticsTable(
             <tr>
               <th>
                 <div class="analytics-table__service-header">
-                  <a class="analytics-table__sort-link${serviceSort === "critical" ? " analytics-table__sort-link--active" : ""}" href="${criticalSortHref}">Service</a>
+                  <span class="analytics-table__service-heading">
+                    <a class="analytics-table__sort-link${serviceSort === "critical" ? " analytics-table__sort-link--active" : ""}" href="${criticalSortHref}">Service</a>
+                    ${renderInfoTooltip(analyticsColumnInfo.service, "Service column information", "start")}
+                  </span>
                   <span class="analytics-table__sort-arrows">
                     <a class="analytics-table__sort-link${serviceSort === "asc" ? " analytics-table__sort-link--active" : ""}" href="${ascSortHref}" aria-label="Sort service A to Z">↑</a>
                     <a class="analytics-table__sort-link${serviceSort === "desc" ? " analytics-table__sort-link--active" : ""}" href="${descSortHref}" aria-label="Sort service Z to A">↓</a>
                   </span>
                 </div>
               </th>
-              <th class="analytics-table__numeric">ENROL/MAX</th>
-              <th class="analytics-table__numeric">EST</th>
-              <th class="analytics-table__numeric">U2</th>
-              <th class="analytics-table__numeric">O2</th>
-              <th class="analytics-table__numeric">Waitlist</th>
-              <th class="analytics-table__numeric">Age 5+</th>
-              <th class="analytics-table__numeric">Near 5</th>
-              <th class="analytics-table__numeric">Leaving</th>
-              <th class="analytics-table__action">Email</th>
+              <th class="analytics-table__numeric">${renderAnalyticsHeaderLabel("ENROL/MAX", analyticsColumnInfo.enrolMax, "start")}</th>
+              <th class="analytics-table__numeric">${renderAnalyticsHeaderLabel("EST", analyticsColumnInfo.est, "start")}</th>
+              <th class="analytics-table__numeric">${renderAnalyticsHeaderLabel("U2", analyticsColumnInfo.u2, "start")}</th>
+              <th class="analytics-table__numeric">${renderAnalyticsHeaderLabel("O2", analyticsColumnInfo.o2, "start")}</th>
+              <th class="analytics-table__numeric">${renderAnalyticsHeaderLabel("Waitlist", analyticsColumnInfo.waitlist)}</th>
+              <th class="analytics-table__numeric">${renderAnalyticsHeaderLabel("Age 5+", analyticsColumnInfo.age5)}</th>
+              <th class="analytics-table__numeric">${renderAnalyticsHeaderLabel("Near 5", analyticsColumnInfo.near5)}</th>
+              <th class="analytics-table__numeric">${renderAnalyticsHeaderLabel("Leaving", analyticsColumnInfo.leaving)}</th>
+              <th class="analytics-table__action">${renderAnalyticsHeaderLabel("Note", analyticsColumnInfo.note)}</th>
+              <th class="analytics-table__action">${renderAnalyticsHeaderLabel("Email", analyticsColumnInfo.email)}</th>
             </tr>
           </thead>
           <tbody>${body}</tbody>
@@ -1934,10 +2055,6 @@ function getMetaRecommendation(
 
   if (replacementPressure >= 3 && activeCampaignCount === 0) {
     return "Prepare campaign";
-  }
-
-  if (openPlaces <= 1 && row.waitlistCount >= 5) {
-    return "Demand covered";
   }
 
   return activeCampaignCount > 0 ? "Covered by ads" : "Watch";
@@ -2124,7 +2241,7 @@ function renderMetaRecommendations(
                   <div class="meta-ads-notification__title-actions">
                     ${
                       contact
-                        ? `<a class="meta-ads-notification__email" href="${escapeHtml(buildMetaAdvertEmailHref(contact))}" title="Email centre about a Facebook advert" aria-label="Email ${escapeHtml(entry.row.serviceName)} about a Facebook advert"><i class="bi bi-envelope ui-icon" aria-hidden="true"></i></a>`
+                        ? `<a class="meta-ads-notification__email" data-email-confirm data-notification-id="${escapeHtml(entry.notificationId)}" data-centre-name="${escapeHtml(entry.row.serviceName)}" href="${escapeHtml(buildMetaAdvertEmailHref(contact))}" title="Email centre about a Facebook advert" aria-label="Email ${escapeHtml(entry.row.serviceName)} about a Facebook advert"><i class="bi bi-envelope ui-icon" aria-hidden="true"></i></a>`
                         : ""
                     }
                     <button type="button" data-meta-notification-dismiss title="Dismiss notification" aria-label="Dismiss notification">
@@ -2237,6 +2354,180 @@ export function renderMetaNotificationHistoryPagination(pageData: MetaNotificati
       <i class="bi bi-chevron-right ui-icon" aria-hidden="true"></i>
     </button>
   `;
+}
+
+export function renderMetaRecommendationNotePopup(input: {
+  notificationId: string;
+  centreName: string;
+  heading: string;
+  message: string;
+  notes: MetaRecommendationNoteView[];
+  notification?: {
+    notificationId: string;
+    centreKey: number;
+    centreName: string;
+    windowKey: string;
+    recommendation: string;
+    message: string;
+    priority: number;
+    openPlaces: number;
+    actionableWaitlist: number;
+    waitlistCount: number;
+    replacementPressure: number;
+    activeCampaignCount: number;
+    spend30d: number;
+  } | null;
+}) {
+  const context = {
+    notificationId: input.notificationId,
+    notification: input.notification ?? null,
+  };
+  const noteItems =
+    input.notes.length === 0
+      ? `<li class="meta-note-popup__empty" data-popup-empty>No notes recorded for this recommendation yet.</li>`
+      : input.notes
+          .map(
+            (note) => `
+              <li data-popup-note-id="${note.id}">
+                <span>${formatTimestamp(note.submittedAt)}</span>
+                <p>${escapeHtml(note.text)}</p>
+              </li>
+            `,
+          )
+          .join("");
+
+  return `<!doctype html>
+  <html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>${escapeHtml(input.centreName ? `Add Note - ${input.centreName}` : "Add Meta Ads Note")}</title>
+    <link rel="stylesheet" href="/vendor/bootstrap-icons.css" />
+    <link rel="stylesheet" href="/app.css" />
+  </head>
+  <body class="meta-note-popup-page">
+    <main class="meta-note-popup" data-notification-id="${escapeHtml(input.notificationId)}">
+      <header class="meta-note-popup__header">
+        <h1>${escapeHtml(input.centreName || input.heading || "Recommendation")}</h1>
+      </header>
+      <form class="meta-note-popup__form" data-popup-note-form>
+        <label for="meta-note-popup-text">Add note</label>
+        <textarea id="meta-note-popup-text" data-popup-note-text rows="5" autofocus></textarea>
+        <div class="meta-note-popup__actions">
+          <button type="button" data-popup-close>Close</button>
+          <button type="submit">Save note</button>
+        </div>
+        <p class="meta-note-popup__status" data-popup-status role="status"></p>
+      </form>
+      <section class="meta-note-popup__reference" aria-labelledby="meta-note-popup-reference-title">
+        <h2 id="meta-note-popup-reference-title">Latest notes</h2>
+        <ol data-popup-notes>${noteItems}</ol>
+      </section>
+    </main>
+    <script>
+      (() => {
+        const context = ${serializeJsonForScript(context)};
+        const form = document.querySelector("[data-popup-note-form]");
+        const textarea = document.querySelector("[data-popup-note-text]");
+        const status = document.querySelector("[data-popup-status]");
+        const notes = document.querySelector("[data-popup-notes]");
+        const closeButton = document.querySelector("[data-popup-close]");
+
+        function setStatus(message) {
+          if (status instanceof HTMLElement) {
+            status.textContent = message;
+          }
+        }
+
+        function formatNoteDate(value) {
+          const date = new Date(value);
+
+          if (Number.isNaN(date.getTime())) {
+            return "";
+          }
+
+          return date.toLocaleString("en-NZ", {
+            year: "numeric",
+            month: "2-digit",
+            day: "2-digit",
+            hour: "2-digit",
+            minute: "2-digit",
+          });
+        }
+
+        function prependNote(note) {
+          if (!(notes instanceof HTMLOListElement)) {
+            return;
+          }
+
+          notes.querySelector("[data-popup-empty]")?.remove();
+
+          const item = document.createElement("li");
+          const timestamp = document.createElement("span");
+          const text = document.createElement("p");
+
+          item.setAttribute("data-popup-note-id", String(note.id));
+          timestamp.textContent = formatNoteDate(note.submittedAt);
+          text.textContent = String(note.text || "");
+          item.append(timestamp, text);
+          notes.prepend(item);
+
+          while (notes.querySelectorAll("[data-popup-note-id]").length > 3) {
+            notes.querySelector("[data-popup-note-id]:last-child")?.remove();
+          }
+        }
+
+        closeButton?.addEventListener("click", () => {
+          window.close();
+        });
+
+        form?.addEventListener("submit", async (event) => {
+          event.preventDefault();
+
+          if (!(textarea instanceof HTMLTextAreaElement)) {
+            return;
+          }
+
+          const text = textarea.value.trim();
+
+          if (!text) {
+            textarea.focus();
+            return;
+          }
+
+          setStatus("Saving...");
+
+          const response = await fetch("/api/meta-recommendation-notes", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ notificationId: context.notificationId, text, notification: context.notification }),
+          });
+
+          if (!response.ok) {
+            setStatus("Note could not be saved.");
+            return;
+          }
+
+          const payload = await response.json();
+
+          if (payload.note) {
+            prependNote(payload.note);
+            localStorage.setItem(
+              "marketing-helper-ai.meta-note-saved",
+              JSON.stringify({ note: payload.note, savedAt: Date.now() }),
+            );
+          }
+
+          textarea.value = "";
+          setStatus("Saved.");
+          textarea.focus();
+        });
+      })();
+    </script>
+  </body>
+  </html>`;
 }
 
 function renderMetaAdsPanel(
@@ -2816,6 +3107,14 @@ function renderBreakoutScript() {
           }
         }
 
+        function selectAnalyticsRow(row) {
+          for (const selectedRow of document.querySelectorAll(".analytics-table__row--selected")) {
+            selectedRow.classList.remove("analytics-table__row--selected");
+          }
+
+          row.classList.add("analytics-table__row--selected");
+        }
+
         function isSameScreen(left, right) {
           return (
             left.availLeft === right.availLeft &&
@@ -3064,9 +3363,7 @@ function renderBreakoutScript() {
           }
         }
 
-        function createMetaRecommendationFromHistoryRow(row) {
-          const id = row.getAttribute("data-notification-id") || "";
-
+        function createMetaRecommendationFromData(id, heading, message) {
           if (!id) {
             return;
           }
@@ -3084,8 +3381,6 @@ function renderBreakoutScript() {
             return;
           }
 
-          const heading = row.getAttribute("data-meta-history-heading") || row.children[2]?.textContent || "Recommendation";
-          const message = row.getAttribute("data-meta-history-message") || row.children[3]?.textContent || "";
           const item = document.createElement("li");
           const content = document.createElement("div");
           const title = document.createElement("div");
@@ -3140,6 +3435,14 @@ function renderBreakoutScript() {
           focusMetaRecommendation(item);
         }
 
+        function createMetaRecommendationFromHistoryRow(row) {
+          const id = row.getAttribute("data-notification-id") || "";
+          const heading = row.getAttribute("data-meta-history-heading") || row.children[2]?.textContent || "Recommendation";
+          const message = row.getAttribute("data-meta-history-message") || row.children[3]?.textContent || "";
+
+          createMetaRecommendationFromData(id, heading, message);
+        }
+
         function setMetaNoteDeletedState(item, isDeleted) {
           const deleteButton = item.querySelector("[data-meta-note-delete]");
           const restoreButton = item.querySelector("[data-meta-note-restore]");
@@ -3187,6 +3490,287 @@ function renderBreakoutScript() {
           textInput.value = "";
         }
 
+        function syncSavedMetaNote(note) {
+          if (!note || !note.notificationId) {
+            return;
+          }
+
+          const notification = document.querySelector('[data-meta-notification-id="' + CSS.escape(String(note.notificationId)) + '"]');
+          const notesList = notification?.querySelector("[data-meta-notes]");
+
+          if (notesList instanceof HTMLOListElement && !notesList.querySelector('[data-meta-note-id="' + CSS.escape(String(note.id)) + '"]')) {
+            notesList.prepend(createMetaNoteElement(note));
+          }
+
+          void loadMetaHistoryPage(1);
+        }
+
+        function getMetaNoteButtonContext(button) {
+          const heading = button.getAttribute("data-meta-history-heading") || "Recommendation";
+          const recommendation = heading;
+
+          return {
+            notificationId: button.getAttribute("data-notification-id") || "",
+            centreKey: Number.parseInt(button.getAttribute("data-centre-key") || "0", 10),
+            centreName: button.getAttribute("data-centre-name") || "",
+            windowKey: button.getAttribute("data-window-key") || "",
+            heading,
+            recommendation,
+            message: button.getAttribute("data-meta-history-message") || "",
+            priority: heading === "Needs ads" || heading === "Prepare campaign" ? 3 : heading === "Ads active, monitor" || heading === "Review spend" ? 2 : 1,
+            openPlaces: Number.parseInt(button.getAttribute("data-open-places") || "0", 10),
+            actionableWaitlist: Number.parseInt(button.getAttribute("data-actionable-waitlist") || "0", 10),
+            waitlistCount: Number.parseInt(button.getAttribute("data-waitlist-count") || "0", 10),
+            replacementPressure: Number.parseInt(button.getAttribute("data-replacement-pressure") || "0", 10),
+            activeCampaignCount: Number.parseInt(button.getAttribute("data-active-campaign-count") || "0", 10),
+            spend30d: Number(button.getAttribute("data-spend-30d") || "0"),
+          };
+        }
+
+        function createLatestNoteElement(note) {
+          const item = document.createElement("li");
+          const timestamp = document.createElement("span");
+          const text = document.createElement("p");
+          const date = new Date(note.submittedAt);
+
+          item.setAttribute("data-popup-note-id", String(note.id || note.submittedAt || ""));
+          timestamp.textContent = Number.isNaN(date.getTime())
+            ? ""
+            : date.toLocaleString("en-NZ", {
+                year: "numeric",
+                month: "2-digit",
+                day: "2-digit",
+                hour: "2-digit",
+                minute: "2-digit",
+              });
+          text.textContent = String(note.text || "");
+          item.append(timestamp, text);
+
+          return item;
+        }
+
+        function renderLatestNoteList(notesList, notes) {
+          notesList.replaceChildren();
+
+          if (!notes.length) {
+            const empty = document.createElement("li");
+            empty.className = "meta-note-popup__empty";
+            empty.setAttribute("data-popup-empty", "");
+            empty.textContent = "No notes recorded for this recommendation yet.";
+            notesList.append(empty);
+            return;
+          }
+
+          for (const note of notes.slice(0, 3)) {
+            notesList.append(createLatestNoteElement(note));
+          }
+        }
+
+        async function loadLatestCentreNotes(modal, context) {
+          const notesList = modal.querySelector("[data-popup-notes]");
+
+          if (!(notesList instanceof HTMLOListElement) || !Number.isInteger(context.centreKey) || context.centreKey <= 0) {
+            return;
+          }
+
+          renderLatestNoteList(notesList, []);
+
+          const response = await fetch("/api/meta-recommendation-notes/latest?centre=" + encodeURIComponent(String(context.centreKey)) + "&limit=3");
+
+          if (!response.ok) {
+            return;
+          }
+
+          const payload = await response.json();
+          renderLatestNoteList(notesList, Array.isArray(payload.notes) ? payload.notes : []);
+        }
+
+        function closeMetaNoteModal() {
+          const modal = document.querySelector("[data-meta-note-modal]");
+          const shouldRefresh = modal instanceof HTMLElement && modal.dataset.refreshOnClose === "true";
+
+          modal?.remove();
+
+          if (shouldRefresh) {
+            window.location.reload();
+          }
+        }
+
+        function openMetaNoteModal(context) {
+          closeMetaNoteModal();
+
+          const overlay = document.createElement("div");
+          const modal = document.createElement("section");
+          const header = document.createElement("header");
+          const title = document.createElement("h1");
+          const form = document.createElement("form");
+          const label = document.createElement("label");
+          const textarea = document.createElement("textarea");
+          const actions = document.createElement("div");
+          const closeButton = document.createElement("button");
+          const saveButton = document.createElement("button");
+          const status = document.createElement("p");
+          const reference = document.createElement("section");
+          const referenceTitle = document.createElement("h2");
+          const notes = document.createElement("ol");
+
+          overlay.className = "meta-note-modal";
+          overlay.setAttribute("data-meta-note-modal", "");
+          overlay.setAttribute("role", "dialog");
+          overlay.setAttribute("aria-modal", "true");
+          overlay.setAttribute("aria-labelledby", "meta-note-modal-title");
+          modal.className = "meta-note-popup";
+          modal.setAttribute("data-notification-id", context.notificationId);
+          header.className = "meta-note-popup__header";
+          title.id = "meta-note-modal-title";
+          title.textContent = context.centreName || context.heading || "Recommendation";
+          form.className = "meta-note-popup__form";
+          form.setAttribute("data-popup-note-form", "");
+          label.setAttribute("for", "meta-note-modal-text");
+          label.textContent = "Add note";
+          textarea.id = "meta-note-modal-text";
+          textarea.setAttribute("data-popup-note-text", "");
+          textarea.rows = 5;
+          actions.className = "meta-note-popup__actions";
+          closeButton.type = "button";
+          closeButton.setAttribute("data-popup-close", "");
+          closeButton.textContent = "Close";
+          saveButton.type = "submit";
+          saveButton.textContent = "Save note";
+          status.className = "meta-note-popup__status";
+          status.setAttribute("data-popup-status", "");
+          status.setAttribute("role", "status");
+          reference.className = "meta-note-popup__reference";
+          referenceTitle.textContent = "Latest notes";
+          notes.setAttribute("data-popup-notes", "");
+
+          header.append(title);
+          actions.append(closeButton, saveButton);
+          form.append(label, textarea, actions, status);
+          reference.append(referenceTitle, notes);
+          modal.append(header, form, reference);
+          overlay.append(modal);
+          document.body.append(overlay);
+          renderLatestNoteList(notes, []);
+
+          closeButton.addEventListener("click", closeMetaNoteModal);
+          overlay.addEventListener("click", (event) => {
+            if (event.target === overlay) {
+              closeMetaNoteModal();
+            }
+          });
+
+          form.addEventListener("submit", async (event) => {
+            event.preventDefault();
+            const text = textarea.value.trim();
+
+            if (!text) {
+              textarea.focus();
+              return;
+            }
+
+            status.textContent = "Saving...";
+
+            const response = await fetch("/api/meta-recommendation-notes", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                notificationId: context.notificationId,
+                text,
+                notification: {
+                  notificationId: context.notificationId,
+                  centreKey: context.centreKey,
+                  centreName: context.centreName,
+                  windowKey: context.windowKey,
+                  recommendation: context.recommendation,
+                  message: context.message,
+                  priority: context.priority,
+                  openPlaces: context.openPlaces,
+                  actionableWaitlist: context.actionableWaitlist,
+                  waitlistCount: context.waitlistCount,
+                  replacementPressure: context.replacementPressure,
+                  activeCampaignCount: context.activeCampaignCount,
+                  spend30d: context.spend30d,
+                },
+              }),
+            });
+
+            if (!response.ok) {
+              status.textContent = "Note could not be saved.";
+              return;
+            }
+
+            const payload = await response.json();
+
+            if (payload.note) {
+              overlay.dataset.refreshOnClose = "true";
+              syncSavedMetaNote(payload.note);
+              renderLatestNoteList(notes, [payload.note, ...Array.from(notes.querySelectorAll("[data-popup-note-id]")).map((item) => ({
+                submittedAt: item.querySelector("span")?.textContent || "",
+                text: item.querySelector("p")?.textContent || "",
+              }))]);
+              await loadLatestCentreNotes(modal, context);
+            }
+
+            textarea.value = "";
+            status.textContent = "Saved.";
+            textarea.focus();
+          });
+
+          void loadLatestCentreNotes(modal, context);
+          textarea.focus();
+        }
+
+        function askEmailSentConfirmation(centreName) {
+          return new Promise((resolve) => {
+            const dialog = document.createElement("div");
+            const message = document.createElement("p");
+            const actions = document.createElement("div");
+            const yesButton = document.createElement("button");
+            const noButton = document.createElement("button");
+            let resolved = false;
+
+            dialog.className = "email-confirm-dialog";
+            dialog.setAttribute("role", "dialog");
+            dialog.setAttribute("aria-modal", "true");
+            dialog.setAttribute("aria-label", "Email sent confirmation");
+            message.textContent = "Did you send the email to " + centreName + "?";
+            actions.className = "email-confirm-dialog__actions";
+            yesButton.type = "button";
+            yesButton.textContent = "Yes";
+            noButton.type = "button";
+            noButton.textContent = "No";
+            actions.append(noButton, yesButton);
+            dialog.append(message, actions);
+            document.body.append(dialog);
+
+            const finish = (value) => {
+              if (resolved) {
+                return;
+              }
+
+              resolved = true;
+              dialog.remove();
+              resolve(value);
+            };
+
+            yesButton.addEventListener("click", () => {
+              finish(true);
+            });
+            noButton.addEventListener("click", () => {
+              finish(false);
+            });
+            dialog.addEventListener("keydown", (event) => {
+              if (event.key === "Escape") {
+                finish(false);
+              }
+            });
+            noButton.focus();
+          });
+        }
+
         document.addEventListener("click", async (event) => {
           const target = event.target;
 
@@ -3194,14 +3778,17 @@ function renderBreakoutScript() {
             return;
           }
 
-          const analyticsEmail = target.closest("[data-analytics-email]");
+          const emailConfirm = target.closest("[data-email-confirm]");
 
-          if (analyticsEmail instanceof HTMLAnchorElement) {
-            const centreName = analyticsEmail.getAttribute("data-centre-name") || "this centre";
-            const notificationId = analyticsEmail.getAttribute("data-notification-id") || "";
+          if (emailConfirm instanceof HTMLAnchorElement) {
+            const centreName = emailConfirm.getAttribute("data-centre-name") || "this centre";
+            const notificationId =
+              emailConfirm.getAttribute("data-notification-id") ||
+              emailConfirm.closest("[data-meta-notification-id]")?.getAttribute("data-meta-notification-id") ||
+              "";
 
             setTimeout(async () => {
-              const confirmed = window.confirm("Did you send the email to " + centreName + "?");
+              const confirmed = await askEmailSentConfirmation(centreName);
 
               if (!confirmed || !notificationId) {
                 return;
@@ -3243,6 +3830,16 @@ function renderBreakoutScript() {
             if (notification instanceof HTMLElement && textInput instanceof HTMLTextAreaElement) {
               await saveMetaNote(notification, textInput);
             }
+
+            return;
+          }
+
+          const analyticsNoteButton = target.closest("[data-analytics-meta-note]");
+
+          if (analyticsNoteButton instanceof HTMLButtonElement) {
+            event.preventDefault();
+            event.stopPropagation();
+            openMetaNoteModal(getMetaNoteButtonContext(analyticsNoteButton));
 
             return;
           }
@@ -3385,6 +3982,7 @@ function renderBreakoutScript() {
             const href = row.getAttribute("data-row-href");
 
             if (href) {
+              selectAnalyticsRow(row);
               let openerNavigated = false;
 
               try {
@@ -3406,6 +4004,16 @@ function renderBreakoutScript() {
         window.addEventListener("afterprint", () => {
           delete document.documentElement.dataset.printMode;
         });
+        window.addEventListener("storage", (event) => {
+          if (event.key !== "marketing-helper-ai.meta-note-saved" || !event.newValue) {
+            return;
+          }
+
+          try {
+            const payload = JSON.parse(event.newValue);
+            syncSavedMetaNote(payload.note);
+          } catch (error) {}
+        });
 
         document.addEventListener("change", (event) => {
           const target = event.target;
@@ -3419,6 +4027,11 @@ function renderBreakoutScript() {
 
         document.addEventListener("keydown", async (event) => {
           const target = event.target;
+
+          if (event.key === "Escape" && document.querySelector("[data-meta-note-modal]")) {
+            closeMetaNoteModal();
+            return;
+          }
 
           if (!(target instanceof HTMLTextAreaElement) || !target.matches("[data-meta-note-text]")) {
             return;
@@ -3767,6 +4380,7 @@ export function renderAppShell(
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>${escapeHtml(documentTitle)}</title>
+    <link rel="icon" href="/favicon.ico" type="image/png" />
     <link rel="stylesheet" href="/vendor/bootstrap-icons.css" />
     <link rel="stylesheet" href="/app.css" />
   </head>

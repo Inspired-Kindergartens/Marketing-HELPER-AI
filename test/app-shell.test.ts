@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import { renderAppShell } from "../src/ui/app-shell.js";
+import { renderAppShell, renderMetaRecommendationNotePopup } from "../src/ui/app-shell.js";
 import type { WaitlistDiscoveryReport } from "../src/infocare/waitlist-report.js";
+import type { ServiceAnalyticsSnapshot } from "../src/infocare/models.js";
 import type { LatestSnapshotSet } from "../src/storage/analytics-store.js";
 import type { GoogleAnalyticsDailySnapshotView } from "../src/storage/google-analytics-store.js";
 import type { MetaAdsDashboardData } from "../src/storage/meta-store.js";
@@ -16,6 +17,48 @@ function readChartConfig(html: string, chartId: string) {
   assert.ok(match?.[1], `Missing chart config for ${chartId}`);
 
   return JSON.parse(match[1]) as { labels: string[]; datasets: { values: number[] }[] };
+}
+
+function windowCounts(value: number) {
+  return { "1W": value, "2W": value, "3W": value, "1M": value, "2M": value, "3M": value, "6M": value, "12M": value };
+}
+
+function buildSnapshot(
+  overrides: Partial<ServiceAnalyticsSnapshot> & Pick<ServiceAnalyticsSnapshot, "centreKey" | "serviceName">,
+): ServiceAnalyticsSnapshot {
+  return {
+    centreKey: overrides.centreKey,
+    serviceName: overrides.serviceName,
+    date: "2026-05-12",
+    enrolledCount: 20,
+    enrolledFteCount: 10,
+    bookedAverageDailyCount: 18,
+    bookedUtilisationRatio: 0.45,
+    enrolledUnder2Count: 0,
+    enrolledOver2Count: 20,
+    licensedCapacity: 40,
+    licensedUnder2Capacity: null,
+    licensedOver2Capacity: 40,
+    enrolmentRatio: 0.5,
+    waitlistCount: 0,
+    waitlistUnder2Count: 0,
+    waitlistUnder5Count: 0,
+    waitlistTurning5ThisYearCount: 0,
+    waitlistAged5PlusCount: 0,
+    waitlistUnknownAgeCount: 0,
+    waitlistOldestEntryDays: null,
+    waitlistAverageEntryDays: null,
+    knownLeavingCount: 0,
+    knownLeavingCountsByWindow: windowCounts(0),
+    agedOutCount: 0,
+    approachingFiveCount: 0,
+    approachingFiveCountsByWindow: windowCounts(0),
+    replacementPressure: 0,
+    waitlistCoverRatio: 0,
+    urgencyScore: 0,
+    urgencyBand: "Stable",
+    ...overrides,
+  };
 }
 
 test("recent demand chart labels remove Kindergarten and trailing name text", () => {
@@ -58,6 +101,12 @@ test("recent demand chart labels remove Kindergarten and trailing name text", ()
   assert.deepEqual(config.labels, ["Contract Centre"]);
   assert.deepEqual(config.datasets[0]?.values, [3]);
   assert.deepEqual(config.datasets[1]?.values, [5]);
+});
+
+test("app shell declares the favicon", () => {
+  const html = renderAppShell(null);
+
+  assert.match(html, /<link rel="icon" href="\/favicon\.ico" type="image\/png" \/>/);
 });
 
 test("analytics enrol/max shows enrolled headcount with booked utilisation percent", () => {
@@ -109,6 +158,239 @@ test("analytics enrol/max shows enrolled headcount with booked utilisation perce
   );
   assert.doesNotMatch(html, /59\/42 44%/);
   assert.doesNotMatch(html, /59\/42 140%/);
+});
+
+test("analytics waitlist coverage excludes under-two waitlist children when U2 is not offered", () => {
+  const snapshotSet: LatestSnapshotSet = {
+    runDate: "2026-05-12T00:00:00.000Z",
+    source: "test",
+    createdAt: "2026-05-12T00:00:00.000Z",
+    snapshots: [
+      buildSnapshot({
+        centreKey: 1,
+        serviceName: "No U2 Kindergarten",
+        waitlistCount: 30,
+        waitlistUnder2Count: 10,
+        waitlistUnder5Count: 20,
+        licensedUnder2Capacity: null,
+      }),
+      buildSnapshot({
+        centreKey: 2,
+        serviceName: "Mixed Age Centre",
+        waitlistCount: 30,
+        waitlistUnder2Count: 10,
+        waitlistUnder5Count: 20,
+        licensedUnder2Capacity: 10,
+      }),
+    ],
+  };
+
+  const html = renderAppShell(snapshotSet, { serviceSort: "asc" });
+
+  assert.match(html, /No U2 Kindergarten[\s\S]*?8\/30/);
+  assert.match(html, /Mixed Age Centre[\s\S]*?12\/30/);
+});
+
+test("analytics critical sort ranks leaving pressure against low waitlist cover", () => {
+  const snapshotSet: LatestSnapshotSet = {
+    runDate: "2026-05-12T00:00:00.000Z",
+    source: "test",
+    createdAt: "2026-05-12T00:00:00.000Z",
+    snapshots: [
+      buildSnapshot({
+        centreKey: 1,
+        serviceName: "High Leaving Covered",
+        waitlistCount: 20,
+        knownLeavingCount: 5,
+        knownLeavingCountsByWindow: windowCounts(5),
+        urgencyScore: 100,
+        urgencyBand: "Critical",
+      }),
+      buildSnapshot({
+        centreKey: 2,
+        serviceName: "Low Total Waitlist",
+        waitlistCount: 2,
+        knownLeavingCount: 4,
+        knownLeavingCountsByWindow: windowCounts(4),
+        urgencyScore: 10,
+        urgencyBand: "Stable",
+      }),
+      buildSnapshot({
+        centreKey: 3,
+        serviceName: "Same Actionable Higher Total",
+        waitlistCount: 3,
+        knownLeavingCount: 4,
+        knownLeavingCountsByWindow: windowCounts(4),
+        urgencyScore: 20,
+        urgencyBand: "Stable",
+      }),
+    ],
+  };
+
+  const html = renderAppShell(snapshotSet, { selectedWindowKey: "3M" });
+
+  assert.ok(
+    html.indexOf("Low Total Waitlist") < html.indexOf("Same Actionable Higher Total"),
+  );
+  assert.ok(
+    html.indexOf("Same Actionable Higher Total") < html.indexOf("High Leaving Covered"),
+  );
+});
+
+test("analytics critical sort treats estimated open places as lower weight than leaving", () => {
+  const snapshotSet: LatestSnapshotSet = {
+    runDate: "2026-05-12T00:00:00.000Z",
+    source: "test",
+    createdAt: "2026-05-12T00:00:00.000Z",
+    snapshots: [
+      buildSnapshot({
+        centreKey: 1,
+        serviceName: "High EST No Leaving",
+        licensedCapacity: 40,
+        bookedAverageDailyCount: 15,
+        waitlistCount: 0,
+        knownLeavingCount: 0,
+        knownLeavingCountsByWindow: windowCounts(0),
+      }),
+      buildSnapshot({
+        centreKey: 2,
+        serviceName: "Leaving Gap Lower EST",
+        licensedCapacity: 40,
+        bookedAverageDailyCount: 40,
+        waitlistCount: 0,
+        knownLeavingCount: 2,
+        knownLeavingCountsByWindow: windowCounts(2),
+      }),
+    ],
+  };
+
+  const html = renderAppShell(snapshotSet, { selectedWindowKey: "3M" });
+
+  assert.ok(
+    html.indexOf("Leaving Gap Lower EST") < html.indexOf("High EST No Leaving"),
+  );
+});
+
+test("analytics row clicks update selected row class before navigation", () => {
+  const html = renderAppShell(null);
+
+  assert.match(html, /function selectAnalyticsRow\(row\)/);
+  assert.match(html, /selectedRow\.classList\.remove\("analytics-table__row--selected"\)/);
+  assert.match(html, /row\.classList\.add\("analytics-table__row--selected"\)/);
+  assert.match(html, /selectAnalyticsRow\(row\);\s*let openerNavigated = false;/);
+});
+
+test("email buttons use shared yes no confirmation flow", () => {
+  const snapshotSet: LatestSnapshotSet = {
+    runDate: "2026-05-12T00:00:00.000Z",
+    source: "test",
+    createdAt: "2026-05-12T00:00:00.000Z",
+    snapshots: [
+      buildSnapshot({
+        centreKey: 1,
+        serviceName: "Te Puke Kindergarten",
+        enrolledCount: 20,
+        licensedCapacity: 40,
+        waitlistCount: 0,
+      }),
+    ],
+  };
+  const html = renderAppShell(snapshotSet, {
+    centreContacts: [
+      {
+        kindergarten: "Te Puke Kindergarten",
+        headTeacher: "Teacher",
+        administrator: "Admin",
+        email: "tepuke@example.test",
+      },
+    ],
+  });
+
+  assert.match(html, /analytics-table__email-action" data-email-confirm/);
+  assert.match(html, /meta-ads-notification__email" data-email-confirm/);
+  assert.match(html, /function askEmailSentConfirmation\(centreName\)/);
+  assert.match(html, /yesButton\.textContent = "Yes"/);
+  assert.match(html, /noButton\.textContent = "No"/);
+  assert.doesNotMatch(html, /window\.confirm\("Did you send the email/);
+});
+
+test("analytics table note buttons open the shared meta ads note flow", () => {
+  const snapshotSet: LatestSnapshotSet = {
+    runDate: "2026-05-12T00:00:00.000Z",
+    source: "test",
+    createdAt: "2026-05-12T00:00:00.000Z",
+    snapshots: [
+      buildSnapshot({
+        centreKey: 1,
+        serviceName: "Te Puke Kindergarten",
+        enrolledCount: 20,
+        licensedCapacity: 40,
+        waitlistCount: 0,
+      }),
+    ],
+  };
+  const html = renderAppShell(snapshotSet);
+
+  assert.match(html, /<th class="analytics-table__action">[\s\S]*Note/);
+  assert.match(html, /class="analytics-table__note-action" data-analytics-meta-note/);
+  assert.match(html, /data-notification-id="meta-ads:3M:1:needs-ads"/);
+  assert.match(html, /data-centre-name="Te Puke Kindergarten"/);
+  assert.match(html, /data-centre-key="1"/);
+  assert.match(html, /data-window-key="3M"/);
+  assert.match(html, /data-replacement-pressure/);
+  assert.match(html, /const analyticsNoteButton = target\.closest\("\[data-analytics-meta-note\]"\)/);
+  assert.match(html, /function openMetaNoteModal\(context\)/);
+  assert.match(html, /fetch\("\/api\/meta-recommendation-notes\/latest\?centre="/);
+  assert.match(html, /openMetaNoteModal\(getMetaNoteButtonContext\(analyticsNoteButton\)\)/);
+  assert.match(html, /modal\.dataset\.refreshOnClose === "true"/);
+  assert.match(html, /window\.location\.reload\(\)/);
+  assert.match(html, /overlay\.dataset\.refreshOnClose = "true"/);
+  assert.doesNotMatch(html, /new URL\("\/meta-note-popup", window\.location\.origin\)/);
+});
+
+test("meta recommendation note popup uses shared note API and shows latest notes", () => {
+  const html = renderMetaRecommendationNotePopup({
+    notificationId: "meta-ads:3M:1:needs-ads",
+    centreName: "Te Puke Kindergarten",
+    heading: "Needs ads",
+    message: "Te Puke Kindergarten: 20 open, 0/0 actionable waitlist.",
+    notes: [
+      {
+        id: 3,
+        notificationId: "meta-ads:3M:1:needs-ads",
+        text: "Latest note",
+        submittedAt: "2026-05-12T12:00:00.000Z",
+        deletedAt: null,
+      },
+      {
+        id: 2,
+        notificationId: "meta-ads:3M:1:needs-ads",
+        text: "Previous note",
+        submittedAt: "2026-05-11T12:00:00.000Z",
+        deletedAt: null,
+      },
+      {
+        id: 1,
+        notificationId: "meta-ads:3M:1:needs-ads",
+        text: "Older note",
+        submittedAt: "2026-05-10T12:00:00.000Z",
+        deletedAt: null,
+      },
+    ],
+  });
+
+  assert.match(html, /<body class="meta-note-popup-page">/);
+  assert.match(html, /Te Puke Kindergarten/);
+  assert.doesNotMatch(html, /Meta Ads note/);
+  assert.doesNotMatch(html, />Needs ads</);
+  assert.doesNotMatch(html, /20 open, 0\/0 actionable waitlist/);
+  assert.match(html, /Latest notes/);
+  assert.doesNotMatch(html, /Last three notes/);
+  assert.match(html, /Latest note/);
+  assert.match(html, /Previous note/);
+  assert.match(html, /Older note/);
+  assert.match(html, /fetch\("\/api\/meta-recommendation-notes"/);
+  assert.match(html, /notificationId: context\.notificationId, text, notification: context\.notification/);
 });
 
 test("google analytics most visited pages can open as focused breakout section", () => {
@@ -614,6 +896,14 @@ test("google analytics print styles hide stats and volume column", () => {
   assert.match(css, /word-break: keep-all !important;/);
   assert.match(css, /border: 0 !important;/);
   assert.match(css, /border-bottom: 1px solid #d0d0d0 !important;/);
+});
+
+test("meta ads table headers stick flush below the panel title", () => {
+  const css = readFileSync(new URL("../src/ui/app.css", import.meta.url), "utf8");
+
+  assert.match(css, /\.panel--meta-ads \.panel__body\s*\{[\s\S]*?padding-top: 0;/);
+  assert.match(css, /\.meta-ads-panel\s*\{[\s\S]*?padding-top: 10px;/);
+  assert.match(css, /\.meta-ads-table th\s*\{[\s\S]*?position: sticky;[\s\S]*?top: 0;/);
 });
 
 test("print styles scope dashboard, chat, and recent demand pages", () => {

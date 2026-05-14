@@ -70,6 +70,28 @@ test("waitlist age falls back to starting_date only when application_date is abs
   assert.equal(snapshot.waitlistAverageEntryDays, 10);
 });
 
+test("waitlist snapshot counts under-two children separately", () => {
+  const snapshot = computeServiceAnalyticsSnapshot(
+    buildBundle([
+      {
+        child_key: 1,
+        birth_date: "2025-01-01",
+      },
+      {
+        child_key: 2,
+        birth_date: "2022-01-01",
+      },
+    ]),
+    40,
+    { licensedCapacity: 40, source: "api" },
+    new Date("2026-05-01T00:00:00.000Z"),
+  );
+
+  assert.equal(snapshot.waitlistCount, 2);
+  assert.equal(snapshot.waitlistUnder2Count, 1);
+  assert.equal(snapshot.waitlistUnder5Count, 2);
+});
+
 test("enrolment ratio uses enrolled headcount against licensed capacity", () => {
   const snapshot = computeServiceAnalyticsSnapshot(
     buildBundle(
