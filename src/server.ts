@@ -4,9 +4,13 @@ import { join } from "node:path";
 import Fastify from "fastify";
 import { z } from "zod";
 
+import { buildAiChatMessages, buildDeterministicChatAnswer, type AiChatHistoryMessageInput } from "./ai/chat.js";
+import { runLocalChat, streamLocalChat, AiClientError } from "./ai/client.js";
+import { buildAiDashboardContext, buildDashboardSystemPrompt } from "./ai/context.js";
+import { readAiConfig } from "./ai/config.js";
 import { ensureDailyAnalyticsSnapshot, refreshAnalyticsSnapshot } from "./analytics/snapshot.js";
 import { resolveWindowKey, resolveWindowStartDate } from "./analytics/windows.js";
-import { prisma } from "./db";
+import { prisma } from "./db.js";
 import { getGoogleAnalyticsConfig, readGoogleAnalyticsConfigStatus } from "./google-analytics/config.js";
 import {
   ensureDailyGoogleAnalyticsSnapshot,
@@ -22,7 +26,6 @@ import { refreshMetaAds } from "./meta/refresh.js";
 import {
   readCentreSnapshotHistory,
   readLatestAnalyticsSnapshotSet,
-  readManualCentreCapacityByKey,
 } from "./storage/analytics-store.js";
 import { readCentreContactList } from "./storage/centre-contact-store.js";
 import {
@@ -50,6 +53,10 @@ import {
   restoreMetaRecommendationNote,
   softDeleteMetaRecommendationNote,
 } from "./storage/meta-recommendation-notes-store.js";
+import {
+  readMetaEmailContent,
+  upsertMetaEmailContent,
+} from "./storage/meta-email-content-store.js";
 import {
   renderAppShell,
   renderMetaRecommendationNotePopup,
@@ -83,9 +90,14 @@ const envSchema = z.object({
   GOOGLE_ANALYTICS_OAUTH_PATH: z.string().trim().default("OAuth.json"),
   GOOGLE_ANALYTICS_TOKEN_PATH: z.string().trim().default("google-oauth-token.json"),
   GOOGLE_ANALYTICS_REFRESH_TOKEN: z.string().trim().default(""),
+  AI_PROVIDER: z.enum(["builtin", "ollama"]).default("builtin"),
+  AI_BASE_URL: z.string().url().default("http://127.0.0.1:11434"),
+  AI_CHAT_MODEL: z.string().trim().default("llama3.1:8b"),
+  AI_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120000).default(60000),
 });
 
 const env = envSchema.parse(process.env);
+const aiConfig = readAiConfig(env);
 getInfocareEnv(process.env);
 const metaConfigStatus = readMetaConfigStatus(env);
 const googleAnalyticsConfigStatus = readGoogleAnalyticsConfigStatus(env);
@@ -379,10 +391,6 @@ app.get<{ Querystring: { centre?: string; window?: string; panel?: string; sort?
           fromDate: resolveWindowStartDate(latestRunDate, "12M"),
           toDate: latestRunDate,
         });
-  const manualCapacity =
-    resolvedSelectedCentreKey == null
-      ? null
-      : await readManualCentreCapacityByKey(resolvedSelectedCentreKey);
   const waitlistReport = await readWaitlistDiscoveryReport();
   let metaAdsDashboardData = await readMetaAdsDashboardData({
     fromDate: windowStartDate,
@@ -496,7 +504,6 @@ app.get<{ Querystring: { centre?: string; window?: string; panel?: string; sort?
         focusPanelId,
         centreHistory,
         annualHistory,
-        manualCapacity,
         waitlistSnapshotSet: latestSnapshotSet,
         waitlistReport,
         waitlistSection: request.query?.waitlistSection ?? null,
@@ -701,6 +708,53 @@ app.post<{ Body: { notificationId?: string; text?: string; notification?: Partia
   return reply.code(201).send({ note });
 });
 
+app.get<{ Params: { centreKey: string } }>("/api/meta-email-content/:centreKey", async (request, reply) => {
+  const centreKey = Number.parseInt(request.params.centreKey, 10);
+
+  if (!Number.isInteger(centreKey) || centreKey <= 0) {
+    reply.code(400);
+
+    return { error: "Valid centre is required." };
+  }
+
+  const content = await readMetaEmailContent(centreKey);
+
+  return {
+    content: content ?? {
+      centreKey,
+      headingText: "",
+      primaryText: "",
+      updatedAt: null,
+    },
+  };
+});
+
+app.post<{ Params: { centreKey: string }; Body: { headingText?: string; primaryText?: string } }>("/api/meta-email-content/:centreKey", async (request, reply) => {
+  const centreKey = Number.parseInt(request.params.centreKey, 10);
+  const headingText = String(request.body?.headingText ?? "").trim();
+  const primaryText = String(request.body?.primaryText ?? "").trim();
+
+  if (!Number.isInteger(centreKey) || centreKey <= 0) {
+    reply.code(400);
+
+    return { error: "Valid centre is required." };
+  }
+
+  if (headingText.length > 500 || primaryText.length > 4000) {
+    reply.code(400);
+
+    return { error: "Email text is too long." };
+  }
+
+  const content = await upsertMetaEmailContent({
+    centreKey,
+    headingText,
+    primaryText,
+  });
+
+  return reply.code(201).send({ content });
+});
+
 app.post<{ Params: { id: string } }>("/api/meta-recommendation-notes/:id/delete", async (request, reply) => {
   const id = Number.parseInt(request.params.id, 10);
 
@@ -727,6 +781,220 @@ app.post<{ Params: { id: string } }>("/api/meta-recommendation-notes/:id/restore
   const note = await restoreMetaRecommendationNote(id);
 
   return { note };
+});
+
+app.post<{
+  Body: {
+    prompt?: string;
+    centreKey?: number | string | null;
+    windowKey?: string | null;
+    messages?: AiChatHistoryMessageInput[];
+  };
+}>("/api/ai/chat", async (request, reply) => {
+  const prompt = String(request.body?.prompt ?? "").trim();
+  const centreKey = Number.parseInt(String(request.body?.centreKey ?? ""), 10);
+  const selectedCentreKey = Number.isInteger(centreKey) && centreKey > 0 ? centreKey : null;
+  const selectedWindowKey = resolveWindowKey(request.body?.windowKey);
+
+  if (!prompt) {
+    reply.code(400);
+
+    return { error: "Prompt is required." };
+  }
+
+  if (prompt.length > 2000) {
+    reply.code(400);
+
+    return { error: "Prompt is too long. Keep it under 2,000 characters." };
+  }
+
+  const latestSnapshotSet = await readLatestAnalyticsSnapshotSet();
+  const latestRunDate = latestSnapshotSet ? new Date(latestSnapshotSet.runDate) : new Date();
+  const windowStartDate = resolveWindowStartDate(latestRunDate, selectedWindowKey);
+  const metaAdsDashboardData = await readMetaAdsDashboardData({
+    fromDate: windowStartDate,
+    toDate: latestRunDate,
+  });
+  const googleAnalyticsSnapshot = await readLatestGoogleAnalyticsDailySnapshot(env.GOOGLE_ANALYTICS_PROPERTY_ID);
+  const selectedCentreNotes =
+    selectedCentreKey == null
+      ? []
+      : await readLatestMetaRecommendationNotesForCentre(selectedCentreKey, 10);
+  const context = buildAiDashboardContext({
+    snapshotSet: latestSnapshotSet,
+    selectedCentreKey,
+    selectedWindowKey,
+    metaAdsDashboardData,
+    googleAnalyticsSnapshot,
+    selectedCentreNotes,
+  });
+
+  const deterministicAnswer = buildDeterministicChatAnswer(context, prompt);
+
+  if (deterministicAnswer && aiConfig.AI_PROVIDER === "builtin") {
+    return {
+      answer: deterministicAnswer,
+      model: "built-in campaign timing",
+      context: {
+        selectedCentre: context.selectedCentre?.serviceName ?? null,
+        selectedWindowKey: context.selectedWindowKey,
+        snapshotCreatedAt: context.snapshot?.createdAt ?? null,
+      },
+    };
+  }
+
+  try {
+    const answer = await runLocalChat(
+      aiConfig,
+      buildAiChatMessages(buildDashboardSystemPrompt(), context, prompt, request.body?.messages),
+    );
+
+    return {
+      answer,
+      model: aiConfig.AI_CHAT_MODEL,
+      context: {
+        selectedCentre: context.selectedCentre?.serviceName ?? null,
+        selectedWindowKey: context.selectedWindowKey,
+        snapshotCreatedAt: context.snapshot?.createdAt ?? null,
+      },
+    };
+  } catch (error) {
+    if (deterministicAnswer) {
+      return {
+        answer: deterministicAnswer,
+        model: "built-in campaign timing fallback",
+        context: {
+          selectedCentre: context.selectedCentre?.serviceName ?? null,
+          selectedWindowKey: context.selectedWindowKey,
+          snapshotCreatedAt: context.snapshot?.createdAt ?? null,
+        },
+      };
+    }
+
+    const statusCode = error instanceof AiClientError ? error.statusCode : 502;
+
+    reply.code(statusCode);
+
+    return {
+      error:
+        error instanceof Error
+          ? error.message
+          : "Local AI request failed.",
+      setup:
+        aiConfig.AI_PROVIDER === "ollama"
+          ? `Start a local Ollama server and make sure model "${aiConfig.AI_CHAT_MODEL}" is available, or update AI_CHAT_MODEL in .env.`
+          : "Use AI_PROVIDER=ollama only when a local Ollama runtime is installed and reachable.",
+    };
+  }
+});
+
+app.post<{
+  Body: {
+    prompt?: string;
+    centreKey?: number | string | null;
+    windowKey?: string | null;
+    messages?: AiChatHistoryMessageInput[];
+  };
+}>("/api/ai/chat/stream", async (request, reply) => {
+  const prompt = String(request.body?.prompt ?? "").trim();
+  const centreKey = Number.parseInt(String(request.body?.centreKey ?? ""), 10);
+  const selectedCentreKey = Number.isInteger(centreKey) && centreKey > 0 ? centreKey : null;
+  const selectedWindowKey = resolveWindowKey(request.body?.windowKey);
+
+  if (!prompt) {
+    reply.code(400);
+
+    return { error: "Prompt is required." };
+  }
+
+  if (prompt.length > 2000) {
+    reply.code(400);
+
+    return { error: "Prompt is too long. Keep it under 2,000 characters." };
+  }
+
+  const latestSnapshotSet = await readLatestAnalyticsSnapshotSet();
+  const latestRunDate = latestSnapshotSet ? new Date(latestSnapshotSet.runDate) : new Date();
+  const windowStartDate = resolveWindowStartDate(latestRunDate, selectedWindowKey);
+  const metaAdsDashboardData = await readMetaAdsDashboardData({
+    fromDate: windowStartDate,
+    toDate: latestRunDate,
+  });
+  const googleAnalyticsSnapshot = await readLatestGoogleAnalyticsDailySnapshot(env.GOOGLE_ANALYTICS_PROPERTY_ID);
+  const selectedCentreNotes =
+    selectedCentreKey == null
+      ? []
+      : await readLatestMetaRecommendationNotesForCentre(selectedCentreKey, 10);
+  const context = buildAiDashboardContext({
+    snapshotSet: latestSnapshotSet,
+    selectedCentreKey,
+    selectedWindowKey,
+    metaAdsDashboardData,
+    googleAnalyticsSnapshot,
+    selectedCentreNotes,
+  });
+  const messages = buildAiChatMessages(buildDashboardSystemPrompt(), context, prompt, request.body?.messages);
+  const deterministicAnswer = buildDeterministicChatAnswer(context, prompt);
+
+  reply.raw.writeHead(200, {
+    "Content-Type": "text/event-stream; charset=utf-8",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+  });
+
+  const writeEvent = (event: string, data: unknown) => {
+    reply.raw.write(`event: ${event}\n`);
+    reply.raw.write(`data: ${JSON.stringify(data)}\n\n`);
+  };
+
+  const writeAnswerChunks = (answer: string) => {
+    for (const chunk of answer.split(/(\s+)/).filter(Boolean)) {
+      writeEvent("chunk", { chunk });
+    }
+  };
+
+  writeEvent("meta", {
+    model: aiConfig.AI_CHAT_MODEL,
+    context: {
+      selectedCentre: context.selectedCentre?.serviceName ?? null,
+      selectedCentreKey: context.selectedCentre?.centreKey ?? null,
+      selectedWindowKey: context.selectedWindowKey,
+      snapshotCreatedAt: context.snapshot?.createdAt ?? null,
+    },
+  });
+
+  try {
+    if (deterministicAnswer && aiConfig.AI_PROVIDER === "builtin") {
+      writeAnswerChunks(deterministicAnswer);
+      writeEvent("done", {});
+      return;
+    }
+
+    for await (const chunk of streamLocalChat(aiConfig, messages)) {
+      writeEvent("chunk", { chunk });
+    }
+
+    writeEvent("done", {});
+  } catch (error) {
+    if (deterministicAnswer) {
+      writeAnswerChunks(deterministicAnswer);
+      writeEvent("done", {});
+      return;
+    }
+
+    writeEvent("error", {
+      error:
+        error instanceof Error
+          ? error.message
+          : "Local AI request failed.",
+      setup:
+        aiConfig.AI_PROVIDER === "ollama"
+          ? `Start a local Ollama server and make sure model "${aiConfig.AI_CHAT_MODEL}" is available, or update AI_CHAT_MODEL in .env.`
+          : "Use AI_PROVIDER=ollama only when a local Ollama runtime is installed and reachable.",
+    });
+  } finally {
+    reply.raw.end();
+  }
 });
 
 app.get<{ Querystring: { centre?: string; window?: string; sort?: string } }>("/actions/refresh-meta-ads", async (request, reply) => {

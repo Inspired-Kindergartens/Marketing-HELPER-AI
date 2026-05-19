@@ -5,9 +5,11 @@ node_modules
 dist
 .DS_Store
 *.log
+.persistent-supervisor.pid
 uploads
 .prisma
 generated
+.local
 /INFOCARE/
 INFOCARE-*
 /META/

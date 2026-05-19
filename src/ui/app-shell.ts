@@ -1,7 +1,6 @@
 import type {
   CentreSnapshotHistoryEntry,
   LatestSnapshotSet,
-  ManualCentreCapacity,
 } from "../storage/analytics-store.js";
 import { getWindowOption, resolveWindowKey, type WindowKey, WINDOW_OPTIONS } from "../analytics/windows.js";
 import type { WaitlistDiscoveryReport } from "../infocare/waitlist-report.js";
@@ -43,7 +42,7 @@ const PANEL_DEFINITIONS = [
   { id: "waitlist", title: "Waitlist Quality", className: "panel--waitlist" },
   { id: "meta-ads", title: "META Ads", className: "panel--meta-ads" },
   { id: "google-analytics", title: "Google Analytics", className: "panel--google-analytics" },
-  { id: "chat", title: "AI Chat", className: "panel--chat" },
+  { id: "chat", title: "AI Chat with Beep Beep", className: "panel--chat" },
 ] as const;
 
 const PRIORITY_LEAVING_WAITLIST_GAP_WEIGHT = 0.65;
@@ -53,6 +52,34 @@ const PRIORITY_LOW_WAITLIST_WEIGHT = 0.05;
 const PRIORITY_LEAVING_CAP = 10;
 const PRIORITY_ESTIMATED_OPEN_PLACES_CAP = 20;
 const PRIORITY_LOW_WAITLIST_CAP = 10;
+const META_CAMPAIGN_EMAIL_TEMPLATE = [
+  "Kia ora <head_teacher> and <administrator>,",
+  "",
+  "I will be running Facebook adverts for tamariki enrolments for <kindergarten_name> Kindergarten and I would like to open a korero of how this may look for your centre. This advert focuses on enrolling tamariki but it can't hurt if we also have a top-up of our waitlists for our services. If you want to participate and have an input then read on otherwise let me know and I will publish this as is.",
+  "",
+  "The next step is to approve your advert campaign before going live and I have designed an advert that I think would work well for <kindergarten_name> - 3 images for different placements but one advert campaign (see attached and text below):",
+  "",
+  "𝐇𝐞𝐚𝐝𝐢𝐧𝐠:",
+  "<heading_text>",
+  "",
+  "𝐏𝐫𝐢𝐦𝐚𝐫𝐲 𝐓𝐞𝐱𝐭:",
+  "30 Hours Free ECE!",
+  "Welcome to <kindergarten_name>. <primary_text>",
+].join("\n");
+const META_FOLLOW_UP_EMAIL_TEMPLATE = [
+  "Kia ora <head_teacher> and <administrator>,",
+  "",
+  "Just a reminder that I would like to run a Facebook advert for tamariki enrolments for you kindergarten and if I don't hear back from you by <add_three_business_days_from_today> I will begin running your advert. If at anytime you are not comfortable with the advert then let me know and I can stop your advert at anytime.",
+  "",
+  "A reminder of what your advert will look like is (see attached and text below):",
+  "",
+  "𝐇𝐞𝐚𝐝𝐢𝐧𝐠:",
+  "<heading_text>",
+  "",
+  "𝐏𝐫𝐢𝐦𝐚𝐫𝐲 𝐓𝐞𝐱𝐭:",
+  "30 Hours Free ECE!",
+  "Welcome to <kindergarten_name>. <primary_text>",
+].join("\n");
 
 type AppShellOptions = {
   selectedCentreKey?: number | null;
@@ -61,7 +88,6 @@ type AppShellOptions = {
   focusPanelId?: string | null;
   centreHistory?: CentreSnapshotHistoryEntry[];
   annualHistory?: CentreSnapshotHistoryEntry[];
-  manualCapacity?: ManualCentreCapacity | null;
   waitlistSnapshotSet?: LatestSnapshotSet | null;
   waitlistReport?: WaitlistDiscoveryReport | null;
   waitlistSection?: string | null;
@@ -402,7 +428,10 @@ function buildOverviewStatement(row: AnalyticsRow, windowKey: WindowKey) {
   const actionableWaitlistCount = getActionableWaitlistCount(row);
   const scopedReplacementPressure = getScopedReplacementPressure(row, windowKey);
   const availablePlaces = row.licensedCapacity - row.enrolledCount;
-  const fteGap = row.licensedCapacity - row.enrolledFteCount;
+
+  if (actionableWaitlistCount === 0 && scopedReplacementPressure >= 3) {
+    return "The main watch-out is upcoming enrolment changes with no actionable waitlist cover. This centre should be prioritised for campaign planning and early enquiry generation.";
+  }
 
   if (row.urgencyBand === "Stable") {
     return "This centre looks steady at the moment. Keep it on the watchlist, but it does not need to be treated as urgent.";
@@ -420,7 +449,7 @@ function buildOverviewStatement(row: AnalyticsRow, windowKey: WindowKey) {
     return "The main watch-out is upcoming enrolment changes with only light waitlist cover. This centre may need early follow-up to keep future spaces filled.";
   }
 
-  if (availablePlaces >= 5 || fteGap >= 3) {
+  if (availablePlaces >= 5) {
     return "There may be enrolment opportunities here. The best fit will be families whose preferred days, times, and age group line up with current availability.";
   }
 
@@ -458,11 +487,14 @@ function buildStatusLead(row: AnalyticsRow, reasonText: string | null) {
 function buildOpeningNarrative(row: AnalyticsRow, windowKey: WindowKey) {
   const reasons = buildRankingReasons(row, windowKey);
   const scopedReplacementPressure = getScopedReplacementPressure(row, windowKey);
+  const actionableWaitlistCount = getActionableWaitlistCount(row);
   const overview = buildOverviewStatement(row, windowKey).replace(/\.$/, "");
 
   const phrases = reasons.map((reason) => {
     if (reason === "low waitlist cover") {
-      return "the short-term waitlist is still fairly light";
+      return actionableWaitlistCount === 0
+        ? "there is no actionable waitlist cover"
+        : `there ${actionableWaitlistCount === 1 ? "is" : "are"} only ${formatChildCount(actionableWaitlistCount)} in the actionable waitlist`;
     }
 
     if (reason === "high leaving pressure") {
@@ -495,7 +527,48 @@ function buildOpeningNarrative(row: AnalyticsRow, windowKey: WindowKey) {
           ? `${phrases[0]} and ${phrases[1]}`
           : `${phrases[0]}, ${phrases[1]}, and ${phrases[2]}`;
 
-  return `${buildStatusLead(row, reasonText)} ${overview}:`;
+  const statusLead =
+    actionableWaitlistCount === 0 && scopedReplacementPressure >= 3
+      ? reasonText
+        ? `${row.serviceName} needs priority attention because ${reasonText}.`
+        : `${row.serviceName} needs priority attention.`
+      : actionableWaitlistCount <= 3 && scopedReplacementPressure >= 3
+        ? reasonText
+          ? `${row.serviceName} needs priority attention because ${reasonText}.`
+          : `${row.serviceName} needs priority attention.`
+      : buildStatusLead(row, reasonText);
+
+  return `${statusLead} ${overview}:`;
+}
+
+function normaliseGuidanceLead(value: string) {
+  return value.replace(/:$/, ".");
+}
+
+function isGuidanceCoveredByLead(guidance: string, lead: string) {
+  const leadText = lead.toLowerCase();
+  const guidanceText = guidance.toLowerCase();
+
+  if (
+    guidanceText.includes("waitlist") &&
+    (leadText.includes("waitlist") || leadText.includes("demand"))
+  ) {
+    return true;
+  }
+
+  if (
+    (guidanceText.includes("room for new enrolments") ||
+      guidanceText.includes("enrolment opportunities") ||
+      guidanceText.includes("new places")) &&
+    (leadText.includes("enrolment opportunities") ||
+      leadText.includes("new places") ||
+      leadText.includes("under-2") ||
+      leadText.includes("over-2"))
+  ) {
+    return true;
+  }
+
+  return false;
 }
 
 function formatTimestamp(value: string) {
@@ -587,10 +660,6 @@ function formatCountWord(value: number) {
 
 function formatChildCount(value: number) {
   return `${formatCountWord(value)} ${value === 1 ? "child" : "children"}`;
-}
-
-function formatFte(value: number) {
-  return Number(value.toFixed(1)).toString();
 }
 
 function isLargeHeadcountGap(row: AnalyticsRow) {
@@ -750,7 +819,15 @@ function joinGreetingNames(names: string[]) {
   return `${filteredNames.slice(0, -1).join(", ")} and ${filteredNames[filteredNames.length - 1]}`;
 }
 
-function buildMetaAdvertEmailHref(contact: CentreContact) {
+function buildKindergartenName(serviceName: string) {
+  return serviceName.replace(/\s*Kindergarten[\s\S]*$/i, "").trim() || serviceName;
+}
+
+function buildMailtoHref(email: string, subject: string, body: string) {
+  return `mailto:${email.replace(/[\r\n]/g, "")}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+}
+
+function buildMetaInitiateEmailHref(contact: CentreContact) {
   const greetingNames = joinGreetingNames([contact.headTeacher, contact.administrator]);
   const subject = `Facebook advert for enrolments`;
   const body = [
@@ -763,7 +840,21 @@ function buildMetaAdvertEmailHref(contact: CentreContact) {
     "Please let me know your thoughts, and whether this is something you would be interested in exploring further.",
   ].join("\n");
 
-  return `mailto:${contact.email.replace(/[\r\n]/g, "")}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+  return buildMailtoHref(contact.email, subject, body);
+}
+
+function renderMetaEmailActionAttributes(contact: CentreContact, row: AnalyticsRow, notificationId: string) {
+  return [
+    "data-email-confirm",
+    `data-notification-id="${escapeHtml(notificationId)}"`,
+    `data-centre-key="${row.centreKey}"`,
+    `data-centre-name="${escapeHtml(row.serviceName)}"`,
+    `data-kindergarten-name="${escapeHtml(buildKindergartenName(row.serviceName))}"`,
+    `data-contact-email="${escapeHtml(contact.email)}"`,
+    `data-head-teacher="${escapeHtml(contact.headTeacher)}"`,
+    `data-administrator="${escapeHtml(contact.administrator)}"`,
+    `data-initiate-href="${escapeHtml(buildMetaInitiateEmailHref(contact))}"`,
+  ].join(" ");
 }
 
 type WaitlistChartRow = {
@@ -1666,54 +1757,6 @@ function buildSeasonalityNarrative(history: CentreSnapshotHistoryEntry[]) {
   return `Looking forward over the next 12 months, ${monthLabels.join(", ")} look like the strongest pressure months to watch based on the highest average historical mix of waitlist, turnover, and unfilled places. Treat that as directional rather than predictive.`;
 }
 
-function buildCapacityNarrative(manualCapacity: ManualCentreCapacity | null | undefined) {
-  if (!manualCapacity) {
-    return "Age-band capacity split not recorded.";
-  }
-
-  if ((manualCapacity.maxU2 ?? 0) > 0 && (manualCapacity.maxO2 ?? 0) > 0) {
-    return `Under 2 with ${manualCapacity.maxU2} capacity; Over 2 with ${manualCapacity.maxO2} capacity.`;
-  }
-
-  if ((manualCapacity.maxU2 ?? 0) > 0) {
-    return `Under 2 with ${manualCapacity.maxU2} capacity.`;
-  }
-
-  if ((manualCapacity.maxO2 ?? 0) > 0) {
-    return `Over 2 with ${manualCapacity.maxO2} capacity.`;
-  }
-
-  return "Age-band capacity split not recorded.";
-}
-
-function buildLeavingNarrative(row: AnalyticsRow, windowKey: WindowKey) {
-  const label = formatWindowPeriodLabel(windowKey);
-  const scopedKnownLeavingCount = getScopedKnownLeavingCount(row, windowKey);
-  const scopedApproachingFiveCount = getScopedApproachingFiveCount(row, windowKey);
-
-  return `There are currently ${formatChildCount(scopedKnownLeavingCount)} indicated as Leaving within the selected ${label}. There are ${formatChildCount(scopedApproachingFiveCount)} turning five years old within that same time frame. There are ${formatChildCount(row.agedOutCount)} who are already five or older.`;
-}
-
-function buildFteGuidance(row: AnalyticsRow) {
-  const availablePlaces = row.licensedCapacity - row.enrolledCount;
-  const fteGap = row.licensedCapacity - row.enrolledFteCount;
-  const actionableWaitlistCount = getActionableWaitlistCount(row);
-
-  if (availablePlaces >= 5) {
-    return `${row.serviceName} appears to have room for new enrolments, with about ${availablePlaces} places showing and booked hours closer to ${formatFte(row.enrolledFteCount)} full-time places.`;
-  }
-
-  if (actionableWaitlistCount >= 20) {
-    return `${row.serviceName} has a healthy waitlist and should begin contacting those families now, especially where their preferred days line up with current availability.`;
-  }
-
-  if (fteGap >= 3) {
-    return `${row.serviceName} may still have enrolment opportunities, especially for families whose preferred days and times match current availability.`;
-  }
-
-  return `${row.serviceName} looks fairly full once current enrolments and booked hours are considered, so any new places should be handled deliberately.`;
-}
-
 function buildWaitlistGuidance(row: AnalyticsRow, windowKey: WindowKey) {
   const actionableWaitlistCount = getActionableWaitlistCount(row);
   const scopedReplacementPressure = getScopedReplacementPressure(row, windowKey);
@@ -1797,9 +1840,12 @@ const analyticsColumnInfo = {
   u2: "Under-2 enrolment against under-2 capacity. Capacity comes from Infocare licence data or a manual capacity override.",
   o2: "Over-2 enrolment against over-2 capacity. Format and interpretation match U2, but for children aged two or older.",
   waitlist: "Estimated actionable waitlist / total waitlist. The first number estimates entries in the short-to-typical wait range.",
-  age5: "Currently enrolled children who are already five or older at the snapshot date. This is a current count, not window-based.",
-  near5: "Enrolled children who will turn five inside the selected time window, such as the next 90 days when 3M is selected.",
-  leaving: "Enrolled children with a known future leaving date inside the selected time window. Past leaving dates are ignored.",
+  age5:
+    "Currently enrolled children who are already five or older at the snapshot date. This is independent of Leaving, so the same child can also appear in Leaving. The AI summary uses deduplicated replacement pressure.",
+  near5:
+    "Enrolled children who will turn five inside the selected time window, such as the next 90 days when 3M is selected. This is independent of Leaving, so the same child can also appear in Leaving. The AI summary uses deduplicated replacement pressure.",
+  leaving:
+    "Enrolled children with a known future leaving date inside the selected time window. Past leaving dates are ignored. This is independent of Age 5+ and Near 5, so the same child can appear in both. The AI summary uses deduplicated replacement pressure.",
   note: "Opens the matching Meta Ads recommendation note field for this centre and window.",
   email: "Email action shown when the centre can be matched to a contact from the centre contact list.",
 } as const;
@@ -1834,7 +1880,7 @@ function renderAnalyticsTable(
         const centreCoverage = coverage.get(row.centreKey);
         const metaMessage = `${row.serviceName}: ${openPlaces} open, ${actionableWaitlist}/${row.waitlistCount} actionable waitlist, ${replacementPressure} pressure, ${centreCoverage?.activeCampaignCount ?? 0} active campaigns, ${formatMoney(centreCoverage?.spend30d ?? 0)} spend.`;
         const emailAction = contact
-          ? `<a class="analytics-table__email-action" data-email-confirm data-notification-id="${escapeHtml(notificationId)}" data-centre-name="${escapeHtml(row.serviceName)}" href="${escapeHtml(buildMetaAdvertEmailHref(contact))}" title="Email centre about a Facebook advert" aria-label="Email ${escapeHtml(row.serviceName)} about a Facebook advert"><i class="bi bi-envelope ui-icon" aria-hidden="true"></i></a>`
+          ? `<a class="analytics-table__email-action" ${renderMetaEmailActionAttributes(contact, row, notificationId)} href="${escapeHtml(buildMetaInitiateEmailHref(contact))}" title="Email centre about a Facebook advert" aria-label="Email ${escapeHtml(row.serviceName)} about a Facebook advert"><i class="bi bi-envelope ui-icon" aria-hidden="true"></i></a>`
           : "";
         const noteAction = `<button type="button" class="analytics-table__note-action" data-analytics-meta-note data-notification-id="${escapeHtml(notificationId)}" data-centre-key="${row.centreKey}" data-window-key="${escapeHtml(selectedWindowKey)}" data-meta-history-heading="${escapeHtml(recommendation)}" data-meta-history-message="${escapeHtml(metaMessage)}" data-centre-name="${escapeHtml(row.serviceName)}" data-open-places="${openPlaces}" data-actionable-waitlist="${actionableWaitlist}" data-waitlist-count="${row.waitlistCount}" data-replacement-pressure="${replacementPressure}" data-active-campaign-count="${centreCoverage?.activeCampaignCount ?? 0}" data-spend-30d="${centreCoverage?.spend30d ?? 0}" title="Add Meta Ads note" aria-label="Add Meta Ads note for ${escapeHtml(row.serviceName)}"><i class="bi bi-journal-plus ui-icon" aria-hidden="true"></i></button>`;
 
@@ -1933,7 +1979,6 @@ function renderSelectedCentreNarrative(
   selectedWindowKey: WindowKey,
   centreHistory: CentreSnapshotHistoryEntry[],
   annualHistory: CentreSnapshotHistoryEntry[],
-  manualCapacity?: ManualCentreCapacity | null,
   latestMetaRecommendationNotesForCentre: MetaNotificationHistoryRow[] = [],
 ) {
   const selectedRow = resolveSelectedRow(snapshotSet, selectedCentreKey);
@@ -1941,29 +1986,27 @@ function renderSelectedCentreNarrative(
   if (!selectedRow) {
     return `
       <div class="chat-message">
-        <span class="chat-message__role">AI</span>
+        <span class="chat-message__role">Beep Beep</span>
         <p>No snapshot row selected yet. Choose a centre from the analytics table to see a plain-language summary here.</p>
       </div>
     `;
   }
 
-  const guidanceItems = [
-    buildFteGuidance(selectedRow),
+  const openingNarrative = normaliseGuidanceLead(buildOpeningNarrative(selectedRow, selectedWindowKey));
+  const primaryGuidanceItems = [
     buildWaitlistGuidance(selectedRow, selectedWindowKey),
     buildWaitlistAgeQualityGuidance(selectedRow),
     buildWindowInsights(selectedRow, centreHistory, selectedWindowKey),
     buildSeasonalityNarrative(annualHistory),
-    buildLeavingNarrative(selectedRow, selectedWindowKey),
-    buildCapacityNarrative(manualCapacity),
-    `Latest stored snapshot: <strong>${snapshotSet ? formatTimestamp(snapshotSet.createdAt) : "Pending"}</strong>.`,
-  ].filter((item): item is string => Boolean(item));
+  ]
+    .filter((item): item is string => Boolean(item))
+    .filter((item) => !isGuidanceCoveredByLead(item, openingNarrative));
+  const supportingGuidance = `Latest stored snapshot: <strong>${snapshotSet ? formatTimestamp(snapshotSet.createdAt) : "Pending"}</strong>`;
 
   return `
     <div class="chat-message">
-      <p>${buildOpeningNarrative(selectedRow, selectedWindowKey)}</p>
-      <ul>
-        ${guidanceItems.map((item) => `<li>${item}</li>`).join("")}
-      </ul>
+      <p class="chat-message__guidance-summary">${[openingNarrative, ...primaryGuidanceItems].join(" ")}</p>
+      <p class="chat-message__guidance-support">${supportingGuidance}</p>
       ${renderLatestMetaRecommendationNotesForChat(latestMetaRecommendationNotesForCentre)}
     </div>
   `;
@@ -2000,11 +2043,12 @@ function renderAiChatPanel(
   selectedWindowKey: WindowKey,
   centreHistory: CentreSnapshotHistoryEntry[],
   annualHistory: CentreSnapshotHistoryEntry[],
-  manualCapacity?: ManualCentreCapacity | null,
   latestMetaRecommendationNotesForCentre: MetaNotificationHistoryRow[] = [],
 ) {
+  const resolvedSelectedCentreKey = selectedCentreKey ?? resolveSelectedRow(snapshotSet, selectedCentreKey)?.centreKey ?? "";
+
   return `
-    <div class="chat-shell">
+    <div class="chat-shell" data-ai-chat data-centre-key="${escapeHtml(String(resolvedSelectedCentreKey))}" data-window-key="${escapeHtml(selectedWindowKey)}">
       <div class="chat-shell__messages">
         ${renderSelectedCentreNarrative(
           snapshotSet,
@@ -2012,16 +2056,197 @@ function renderAiChatPanel(
           selectedWindowKey,
           centreHistory,
           annualHistory,
-          manualCapacity,
           latestMetaRecommendationNotesForCentre,
         )}
       </div>
       <div class="chat-shell__composer">
         <label class="chat-shell__prompt-label" for="chat-prompt">Prompt</label>
-        <textarea id="chat-prompt" class="chat-shell__prompt-input" placeholder="Type a question about the selected centre. AI wiring pending." disabled></textarea>
-        <button class="chat-shell__send" type="button" disabled>Send</button>
+        <textarea id="chat-prompt" class="chat-shell__prompt-input" placeholder="Ask about centre demand, adverts, waitlist quality, or next actions."></textarea>
+        <button class="chat-shell__send" type="button" data-ai-chat-send><i class="bi bi-send ui-icon" aria-hidden="true"></i><span>Send</span></button>
       </div>
     </div>
+  `;
+}
+
+function renderAiChatScript() {
+  return `
+    <script>
+      (() => {
+        const shell = document.querySelector("[data-ai-chat]");
+
+        if (!(shell instanceof HTMLElement)) {
+          return;
+        }
+
+        const messages = shell.querySelector(".chat-shell__messages");
+        const promptInput = shell.querySelector("#chat-prompt");
+        const sendButton = shell.querySelector("[data-ai-chat-send]");
+        const chatHistory = [];
+        const maxHistoryMessages = 8;
+
+        if (!(messages instanceof HTMLElement) || !(promptInput instanceof HTMLTextAreaElement) || !(sendButton instanceof HTMLButtonElement)) {
+          return;
+        }
+
+        function appendMessage(role, text, state) {
+          const message = document.createElement("div");
+          const roleKey = role === "Beep Beep" ? "assistant" : role.toLowerCase();
+          message.className = "chat-message chat-message--" + roleKey;
+          message.dataset.messageRole = roleKey;
+
+          if (state) {
+            message.dataset.messageState = state;
+          }
+
+          const roleLabel = document.createElement("span");
+          roleLabel.className = "chat-message__role";
+          roleLabel.textContent = role;
+
+          const body = document.createElement("p");
+          body.className = "chat-message__body";
+          body.textContent = text;
+
+          message.append(roleLabel, body);
+          messages.append(message);
+          messages.scrollTop = messages.scrollHeight;
+
+          return body;
+        }
+
+        function rememberTurn(prompt, answer) {
+          chatHistory.push({ role: "user", content: prompt });
+          chatHistory.push({ role: "assistant", content: answer });
+
+          if (chatHistory.length > maxHistoryMessages) {
+            chatHistory.splice(0, chatHistory.length - maxHistoryMessages);
+          }
+        }
+
+        function parseStreamEvent(rawEvent) {
+          const lines = rawEvent.split("\\n");
+          let event = "message";
+          const dataLines = [];
+
+          for (const line of lines) {
+            if (line.startsWith("event:")) {
+              event = line.slice(6).trim();
+            } else if (line.startsWith("data:")) {
+              dataLines.push(line.slice(5).trimStart());
+            }
+          }
+
+          return {
+            event,
+            data: dataLines.join("\\n"),
+          };
+        }
+
+        async function readStreamingAnswer(response, bodyElement) {
+          if (!response.body) {
+            throw new Error("AI response stream was empty.");
+          }
+
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+          let answer = "";
+          let hasStarted = false;
+
+          while (true) {
+            const result = await reader.read();
+
+            if (result.done) {
+              break;
+            }
+
+            buffer += decoder.decode(result.value, { stream: true });
+            const events = buffer.split("\\n\\n");
+            buffer = events.pop() || "";
+
+            for (const rawEvent of events) {
+              const parsed = parseStreamEvent(rawEvent);
+
+              if (!parsed.data) {
+                continue;
+              }
+
+              const payload = JSON.parse(parsed.data);
+
+              if (parsed.event === "error") {
+                throw new Error(payload.error || "AI request failed.");
+              }
+
+              if (parsed.event === "chunk") {
+                answer += payload.chunk || "";
+                bodyElement.textContent = answer;
+                bodyElement.closest(".chat-message")?.removeAttribute("data-message-state");
+                messages.scrollTop = messages.scrollHeight;
+                hasStarted = true;
+              }
+            }
+          }
+
+          return hasStarted ? answer.trim() : "";
+        }
+
+        async function sendPrompt() {
+          const prompt = promptInput.value.trim();
+
+          if (!prompt || sendButton.disabled) {
+            return;
+          }
+
+          appendMessage("You", prompt);
+          promptInput.value = "";
+          promptInput.disabled = true;
+          sendButton.disabled = true;
+          const pendingBody = appendMessage("Beep Beep", "Thinking...", "pending");
+
+          try {
+            const response = await fetch("/api/ai/chat/stream", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                prompt,
+                messages: chatHistory,
+                centreKey: shell.dataset.centreKey || null,
+                windowKey: shell.dataset.windowKey || null,
+              }),
+            });
+
+            if (!response.ok) {
+              const payload = await response.json().catch(() => ({}));
+              throw new Error(payload.error || "AI request failed.");
+            }
+
+            const answer = await readStreamingAnswer(response, pendingBody) || "No answer returned.";
+            pendingBody.textContent = answer;
+            pendingBody.closest(".chat-message")?.removeAttribute("data-message-state");
+            rememberTurn(prompt, answer);
+          } catch (error) {
+            pendingBody.textContent = error instanceof Error ? error.message : "AI request failed.";
+            pendingBody.closest(".chat-message")?.setAttribute("data-message-state", "error");
+          } finally {
+            promptInput.disabled = false;
+            sendButton.disabled = false;
+            promptInput.focus();
+          }
+        }
+
+        sendButton.addEventListener("click", () => {
+          void sendPrompt();
+        });
+
+        promptInput.addEventListener("keydown", (event) => {
+          if (event.key === "Enter" && !event.shiftKey) {
+            event.preventDefault();
+            void sendPrompt();
+          }
+        });
+      })();
+    </script>
   `;
 }
 
@@ -2241,7 +2466,7 @@ function renderMetaRecommendations(
                   <div class="meta-ads-notification__title-actions">
                     ${
                       contact
-                        ? `<a class="meta-ads-notification__email" data-email-confirm data-notification-id="${escapeHtml(entry.notificationId)}" data-centre-name="${escapeHtml(entry.row.serviceName)}" href="${escapeHtml(buildMetaAdvertEmailHref(contact))}" title="Email centre about a Facebook advert" aria-label="Email ${escapeHtml(entry.row.serviceName)} about a Facebook advert"><i class="bi bi-envelope ui-icon" aria-hidden="true"></i></a>`
+                        ? `<a class="meta-ads-notification__email" ${renderMetaEmailActionAttributes(contact, entry.row, entry.notificationId)} href="${escapeHtml(buildMetaInitiateEmailHref(contact))}" title="Email centre about a Facebook advert" aria-label="Email ${escapeHtml(entry.row.serviceName)} about a Facebook advert"><i class="bi bi-envelope ui-icon" aria-hidden="true"></i></a>`
                         : ""
                     }
                     <button type="button" data-meta-notification-dismiss title="Dismiss notification" aria-label="Dismiss notification">
@@ -3097,6 +3322,8 @@ function renderBreakoutScript() {
     <script>
       (() => {
         const storageKey = "marketing-helper-ai.last-output-screen-index";
+        const campaignEmailTemplate = ${serializeJsonForScript(META_CAMPAIGN_EMAIL_TEMPLATE)};
+        const followUpEmailTemplate = ${serializeJsonForScript(META_FOLLOW_UP_EMAIL_TEMPLATE)};
 
         function keepSelectedAnalyticsRowVisible() {
           const selectedRow = document.querySelector(".analytics-table__row--selected");
@@ -3585,6 +3812,44 @@ function renderBreakoutScript() {
           renderLatestNoteList(notesList, Array.isArray(payload.notes) ? payload.notes : []);
         }
 
+        function mountBlockingDialog(dialog) {
+          const blocker = document.createElement("div");
+
+          blocker.className = "modal-page-blocker";
+          blocker.setAttribute("data-modal-page-blocker", "");
+          blocker.addEventListener("keydown", (event) => {
+            if (event.key !== "Tab") {
+              return;
+            }
+
+            const focusable = Array.from(dialog.querySelectorAll("a[href], button, input, textarea, select, [tabindex]:not([tabindex='-1'])"))
+              .filter((element) => element instanceof HTMLElement && !element.hasAttribute("disabled") && element.tabIndex >= 0);
+
+            if (focusable.length === 0) {
+              event.preventDefault();
+              return;
+            }
+
+            const first = focusable[0];
+            const last = focusable[focusable.length - 1];
+
+            if (event.shiftKey && document.activeElement === first) {
+              event.preventDefault();
+              last.focus();
+              return;
+            }
+
+            if (!event.shiftKey && document.activeElement === last) {
+              event.preventDefault();
+              first.focus();
+            }
+          });
+          blocker.append(dialog);
+          document.body.append(blocker);
+
+          return blocker;
+        }
+
         function closeMetaNoteModal() {
           const modal = document.querySelector("[data-meta-note-modal]");
           const shouldRefresh = modal instanceof HTMLElement && modal.dataset.refreshOnClose === "true";
@@ -3744,7 +4009,7 @@ function renderBreakoutScript() {
             noButton.textContent = "No";
             actions.append(noButton, yesButton);
             dialog.append(message, actions);
-            document.body.append(dialog);
+            const blocker = mountBlockingDialog(dialog);
 
             const finish = (value) => {
               if (resolved) {
@@ -3752,7 +4017,7 @@ function renderBreakoutScript() {
               }
 
               resolved = true;
-              dialog.remove();
+              blocker.remove();
               resolve(value);
             };
 
@@ -3771,6 +4036,193 @@ function renderBreakoutScript() {
           });
         }
 
+        function askMetaEmailType(centreName) {
+          return new Promise((resolve) => {
+            const dialog = document.createElement("div");
+            const message = document.createElement("p");
+            const actions = document.createElement("div");
+            const initiateButton = document.createElement("button");
+            const campaignButton = document.createElement("button");
+            const followUpButton = document.createElement("button");
+            const cancelButton = document.createElement("button");
+            let resolved = false;
+
+            dialog.className = "email-confirm-dialog email-confirm-dialog--choice";
+            dialog.setAttribute("role", "dialog");
+            dialog.setAttribute("aria-modal", "true");
+            dialog.setAttribute("aria-label", "Choose email template");
+            message.textContent = "Choose email type for " + centreName + ".";
+            actions.className = "email-confirm-dialog__actions email-confirm-dialog__actions--grid";
+            initiateButton.type = "button";
+            initiateButton.textContent = "Initiate";
+            campaignButton.type = "button";
+            campaignButton.textContent = "Campaign";
+            followUpButton.type = "button";
+            followUpButton.textContent = "Follow up";
+            cancelButton.type = "button";
+            cancelButton.textContent = "Cancel";
+            actions.append(initiateButton, campaignButton, followUpButton, cancelButton);
+            dialog.append(message, actions);
+            const blocker = mountBlockingDialog(dialog);
+
+            const finish = (value) => {
+              if (resolved) {
+                return;
+              }
+
+              resolved = true;
+              blocker.remove();
+              resolve(value);
+            };
+
+            initiateButton.addEventListener("click", () => finish("initiate"));
+            campaignButton.addEventListener("click", () => finish("campaign"));
+            followUpButton.addEventListener("click", () => finish("follow-up"));
+            cancelButton.addEventListener("click", () => finish(null));
+            dialog.addEventListener("keydown", (event) => {
+              if (event.key === "Escape") {
+                finish(null);
+              }
+            });
+            initiateButton.focus();
+          });
+        }
+
+        function askMetaEmailText(centreName, initialContent) {
+          return new Promise((resolve) => {
+            const dialog = document.createElement("div");
+            const title = document.createElement("p");
+            const headingLabel = document.createElement("label");
+            const headingInput = document.createElement("input");
+            const primaryLabel = document.createElement("label");
+            const primaryInput = document.createElement("textarea");
+            const actions = document.createElement("div");
+            const cancelButton = document.createElement("button");
+            const continueButton = document.createElement("button");
+            let resolved = false;
+
+            dialog.className = "email-confirm-dialog email-confirm-dialog--form";
+            dialog.setAttribute("role", "dialog");
+            dialog.setAttribute("aria-modal", "true");
+            dialog.setAttribute("aria-label", "Email advert text");
+            title.textContent = "Advert text for " + centreName + ".";
+            headingLabel.textContent = "Heading";
+            headingInput.type = "text";
+            headingInput.value = initialContent?.headingText || "";
+            primaryLabel.textContent = "Primary text";
+            primaryInput.rows = 5;
+            primaryInput.value = initialContent?.primaryText || "";
+            actions.className = "email-confirm-dialog__actions";
+            cancelButton.type = "button";
+            cancelButton.textContent = "Cancel";
+            continueButton.type = "button";
+            continueButton.textContent = "Continue";
+            actions.append(cancelButton, continueButton);
+            dialog.append(title, headingLabel, headingInput, primaryLabel, primaryInput, actions);
+            const blocker = mountBlockingDialog(dialog);
+
+            const finish = (value) => {
+              if (resolved) {
+                return;
+              }
+
+              resolved = true;
+              blocker.remove();
+              resolve(value);
+            };
+
+            continueButton.addEventListener("click", () => {
+              finish({
+                headingText: headingInput.value.trim(),
+                primaryText: primaryInput.value.trim(),
+              });
+            });
+            cancelButton.addEventListener("click", () => finish(null));
+            dialog.addEventListener("keydown", (event) => {
+              if (event.key === "Escape") {
+                finish(null);
+              }
+            });
+            headingInput.focus();
+          });
+        }
+
+        function addBusinessDays(startDate, days) {
+          const date = new Date(startDate);
+          let added = 0;
+
+          while (added < days) {
+            date.setDate(date.getDate() + 1);
+            const day = date.getDay();
+
+            if (day !== 0 && day !== 6) {
+              added += 1;
+            }
+          }
+
+          return date;
+        }
+
+        function formatNzDate(date) {
+          return date.toLocaleDateString("en-NZ", {
+            day: "numeric",
+            month: "long",
+            year: "numeric",
+          });
+        }
+
+        function firstNameOnly(name) {
+          return String(name || "").trim().split(/\\s+/)[0] || "";
+        }
+
+        function buildTemplatedEmailBody(template, context) {
+          const replacements = {
+            "<head_teacher>": firstNameOnly(context.headTeacher) || "there",
+            "<administrator>": firstNameOnly(context.administrator),
+            "<kindergarten_name>": context.kindergartenName || context.centreName,
+            "<heading_text>": context.headingText,
+            "<primary_text>": context.primaryText,
+            "<add_three_business_days_from_today>": formatNzDate(addBusinessDays(new Date(), 3)),
+          };
+
+          return Object.entries(replacements).reduce(
+            (body, [placeholder, value]) => body.replaceAll(placeholder, value),
+            template,
+          );
+        }
+
+        function buildMailtoHref(email, subject, body) {
+          return "mailto:" + String(email).replace(/[\\r\\n]/g, "") + "?subject=" + encodeURIComponent(subject) + "&body=" + encodeURIComponent(body);
+        }
+
+        async function readMetaEmailContent(centreKey) {
+          const response = await fetch("/api/meta-email-content/" + encodeURIComponent(centreKey));
+
+          if (!response.ok) {
+            return { headingText: "", primaryText: "" };
+          }
+
+          const payload = await response.json();
+
+          return payload.content || { headingText: "", primaryText: "" };
+        }
+
+        async function saveMetaEmailContent(centreKey, content) {
+          const response = await fetch("/api/meta-email-content/" + encodeURIComponent(centreKey), {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify(content),
+          });
+
+          return response.ok;
+        }
+
+        function openEmailHref(href) {
+          window.location.href = href;
+        }
+
         document.addEventListener("click", async (event) => {
           const target = event.target;
 
@@ -3781,11 +4233,57 @@ function renderBreakoutScript() {
           const emailConfirm = target.closest("[data-email-confirm]");
 
           if (emailConfirm instanceof HTMLAnchorElement) {
+            event.preventDefault();
             const centreName = emailConfirm.getAttribute("data-centre-name") || "this centre";
+            const centreKey = emailConfirm.getAttribute("data-centre-key") || "";
             const notificationId =
               emailConfirm.getAttribute("data-notification-id") ||
               emailConfirm.closest("[data-meta-notification-id]")?.getAttribute("data-meta-notification-id") ||
               "";
+            const selectedType = await askMetaEmailType(centreName);
+
+            if (!selectedType) {
+              return;
+            }
+
+            const sentNoteText =
+              selectedType === "campaign"
+                ? "Email sent for campaign"
+                : selectedType === "follow-up"
+                  ? "Email sent for follow up"
+                  : "Email sent for initiating";
+
+            if (selectedType === "initiate") {
+              openEmailHref(emailConfirm.getAttribute("data-initiate-href") || emailConfirm.href);
+            } else {
+              const existingContent = centreKey ? await readMetaEmailContent(centreKey) : { headingText: "", primaryText: "" };
+              const content = await askMetaEmailText(centreName, existingContent);
+
+              if (!content) {
+                return;
+              }
+
+              if (centreKey) {
+                await saveMetaEmailContent(centreKey, content);
+              }
+
+              const context = {
+                centreName,
+                kindergartenName: emailConfirm.getAttribute("data-kindergarten-name") || centreName,
+                headTeacher: emailConfirm.getAttribute("data-head-teacher") || "",
+                administrator: emailConfirm.getAttribute("data-administrator") || "",
+                headingText: content.headingText,
+                primaryText: content.primaryText,
+              };
+              const template = selectedType === "campaign" ? campaignEmailTemplate : followUpEmailTemplate;
+              const subject = selectedType === "campaign" ? "Facebook advert campaign" : "Facebook advert follow up";
+
+              openEmailHref(buildMailtoHref(
+                emailConfirm.getAttribute("data-contact-email") || "",
+                subject,
+                buildTemplatedEmailBody(template, context),
+              ));
+            }
 
             setTimeout(async () => {
               const confirmed = await askEmailSentConfirmation(centreName);
@@ -3799,7 +4297,7 @@ function renderBreakoutScript() {
                 headers: {
                   "Content-Type": "application/json",
                 },
-                body: JSON.stringify({ notificationId, text: "Email sent for initiating campaign" }),
+                body: JSON.stringify({ notificationId, text: sentNoteText }),
               });
 
               if (!response.ok) {
@@ -4364,7 +4862,6 @@ export function renderAppShell(
               selectedWindowKey,
               centreHistory,
               annualHistory,
-              options.manualCapacity,
               options.latestMetaRecommendationNotesForCentre ?? [],
             ),
   }));
@@ -4388,6 +4885,7 @@ export function renderAppShell(
     ${layout}
     <script src="/vendor/chart.umd.js"></script>
     ${renderWaitlistChartScript()}
+    ${renderAiChatScript()}
     ${renderBreakoutScript()}
   </body>
 </html>`;

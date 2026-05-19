@@ -1,5 +1,45 @@
 # Marketing Helper AI
 
+```text
+                                                                                                                         
+                          ^.                                                   nwwmmmZZC_   :nUUYYYn !vUUYYYUJUUUYvi     
+                          ;]                                                   0$$$$$$$$$U }%$$$$$$ax@$$$$$$$$$$$$$$Q.   
+                           j|                                                  0$$$$$$$$$%<&$$$$$$$W%$$$$$$$$$$$$$$$$X   
+                            n?                                                 0$$$$$$$$$$W$$$$$$$$$$$$$$$$$$$$$$$$$$Wl  
+                            >b<                                                0$$%?  u@$$$$$Bt^^""a$$8?^^""b$$&,<#$$$\  
+                            .cb_        '>vZC"',I!il:^'.                       0$$%?  ^B$$$$$ol    k$$w`    d$$&. +@$$Y  
+                             :hbt{jz0##MMkbcQm###o##**a*#M&hUx<.               0$$B0cco$$@c@$@pXXXcr$$@0XXXnb$$&. ;B$$J  
+                            .fM8&&&a*bQu/k*o#*&&W&WW&M&&W&WW#kddqn:            O$$$$$$$$$0.d@$$$$$8'*$$$$$$*k$$&. t$$$v  
+                          !p%&*#dwwuLaW&WMW&&M8&&8888%%&zl^                    O$$$$$$$$$Q.X@$$$$$&'m@$$$$$*k$$@*#@$$@]  
+                      .{Q*#booOQLa&&&8&&888&888888WJ1^                         O$$$$$$$$$@X@$$$$$$&\@$$$$$$*k$$$$$$$$b,  
+                    lwho*00udW88%%%8%%%%%%%%8&#O[.                l<i"         O$$%?  .#$$$$$Bt""""o$$8]""""b$$$$$$$@}   
+                   "mQrb*W88%%%BBB%%8%%%%%&q<.                   ~pB@%O>       O$$%-   Q$$$$$oI   '8$$m`    b$$$$$$#!    
+                 iZa&W&&8%BBBBBBBB%8%%&w("                       +#$Mmbqj ^    O$$BX//f%$$$$$@0rrrr%$$BYrrrj#$$&:"`      
+               ;wWMM&88%%B%B%%%%%88*UI                           iLwdB$@Wr]`   O$$$$$$$$$$@$$$$$$$$$$$$$$$$$$$$W.        
+             .U##WW&%%%%%%%%%%%8W('                               [W@$$$@m_?   O$$$$$$$$$@_8$$$$$$$#B$$$$$$$$$$W.        
+            _a**M8%%%88%%%888a\"                                  ^w@@@@8p+'   O$$$$$$$$$j -W$$$$$$k\B$$$$$$$$$W.        
+           t#**M8%%8888&&&#X,                                       tOZZwL`i   ;!ii>><<!     +11))([ .-11))(){{}         
+         .C###W8%8888&&Wb>                                           .[n~ ?<                                             
+         cah*W8888&W&Wv"                                                ILU.   ^,,""""^'                    ..           
+       .z**#W8&&W&W*\                                                 ~m#k`    0$$$$$$$$8> ,q$$$$$$wi#$$$$$$$$$$$$$dI    
+       {a*MWW8W&&#1                                               .lUMM*L      0$$$$$$$$$a^h$$$$$$$w#$$$$$$$$$$$$$$$$~   
+       Lb#W&&88Wr                   ';(vjn|>                   `>Jo&MM&f.      0$$$$$$$$$@w@$$$$$$$@$$$$$$$$$$$$$$$$$q^  
+      ;ok*&888b!                 ljk@&Ovj}]<               ',{C#&&knoai        0$$@p00&$$$$$$@MkhhhB$$@*khhhB$$Bk*@$$B~  
+      [kh#M8&q^                ^COX!                    ^~\a88&WC.n&1          0$$%?  "B$$$$$a;    M$$Z'    o$$*  X$$$f  
+      \oaa#&wl<                "<"                  "[xmM&88Wv!{p&f'           0$$%?  )@$$%$$W+    p$$h,    o$$*  <@$$c  
+      ]oha*a?`"[[        ";`                    .;tO#888&wj;1mJ_1              O$$$$$$$$$*~B$$$$$$#~B$$$$$$bo$$*  }$$$n  
+      ^kdoop~    .`i-<nvL0cz?>.            .'`}a&8888#x',JkC'}l                O$$$$$$$$$) /@$$$$$# U@$$$$$bo$$#`IW$$@{  
+       )-ca#Lt/ucrzUYULJUXzuXc|'        '(LoW&88Wv+^+Cap{+J}`                  O$$$$$$$$$&~8$$$$$$#lB$$$$$$bo$$$$$$$$*;  
+       "]_v*L|XuvXvcncu()<-,      "_|Z#88&888%88cdWmLtXQJ?                     O$$@qQQO@$$@$$@Whhhwb$$@#hhhQo$$$$$$$$c   
+        '|1mam".".       .'`"}Z*&888&W&8888&W&W&WWWMqo0J`                      O$$%-   0$$$$$a;   ^%$$Z'    *$$$$$$@0    
+         '}*M#aqYvzUQqbh*MMMWW&W&W&&WWWWMMMWMMWhh*ppkY:                        O$$%-   k$$$$$M>   ,B$$b^    *$$%OOv!     
+            <Y#WW##M*#*M#M#MM#*#WoM####WM*oaqbdphOCr`                          O$$$@@@@$$$$$$$$$$$$$$$$$$$$$$$$o         
+                lnd*MMWM#WMMMMWWWMohmn~:>}()?>:'                               O$$$$$$$$$@h@$$$$$$$@@$$$$$$$$$$o         
+                      .`^",""^`.                                               O$$$$$$$$$b^O@$$$$$$Ob$$$$$$$$$$o         
+                                                                               Xhhhaaaahc` 'r#888%%L^YM888%%8&8k         
+                                                                                                                         
+```
+
 Marketing Helper AI is a local Fastify dashboard for reading childcare centre demand, capacity, waitlist quality, Meta advertising coverage, and Google Analytics traffic in one place.
 
 The app is designed to answer practical marketing and enrolment questions:
@@ -38,6 +78,37 @@ Start the local server:
 
 ```bash
 npm run dev
+```
+
+Beep Beep works out of the box with the built-in dashboard reasoning engine. To add an optional local language model runtime:
+
+```bash
+npm run ai:setup
+```
+
+Check whether the local model runtime is installed, reachable, and has the configured model:
+
+```bash
+npm run ai:doctor
+```
+
+Build and run the compiled server:
+
+```bash
+npm run build
+npm start
+```
+
+Run the compiled server persistently, with automatic restart after failures:
+
+```bash
+npm run run:build
+```
+
+Start the compiled server in a background supervisor:
+
+```bash
+npm run server:background
 ```
 
 By default the app runs on `http://127.0.0.1:3000`.
@@ -195,6 +266,7 @@ Interpretation:
 
 - These children may create near-term replacement pressure, because they are at or past the age where transition to school is expected.
 - This is not window-based. It is a current count.
+- This column is independent of `Leaving`, so the same child can appear in both `Age 5+` and `Leaving`.
 
 ### Near 5
 
@@ -206,6 +278,7 @@ Interpretation:
 
 - Higher values mean future vacancies may be coming even if the centre looks full now.
 - Read this with `Leaving` and `Waitlist`; high near-five pressure plus low actionable waitlist is a warning sign.
+- This column is independent of `Leaving`, so the same child can appear in both `Near 5` and `Leaving`.
 
 ### Leaving
 
@@ -216,6 +289,13 @@ Interpretation:
 - This is based on explicit Infocare `leaving_date` values.
 - It only counts future leaving dates. Past leaving dates are ignored.
 - A high value means the centre may need follow-up or marketing before spaces open.
+- This column is independent of `Age 5+` and `Near 5`, so a child can appear in `Leaving` as well as one of the age columns.
+
+### Replacement Pressure Overlap
+
+The `Age 5+`, `Near 5`, and `Leaving` table columns are source-signal counts, not mutually exclusive child lists. They are useful for seeing why pressure exists, but they can overlap.
+
+The AI Chat panel and Meta recommendation detail use **replacement pressure**, which deduplicates those signals by child for the selected window. For example, one enrolled child who is turning five soon and has a known future leaving date counts once in replacement pressure, even though they can appear in both `Near 5` and `Leaving` in the table.
 
 ### Email
 
@@ -413,8 +493,10 @@ open places, actionable waitlist / total waitlist, replacement pressure, active 
 Replacement pressure is:
 
 ```text
-Age 5+ + Near 5 in selected window + Leaving in selected window
+deduplicated count of children in Age 5+, Near 5 in selected window, or Leaving in selected window
 ```
+
+The visible table columns can overlap; replacement pressure counts each child once.
 
 ### Notification History
 
@@ -473,7 +555,7 @@ Interpretation:
 
 ## AI Chat Panel
 
-The panel currently shows a generated summary for the selected centre. It combines:
+The panel shows a generated summary for the selected centre and includes an interactive local AI composer named Beep Beep. The summary combines:
 
 - urgency band,
 - open places,
@@ -482,9 +564,19 @@ The panel currently shows a generated summary for the selected centre. It combin
 - waitlist age quality,
 - selected-window leaving and near-five pressure,
 - annual/centre history when available,
-- manual capacity notes.
+- manual capacity notes,
+- latest stored Meta Ads notes for the selected centre.
 
-The text input is disabled, so this is not yet an interactive chat interface.
+The composer posts to `/api/ai/chat`, sends the selected centre and selected window, and keeps a short in-browser history so follow-up questions have conversational context. Answers are grounded in a fresh dashboard context built on each request from Infocare analytics, Meta Ads, Google Analytics, and centre-level recommendation data.
+
+Local AI configuration is controlled through `.env`:
+
+- `AI_PROVIDER=builtin`
+- `AI_BASE_URL=http://127.0.0.1:11434`
+- `AI_CHAT_MODEL=llama3.1:8b`
+- `AI_TIMEOUT_MS=60000`
+
+Leave `AI_PROVIDER` unset, or set it to `builtin`, when you want Beep Beep to run with no external model dependency. Set `AI_PROVIDER=ollama` only when you want the optional local LLM path. `npm run ai:setup` downloads Ollama's standalone Windows runtime into `.local/ollama`, stores model files under `.local/ollama-models`, starts the local runtime, and pulls the configured model. Use `npm run ai:doctor` if the Ollama-backed chat path reports that the local AI is unavailable.
 
 ## Important Interpretation Rules
 

@@ -34,8 +34,21 @@ model CentreReference {
   metaAdSets     MetaAdSet[]
   metaAds        MetaAd[]
   metaInsights   MetaInsightSnapshot[]
+  metaEmailContent MetaEmailContent?
 
   @@index([ignored, openStatus, name])
+}
+
+model MetaEmailContent {
+  id          Int             @id @default(autoincrement())
+  centreKey   Int             @unique
+  headingText String          @default("")
+  primaryText String          @default("")
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+  centre      CentreReference @relation(fields: [centreKey], references: [centreKey], onDelete: Cascade, onUpdate: Cascade)
+
+  @@index([updatedAt(sort: Desc)])
 }
 
 model ManualCentreCapacity {

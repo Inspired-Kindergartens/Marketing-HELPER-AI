@@ -1372,6 +1372,23 @@ button {
   box-shadow: 0 18px 60px rgba(0, 0, 0, 0.42);
 }
 
+.modal-page-blocker {
+  position: fixed;
+  inset: 0;
+  z-index: 999;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgb(0 0 0 / 62%);
+}
+
+.modal-page-blocker > .email-confirm-dialog {
+  position: static;
+  inset: auto;
+  z-index: 1000;
+  transform: none;
+}
+
 .email-confirm-dialog p {
   margin: 0;
   color: var(--color-text-strong);
@@ -1383,8 +1400,37 @@ button {
   gap: 8px;
 }
 
+.email-confirm-dialog__actions--grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .email-confirm-dialog__actions button {
   min-width: 72px;
+}
+
+.email-confirm-dialog--form {
+  width: min(480px, calc(100vw - 32px));
+}
+
+.email-confirm-dialog--form label {
+  color: var(--color-ghost);
+  font-size: var(--font-size-small);
+  text-transform: uppercase;
+}
+
+.email-confirm-dialog--form input,
+.email-confirm-dialog--form textarea {
+  width: 100%;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  padding: 9px 10px;
+}
+
+.email-confirm-dialog--form textarea {
+  resize: vertical;
 }
 
 .meta-note-popup-page {
@@ -1633,8 +1679,37 @@ button {
   color: var(--color-text);
 }
 
+.chat-message--you {
+  color: var(--color-muted-control);
+}
+
+.chat-message[data-message-state="pending"] {
+  color: var(--color-ghost);
+}
+
+.chat-message[data-message-state="error"] {
+  color: #fb3640;
+}
+
+.chat-message__body {
+  white-space: pre-wrap;
+}
+
 .chat-message p + p {
   margin-top: 12px;
+}
+
+.chat-message__guidance-summary {
+  margin: 0;
+}
+
+.chat-message__guidance-support {
+  margin-top: 8px;
+  color: var(--color-ghost);
+  font-size: var(--font-size-small);
+  font-style: italic;
+  line-height: var(--line-height-compact);
+  text-align: right;
 }
 
 .chat-message ul {
@@ -1711,16 +1786,26 @@ button {
   margin-bottom: 8px;
 }
 
+.chat-shell__prompt-input:disabled {
+  opacity: 0.65;
+}
+
 .chat-shell__send {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: 6px;
   min-height: 2.25rem;
   padding: 0 0.85rem;
   border: var(--button-border);
   background: var(--color-surface);
   color: var(--color-muted-control);
   font: inherit;
+}
+
+.chat-shell__send:disabled {
+  opacity: 0.65;
+  cursor: wait;
 }
 
 .panel--system {

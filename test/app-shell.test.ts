@@ -308,6 +308,20 @@ test("email buttons use shared yes no confirmation flow", () => {
 
   assert.match(html, /analytics-table__email-action" data-email-confirm/);
   assert.match(html, /meta-ads-notification__email" data-email-confirm/);
+  assert.match(html, /function askMetaEmailType\(centreName\)/);
+  assert.match(html, /function askMetaEmailText\(centreName, initialContent\)/);
+  assert.match(html, /function mountBlockingDialog\(dialog\)/);
+  assert.match(html, /blocker\.className = "modal-page-blocker"/);
+  assert.match(html, /const blocker = mountBlockingDialog\(dialog\)/);
+  assert.match(html, /blocker\.remove\(\)/);
+  assert.match(html, /event\.key !== "Tab"/);
+  assert.match(html, /\/api\/meta-email-content\//);
+  assert.match(html, /data-centre-key="1"/);
+  assert.match(html, /data-kindergarten-name="Te Puke"/);
+  assert.match(html, /The next step is to approve your advert campaign before going live and I have designed an advert that I think would work well for \\u003ckindergarten_name> - 3 images for different placements but one advert campaign/);
+  assert.match(html, /function firstNameOnly\(name\)/);
+  assert.match(html, /"<head_teacher>": firstNameOnly\(context\.headTeacher\) \|\| "there"/);
+  assert.match(html, /"<administrator>": firstNameOnly\(context\.administrator\)/);
   assert.match(html, /function askEmailSentConfirmation\(centreName\)/);
   assert.match(html, /yesButton\.textContent = "Yes"/);
   assert.match(html, /noButton\.textContent = "No"/);
@@ -723,6 +737,88 @@ test("dashboard and chat panels expose scoped print actions", () => {
   assert.match(html, /Print AI Chat/);
   assert.match(html, /document\.documentElement\.dataset\.printMode = mode/);
   assert.match(html, /delete document\.documentElement\.dataset\.printMode/);
+  assert.match(html, /const chatHistory = \[\]/);
+  assert.match(html, /messages: chatHistory/);
+});
+
+test("ai chat panel title and summary stay succinct", () => {
+  const snapshotSet: LatestSnapshotSet = {
+    runDate: "2026-05-12T00:00:00.000Z",
+    source: "test",
+    createdAt: "2026-05-12T00:00:00.000Z",
+    snapshots: [
+      buildSnapshot({
+        centreKey: 117,
+        serviceName: "Harbour View Kindergarten",
+        enrolledCount: 20,
+        licensedCapacity: 40,
+        bookedAverageDailyCount: 20,
+        waitlistCount: 0,
+        knownLeavingCount: 3,
+        knownLeavingCountsByWindow: windowCounts(3),
+        agedOutCount: 1,
+        approachingFiveCount: 2,
+        approachingFiveCountsByWindow: windowCounts(2),
+        replacementPressureCountsByWindow: windowCounts(4),
+        replacementPressure: 4,
+        urgencyScore: 50,
+        urgencyBand: "High",
+      }),
+    ],
+  };
+
+  const html = renderAppShell(snapshotSet, {
+    selectedCentreKey: 117,
+    selectedWindowKey: "3M",
+  });
+
+  assert.match(html, /<h2 id="panel-chat" class="panel__title">AI Chat with Beep Beep<\/h2>/);
+  assert.match(html, /class="chat-message__guidance-summary"/);
+  assert.match(html, /class="chat-message__guidance-support"/);
+  assert.doesNotMatch(html, /<ul>\s*<li>Harbour View Kindergarten appears to have room/);
+  assert.doesNotMatch(html, /without a visible waitlist the focus should be on filling future spaces early/);
+  assert.doesNotMatch(html, /short-term waitlist is still fairly light/);
+  assert.match(html, /no actionable waitlist cover/);
+  assert.match(html, /prioritised for campaign planning and early enquiry generation/);
+  assert.match(html, /Latest stored snapshot: <strong>12\/05\/2026, 12:00 pm<\/strong>/);
+  assert.doesNotMatch(html, /There are currently three children indicated as Leaving/);
+  assert.doesNotMatch(html, /turning five years old within that same time frame/);
+  assert.doesNotMatch(html, /Over 2 with \d+ capacity/);
+});
+
+test("ai chat lead treats low waitlist and high replacement pressure as priority language", () => {
+  const snapshotSet: LatestSnapshotSet = {
+    runDate: "2026-05-12T00:00:00.000Z",
+    source: "test",
+    createdAt: "2026-05-12T00:00:00.000Z",
+    snapshots: [
+      buildSnapshot({
+        centreKey: 123,
+        serviceName: "Whakamarama Kindergarten",
+        waitlistCount: 6,
+        waitlistUnder5Count: 2,
+        knownLeavingCount: 10,
+        knownLeavingCountsByWindow: windowCounts(10),
+        agedOutCount: 2,
+        approachingFiveCount: 8,
+        approachingFiveCountsByWindow: windowCounts(8),
+        replacementPressureCountsByWindow: windowCounts(11),
+        replacementPressure: 11,
+        urgencyScore: 30,
+        urgencyBand: "Moderate",
+      }),
+    ],
+  };
+
+  const html = renderAppShell(snapshotSet, {
+    selectedCentreKey: 123,
+    selectedWindowKey: "3M",
+  });
+
+  assert.match(html, /Whakamarama Kindergarten needs priority attention because/);
+  assert.match(html, /only two children in the actionable waitlist/);
+  assert.match(html, /11 across Leaving, Near 5, and Age 5\+/);
+  assert.doesNotMatch(html, /moderate watch range/);
 });
 
 test("ai chat includes the latest three meta ads notes for the selected centre", () => {
@@ -886,6 +982,9 @@ test("ai chat leaving pressure message uses deduped replacement pressure", () =>
 
   assert.match(html, /4 across Leaving, Near 5, and Age 5\+/);
   assert.doesNotMatch(html, /6 across Leaving, Near 5, and Age 5\+/);
+  assert.match(html, /This is independent of Leaving, so the same child can also appear in Leaving/);
+  assert.match(html, /The AI summary uses deduplicated replacement pressure/);
+  assert.match(html, /This is independent of Age 5\+ and Near 5, so the same child can appear in both/);
 });
 
 test("google analytics print styles hide stats and volume column", () => {
@@ -904,6 +1003,15 @@ test("meta ads table headers stick flush below the panel title", () => {
   assert.match(css, /\.panel--meta-ads \.panel__body\s*\{[\s\S]*?padding-top: 0;/);
   assert.match(css, /\.meta-ads-panel\s*\{[\s\S]*?padding-top: 10px;/);
   assert.match(css, /\.meta-ads-table th\s*\{[\s\S]*?position: sticky;[\s\S]*?top: 0;/);
+});
+
+test("confirmation dialogs use a blocking page backdrop", () => {
+  const css = readFileSync(new URL("../src/ui/app.css", import.meta.url), "utf8");
+
+  assert.match(css, /\.modal-page-blocker\s*\{[\s\S]*?position: fixed;/);
+  assert.match(css, /\.modal-page-blocker\s*\{[\s\S]*?inset: 0;/);
+  assert.match(css, /\.modal-page-blocker\s*\{[\s\S]*?background: rgb\(0 0 0 \/ 62%\);/);
+  assert.match(css, /\.modal-page-blocker > \.email-confirm-dialog\s*\{[\s\S]*?position: static;/);
 });
 
 test("print styles scope dashboard, chat, and recent demand pages", () => {

@@ -1,3 +1,4 @@
+import "./ai-chat.test.js";
 import "./analytics-compute.test.js";
 import "./app-shell.test.js";
 import "./centre-contact-store.test.js";
