@@ -8,6 +8,13 @@ import { buildAiChatMessages, buildDeterministicChatAnswer, type AiChatHistoryMe
 import { runLocalChat, streamLocalChat, AiClientError } from "./ai/client.js";
 import { buildAiDashboardContext, buildDashboardSystemPrompt } from "./ai/context.js";
 import { readAiConfig } from "./ai/config.js";
+import {
+  clearSnapshotRefreshOutcome,
+  getSnapshotRefreshState,
+  markSnapshotRefreshAcknowledged,
+  recordSnapshotRefreshOutcome,
+  tickWeeklySnapshotRefresh,
+} from "./analytics/background-snapshot.js";
 import { ensureDailyAnalyticsSnapshot, refreshAnalyticsSnapshot } from "./analytics/snapshot.js";
 import { resolveWindowKey, resolveWindowStartDate } from "./analytics/windows.js";
 import { prisma } from "./db.js";
@@ -62,7 +69,30 @@ import {
   renderMetaRecommendationNotePopup,
   renderMetaNotificationHistoryPagination,
   renderMetaNotificationHistoryRows,
+  resolveDefaultAnalyticsCentreKey,
 } from "./ui/app-shell.js";
+import { renderLandingPage } from "./ui/landing-page.js";
+import { renderReadmePage } from "./ui/readme-page.js";
+import { isDemoBody, isDemoRequest, resolveDemo } from "./demo/demo-flag.js";
+import {
+  countActiveDemoNotifications,
+  createDemoNote,
+  dismissDemoNotification,
+  latestDemoNotesForCentre,
+  listDemoNotes,
+  listDemoNotifications,
+  readDemoNotificationHistoryPage,
+  restoreDemoNote,
+  softDeleteDemoNote,
+} from "./demo/demo-notes-store.js";
+import {
+  DEMO_GA_SNAPSHOT,
+  DEMO_LATEST_SNAPSHOT_SET,
+  DEMO_META_DASHBOARD,
+  DEMO_WAITLIST_REPORT,
+  buildDemoCentreHistory,
+  loadDemoContacts,
+} from "./demo/fixtures/index.js";
 
 loadDotenv({ override: true });
 
@@ -361,7 +391,70 @@ function parseMetaNotificationContext(input: {
   };
 }
 
-app.get<{ Querystring: { centre?: string; window?: string; panel?: string; sort?: string; waitlistSection?: string; googleAnalyticsSection?: string; gaRange?: string; gaFrom?: string; gaTo?: string; gaFromMonth?: string; gaFromYear?: string; gaToMonth?: string; gaToYear?: string; metaRefreshed?: string } }>("/", async (request, reply) => {
+app.get("/", async (_request, reply) => {
+  void tickWeeklySnapshotRefresh(app.log);
+  return reply.type("text/html; charset=utf-8").send(renderLandingPage());
+});
+
+app.get("/readme", async (_request, reply) => {
+  return reply.type("text/html; charset=utf-8").send(await renderReadmePage());
+});
+
+app.get<{ Querystring: { centre?: string; window?: string; panel?: string; sort?: string; waitlistSection?: string; googleAnalyticsSection?: string; gaRange?: string; gaFrom?: string; gaTo?: string; gaFromMonth?: string; gaFromYear?: string; gaToMonth?: string; gaToYear?: string; metaRefreshed?: string; demo?: string } }>("/app", async (request, reply) => {
+  if (!isDemoRequest(request.query)) {
+    void tickWeeklySnapshotRefresh(app.log);
+  }
+  const demo = resolveDemo(request, reply, request.query);
+  if (demo) {
+    const centre = Number.parseInt(String(request.query?.centre ?? ""), 10);
+    const selectedWindowKey = resolveWindowKey(request.query?.window);
+    const serviceSort = request.query?.sort ?? null;
+    const selectedCentreKey = Number.isNaN(centre) ? null : centre;
+    const focusPanelId =
+      VALID_PANEL_IDS.has(request.query?.panel ?? "") ? request.query?.panel ?? null : null;
+    const snapshotSet = DEMO_LATEST_SNAPSHOT_SET;
+    const resolvedSelectedCentreKey =
+      selectedCentreKey ??
+      resolveDefaultAnalyticsCentreKey(snapshotSet, selectedWindowKey, serviceSort);
+    const centreHistory =
+      resolvedSelectedCentreKey == null ? [] : buildDemoCentreHistory(resolvedSelectedCentreKey, 90);
+    const annualHistory =
+      resolvedSelectedCentreKey == null ? [] : buildDemoCentreHistory(resolvedSelectedCentreKey, 365);
+
+    return reply
+      .type("text/html; charset=utf-8")
+      .send(
+        renderAppShell(snapshotSet, {
+          selectedCentreKey: resolvedSelectedCentreKey,
+          selectedWindowKey,
+          serviceSort,
+          focusPanelId,
+          centreHistory,
+          annualHistory,
+          waitlistSnapshotSet: snapshotSet,
+          waitlistReport: DEMO_WAITLIST_REPORT,
+          waitlistSection: request.query?.waitlistSection ?? null,
+          googleAnalyticsSection: request.query?.googleAnalyticsSection ?? null,
+          metaConfigStatus,
+          metaAdsDashboardData: DEMO_META_DASHBOARD,
+          googleAnalyticsConfigStatus,
+          googleAnalyticsSnapshot: DEMO_GA_SNAPSHOT,
+          googleAnalyticsRangeMode: "days",
+          googleAnalyticsFromMonth: "1",
+          googleAnalyticsFromYear: "2026",
+          googleAnalyticsToMonth: "5",
+          googleAnalyticsToYear: "2026",
+          metaRecommendationNotifications: listDemoNotifications(),
+          metaRecommendationNotificationCount: countActiveDemoNotifications(),
+          metaRecommendationNotes: listDemoNotes(),
+          latestMetaRecommendationNotesForCentre:
+            resolvedSelectedCentreKey == null ? [] : latestDemoNotesForCentre(resolvedSelectedCentreKey),
+          centreContacts: loadDemoContacts(),
+          demo: true,
+        }),
+      );
+  }
+
   const latestSnapshotSet = await readLatestAnalyticsSnapshotSet();
   const centre = Number.parseInt(String(request.query?.centre ?? ""), 10);
   const selectedWindowKey = resolveWindowKey(request.query?.window);
@@ -375,8 +468,7 @@ app.get<{ Querystring: { centre?: string; window?: string; panel?: string; sort?
   const snapshotSet = latestSnapshotSet;
   const resolvedSelectedCentreKey =
     selectedCentreKey ??
-    snapshotSet?.snapshots[0]?.centreKey ??
-    null;
+    resolveDefaultAnalyticsCentreKey(snapshotSet, selectedWindowKey, serviceSort);
   const centreHistory =
     resolvedSelectedCentreKey == null
       ? []
@@ -493,6 +585,7 @@ app.get<{ Querystring: { centre?: string; window?: string; panel?: string; sort?
       ? []
       : await readLatestMetaRecommendationNotesForCentre(resolvedSelectedCentreKey, 3);
   const centreContacts = await readCentreContactList();
+  const snapshotRefreshState = getSnapshotRefreshState();
 
   return reply
     .type("text/html; charset=utf-8")
@@ -522,6 +615,20 @@ app.get<{ Querystring: { centre?: string; window?: string; panel?: string; sort?
         metaRecommendationNotes,
         latestMetaRecommendationNotesForCentre,
         centreContacts,
+        snapshotRefreshStatus: snapshotRefreshState.status,
+        snapshotRefreshOutcome:
+          snapshotRefreshState.centresFailed != null || snapshotRefreshState.errorMessage
+            ? {
+                centresAttempted: snapshotRefreshState.centresAttempted,
+                centresProcessed: snapshotRefreshState.centresProcessed,
+                centresFailed: snapshotRefreshState.centresFailed,
+                failedCentres: snapshotRefreshState.failedCentres.map((failure) => ({
+                  centreName: failure.centreName,
+                  message: failure.message,
+                })),
+                errorMessage: snapshotRefreshState.errorMessage,
+              }
+            : null,
       }),
     );
 });
@@ -568,7 +675,11 @@ app.get<{ Querystring: {
   },
 );
 
-app.get<{ Querystring: { centre?: string; window?: string; sort?: string; gaRange?: string; gaFrom?: string; gaTo?: string; gaFromMonth?: string; gaFromYear?: string; gaToMonth?: string; gaToYear?: string } }>("/actions/refresh-google-analytics", async (request, reply) => {
+app.get<{ Querystring: { centre?: string; window?: string; sort?: string; gaRange?: string; gaFrom?: string; gaTo?: string; gaFromMonth?: string; gaFromYear?: string; gaToMonth?: string; gaToYear?: string; demo?: string } }>("/actions/refresh-google-analytics", async (request, reply) => {
+  if (isDemoRequest(request.query)) {
+    reply.code(303);
+    return reply.redirect(`/app?demo=1&panel=google-analytics`);
+  }
   let googleAnalyticsConfig;
 
   try {
@@ -619,20 +730,27 @@ app.get<{ Querystring: { centre?: string; window?: string; sort?: string; gaRang
 
   reply.code(303);
 
-  return reply.redirect(`/?${params.toString()}`);
+  return reply.redirect(`/app?${params.toString()}`);
 });
 
-app.get<{ Querystring: { page?: string; pageSize?: string; centre?: string; kind?: string } }>("/api/meta-recommendation-notifications/history", async (request) => {
+app.get<{ Querystring: { page?: string; pageSize?: string; centre?: string; kind?: string; demo?: string } }>("/api/meta-recommendation-notifications/history", async (request) => {
   const page = Number.parseInt(String(request.query?.page ?? "1"), 10);
   const pageSize = Number.parseInt(String(request.query?.pageSize ?? "25"), 10);
   const centreKey = Number.parseInt(String(request.query?.centre ?? ""), 10);
   const kind = request.query?.kind === "Notification" || request.query?.kind === "Note" ? request.query.kind : null;
-  const pageData = await readMetaNotificationHistoryPage({
-    page: Number.isNaN(page) ? 1 : page,
-    pageSize: Number.isNaN(pageSize) ? 25 : pageSize,
-    centreKey: Number.isNaN(centreKey) ? null : centreKey,
-    kind,
-  });
+  const pageData = isDemoRequest(request.query)
+    ? readDemoNotificationHistoryPage({
+        page: Number.isNaN(page) ? 1 : page,
+        pageSize: Number.isNaN(pageSize) ? 25 : pageSize,
+        centreKey: Number.isNaN(centreKey) ? null : centreKey,
+        kind,
+      })
+    : await readMetaNotificationHistoryPage({
+        page: Number.isNaN(page) ? 1 : page,
+        pageSize: Number.isNaN(pageSize) ? 25 : pageSize,
+        centreKey: Number.isNaN(centreKey) ? null : centreKey,
+        kind,
+      });
 
   return {
     rowsHtml: renderMetaNotificationHistoryRows(pageData.rows),
@@ -645,7 +763,7 @@ app.get<{ Querystring: { page?: string; pageSize?: string; centre?: string; kind
   };
 });
 
-app.get<{ Querystring: { centre?: string; limit?: string } }>("/api/meta-recommendation-notes/latest", async (request, reply) => {
+app.get<{ Querystring: { centre?: string; limit?: string; demo?: string } }>("/api/meta-recommendation-notes/latest", async (request, reply) => {
   const centreKey = Number.parseInt(String(request.query?.centre ?? ""), 10);
   const limit = Number.parseInt(String(request.query?.limit ?? "3"), 10);
 
@@ -655,10 +773,12 @@ app.get<{ Querystring: { centre?: string; limit?: string } }>("/api/meta-recomme
     return { error: "Valid centre is required." };
   }
 
-  const rows = await readLatestMetaRecommendationNotesForCentre(
-    centreKey,
-    Number.isInteger(limit) ? limit : 3,
-  );
+  const rows = isDemoRequest(request.query)
+    ? latestDemoNotesForCentre(centreKey, Number.isInteger(limit) ? limit : 3)
+    : await readLatestMetaRecommendationNotesForCentre(
+        centreKey,
+        Number.isInteger(limit) ? limit : 3,
+      );
 
   return {
     notes: rows.map((row) => ({
@@ -671,7 +791,7 @@ app.get<{ Querystring: { centre?: string; limit?: string } }>("/api/meta-recomme
   };
 });
 
-app.post<{ Body: { notificationId?: string } }>("/api/meta-recommendation-notifications/dismiss", async (request, reply) => {
+app.post<{ Body: { notificationId?: string; demo?: string | boolean } }>("/api/meta-recommendation-notifications/dismiss", async (request, reply) => {
   const notificationId = String(request.body?.notificationId ?? "").trim();
 
   if (!notificationId) {
@@ -680,12 +800,16 @@ app.post<{ Body: { notificationId?: string } }>("/api/meta-recommendation-notifi
     return { error: "notificationId is required." };
   }
 
+  if (isDemoBody(request.body)) {
+    return { notification: dismissDemoNotification(notificationId) };
+  }
+
   const notification = await dismissMetaRecommendationNotification(notificationId);
 
   return { notification };
 });
 
-app.post<{ Body: { notificationId?: string; text?: string; notification?: Partial<MetaRecommendationNotificationInput> | null } }>("/api/meta-recommendation-notes", async (request, reply) => {
+app.post<{ Body: { notificationId?: string; text?: string; notification?: Partial<MetaRecommendationNotificationInput> | null; demo?: string | boolean } }>("/api/meta-recommendation-notes", async (request, reply) => {
   const notificationId = String(request.body?.notificationId ?? "").trim();
   const text = String(request.body?.text ?? "").trim();
 
@@ -693,6 +817,11 @@ app.post<{ Body: { notificationId?: string; text?: string; notification?: Partia
     reply.code(400);
 
     return { error: "notificationId and text are required." };
+  }
+
+  if (isDemoBody(request.body)) {
+    const note = createDemoNote({ notificationId, text });
+    return reply.code(201).send({ note });
   }
 
   const notification = request.body?.notification
@@ -755,7 +884,7 @@ app.post<{ Params: { centreKey: string }; Body: { headingText?: string; primaryT
   return reply.code(201).send({ content });
 });
 
-app.post<{ Params: { id: string } }>("/api/meta-recommendation-notes/:id/delete", async (request, reply) => {
+app.post<{ Params: { id: string }; Body: { demo?: string | boolean } }>("/api/meta-recommendation-notes/:id/delete", async (request, reply) => {
   const id = Number.parseInt(request.params.id, 10);
 
   if (!Number.isInteger(id) || id <= 0) {
@@ -764,18 +893,26 @@ app.post<{ Params: { id: string } }>("/api/meta-recommendation-notes/:id/delete"
     return { error: "Valid note id is required." };
   }
 
+  if (isDemoBody(request.body)) {
+    return { note: softDeleteDemoNote(id) };
+  }
+
   const note = await softDeleteMetaRecommendationNote(id);
 
   return { note };
 });
 
-app.post<{ Params: { id: string } }>("/api/meta-recommendation-notes/:id/restore", async (request, reply) => {
+app.post<{ Params: { id: string }; Body: { demo?: string | boolean } }>("/api/meta-recommendation-notes/:id/restore", async (request, reply) => {
   const id = Number.parseInt(request.params.id, 10);
 
   if (!Number.isInteger(id) || id <= 0) {
     reply.code(400);
 
     return { error: "Valid note id is required." };
+  }
+
+  if (isDemoBody(request.body)) {
+    return { note: restoreDemoNote(id) };
   }
 
   const note = await restoreMetaRecommendationNote(id);
@@ -789,12 +926,14 @@ app.post<{
     centreKey?: number | string | null;
     windowKey?: string | null;
     messages?: AiChatHistoryMessageInput[];
+    demo?: string | boolean;
   };
 }>("/api/ai/chat", async (request, reply) => {
   const prompt = String(request.body?.prompt ?? "").trim();
   const centreKey = Number.parseInt(String(request.body?.centreKey ?? ""), 10);
   const selectedCentreKey = Number.isInteger(centreKey) && centreKey > 0 ? centreKey : null;
   const selectedWindowKey = resolveWindowKey(request.body?.windowKey);
+  const demo = isDemoBody(request.body);
 
   if (!prompt) {
     reply.code(400);
@@ -808,16 +947,22 @@ app.post<{
     return { error: "Prompt is too long. Keep it under 2,000 characters." };
   }
 
-  const latestSnapshotSet = await readLatestAnalyticsSnapshotSet();
+  const latestSnapshotSet = demo
+    ? DEMO_LATEST_SNAPSHOT_SET
+    : await readLatestAnalyticsSnapshotSet();
   const latestRunDate = latestSnapshotSet ? new Date(latestSnapshotSet.runDate) : new Date();
   const windowStartDate = resolveWindowStartDate(latestRunDate, selectedWindowKey);
-  const metaAdsDashboardData = await readMetaAdsDashboardData({
-    fromDate: windowStartDate,
-    toDate: latestRunDate,
-  });
-  const googleAnalyticsSnapshot = await readLatestGoogleAnalyticsDailySnapshot(env.GOOGLE_ANALYTICS_PROPERTY_ID);
+  const metaAdsDashboardData = demo
+    ? DEMO_META_DASHBOARD
+    : await readMetaAdsDashboardData({
+        fromDate: windowStartDate,
+        toDate: latestRunDate,
+      });
+  const googleAnalyticsSnapshot = demo
+    ? DEMO_GA_SNAPSHOT
+    : await readLatestGoogleAnalyticsDailySnapshot(env.GOOGLE_ANALYTICS_PROPERTY_ID);
   const selectedCentreNotes =
-    selectedCentreKey == null
+    selectedCentreKey == null || demo
       ? []
       : await readLatestMetaRecommendationNotesForCentre(selectedCentreKey, 10);
   const context = buildAiDashboardContext({
@@ -894,12 +1039,14 @@ app.post<{
     centreKey?: number | string | null;
     windowKey?: string | null;
     messages?: AiChatHistoryMessageInput[];
+    demo?: string | boolean;
   };
 }>("/api/ai/chat/stream", async (request, reply) => {
   const prompt = String(request.body?.prompt ?? "").trim();
   const centreKey = Number.parseInt(String(request.body?.centreKey ?? ""), 10);
   const selectedCentreKey = Number.isInteger(centreKey) && centreKey > 0 ? centreKey : null;
   const selectedWindowKey = resolveWindowKey(request.body?.windowKey);
+  const demo = isDemoBody(request.body);
 
   if (!prompt) {
     reply.code(400);
@@ -913,16 +1060,22 @@ app.post<{
     return { error: "Prompt is too long. Keep it under 2,000 characters." };
   }
 
-  const latestSnapshotSet = await readLatestAnalyticsSnapshotSet();
+  const latestSnapshotSet = demo
+    ? DEMO_LATEST_SNAPSHOT_SET
+    : await readLatestAnalyticsSnapshotSet();
   const latestRunDate = latestSnapshotSet ? new Date(latestSnapshotSet.runDate) : new Date();
   const windowStartDate = resolveWindowStartDate(latestRunDate, selectedWindowKey);
-  const metaAdsDashboardData = await readMetaAdsDashboardData({
-    fromDate: windowStartDate,
-    toDate: latestRunDate,
-  });
-  const googleAnalyticsSnapshot = await readLatestGoogleAnalyticsDailySnapshot(env.GOOGLE_ANALYTICS_PROPERTY_ID);
+  const metaAdsDashboardData = demo
+    ? DEMO_META_DASHBOARD
+    : await readMetaAdsDashboardData({
+        fromDate: windowStartDate,
+        toDate: latestRunDate,
+      });
+  const googleAnalyticsSnapshot = demo
+    ? DEMO_GA_SNAPSHOT
+    : await readLatestGoogleAnalyticsDailySnapshot(env.GOOGLE_ANALYTICS_PROPERTY_ID);
   const selectedCentreNotes =
-    selectedCentreKey == null
+    selectedCentreKey == null || demo
       ? []
       : await readLatestMetaRecommendationNotesForCentre(selectedCentreKey, 10);
   const context = buildAiDashboardContext({
@@ -997,7 +1150,11 @@ app.post<{
   }
 });
 
-app.get<{ Querystring: { centre?: string; window?: string; sort?: string } }>("/actions/refresh-meta-ads", async (request, reply) => {
+app.get<{ Querystring: { centre?: string; window?: string; sort?: string; demo?: string } }>("/actions/refresh-meta-ads", async (request, reply) => {
+  if (isDemoRequest(request.query)) {
+    reply.code(303);
+    return reply.redirect(`/app?demo=1&panel=meta-ads`);
+  }
   let metaConfig;
 
   try {
@@ -1041,10 +1198,14 @@ app.get<{ Querystring: { centre?: string; window?: string; sort?: string } }>("/
 
   reply.code(303);
 
-  return reply.redirect(`/?${params.toString()}`);
+  return reply.redirect(`/app?${params.toString()}`);
 });
 
-app.get<{ Querystring: { centre?: string; window?: string; sort?: string } }>("/actions/refresh-centres", async (request, reply) => {
+app.get<{ Querystring: { centre?: string; window?: string; sort?: string; demo?: string } }>("/actions/refresh-centres", async (request, reply) => {
+  if (isDemoRequest(request.query)) {
+    reply.code(303);
+    return reply.redirect(`/app?demo=1`);
+  }
   await syncStoredCentreReferences({ force: true });
   const centre = request.query?.centre;
   const windowKey = resolveWindowKey(request.query?.window);
@@ -1060,16 +1221,20 @@ app.get<{ Querystring: { centre?: string; window?: string; sort?: string } }>("/
   if (serviceSort) {
     params.set("sort", serviceSort);
   }
-  const redirectTarget = `/?${params.toString()}`;
+  const redirectTarget = `/app?${params.toString()}`;
 
   reply.code(303);
 
   return reply.redirect(redirectTarget);
 });
 
-app.get<{ Querystring: { centre?: string; window?: string; sort?: string } }>("/actions/refresh-snapshot", async (request, reply) => {
-  await refreshAnalyticsSnapshot({ source: "manual-refresh" });
-  await refreshWaitlistReport();
+app.get<{ Querystring: { centre?: string; window?: string; sort?: string; demo?: string } }>("/actions/refresh-snapshot", async (request, reply) => {
+  if (isDemoRequest(request.query)) {
+    reply.code(303);
+    return reply.redirect(`/app?demo=1`);
+  }
+
+  const currentStatus = getSnapshotRefreshState().status;
   const centre = request.query?.centre;
   const params = new URLSearchParams();
 
@@ -1078,11 +1243,77 @@ app.get<{ Querystring: { centre?: string; window?: string; sort?: string } }>("/
   }
 
   params.set("window", "3M");
-  const redirectTarget = `/?${params.toString()}`;
+  const redirectTarget = `/app?${params.toString()}`;
+
+  if (currentStatus === "in-progress") {
+    reply.code(303);
+    return reply.redirect(redirectTarget);
+  }
+
+  if (currentStatus === "ready") {
+    markSnapshotRefreshAcknowledged();
+    reply.code(303);
+    return reply.redirect(redirectTarget);
+  }
+
+  try {
+    const result = await refreshAnalyticsSnapshot({ source: "manual-refresh" });
+
+    try {
+      await refreshWaitlistReport();
+    } catch (waitlistError) {
+      app.log.error({ error: waitlistError }, "Manual waitlist refresh failed");
+      recordSnapshotRefreshOutcome({
+        centresAttempted: result.centresAttempted,
+        centresProcessed: result.centresProcessed,
+        centresFailed: result.centresFailed,
+        failedCentres: result.failedCentres,
+        errorMessage:
+          waitlistError instanceof Error
+            ? `Waitlist report did not refresh: ${waitlistError.message}`
+            : "Waitlist report did not refresh.",
+      });
+      reply.code(303);
+      return reply.redirect(redirectTarget);
+    }
+
+    recordSnapshotRefreshOutcome({
+      centresAttempted: result.centresAttempted,
+      centresProcessed: result.centresProcessed,
+      centresFailed: result.centresFailed,
+      failedCentres: result.failedCentres,
+    });
+  } catch (error) {
+    app.log.error({ error }, "Manual snapshot refresh failed");
+    recordSnapshotRefreshOutcome({
+      centresAttempted: 0,
+      centresProcessed: 0,
+      centresFailed: 0,
+      failedCentres: [],
+      errorMessage:
+        error instanceof Error
+          ? error.message
+          : "Snapshot refresh failed for an unknown reason.",
+    });
+  }
 
   reply.code(303);
 
   return reply.redirect(redirectTarget);
+});
+
+app.get<{ Querystring: { demo?: string } }>("/actions/dismiss-snapshot-outcome", async (request, reply) => {
+  if (!isDemoRequest(request.query)) {
+    clearSnapshotRefreshOutcome();
+  }
+  reply.code(303);
+  return reply.redirect("/app");
+});
+
+app.get("/actions/snapshot-status", async (_request, reply) => {
+  const snapshotState = getSnapshotRefreshState();
+
+  return reply.type("application/json; charset=utf-8").send(snapshotState);
 });
 
 app.get("/app.css", async (_request, reply) => {
@@ -1095,6 +1326,12 @@ app.get("/favicon.ico", async (_request, reply) => {
   const icon = await readFile(join(process.cwd(), "assets", "images", "ico.png"));
 
   return reply.type("image/png").send(icon);
+});
+
+app.get("/assets/beepbeep-intro.mp4", async (_request, reply) => {
+  const video = await readFile(join(process.cwd(), "assets", "images", "BeepBeep-intro.mp4"));
+
+  return reply.type("video/mp4").send(video);
 });
 
 app.get("/vendor/bootstrap-icons.css", async (_request, reply) => {

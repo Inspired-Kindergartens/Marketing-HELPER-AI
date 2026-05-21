@@ -30,7 +30,54 @@ export const BLOCKED_INFOCARE_MODE_PREFIXES = [
 
 const INFOCARE_BASE_URL =
   "https://infocare.digiweb.net.nz/charley/servlet/RubyServlet";
-const RETRY_DELAYS_MS = [10_000];
+const RETRY_DELAYS_MS = [10_000, 20_000, 40_000];
+const MAX_RETRY_AFTER_MS = 120_000;
+const REQUEST_TIMEOUT_MS = 30_000;
+
+function isRetryableHttpStatus(status: number) {
+  return status === 429 || (status >= 500 && status <= 599);
+}
+
+function isNetworkOrTimeoutError(error: unknown) {
+  if (error instanceof Error) {
+    if (error.name === "AbortError" || error.name === "TimeoutError") {
+      return true;
+    }
+    if (error instanceof TypeError) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function parseRetryAfterMs(headerValue: string | null): number | null {
+  if (!headerValue) {
+    return null;
+  }
+
+  const trimmed = headerValue.trim();
+
+  if (trimmed === "") {
+    return null;
+  }
+
+  const seconds = Number(trimmed);
+
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.min(Math.round(seconds * 1000), MAX_RETRY_AFTER_MS);
+  }
+
+  const dateMs = Date.parse(trimmed);
+
+  if (Number.isFinite(dateMs)) {
+    const delta = dateMs - Date.now();
+
+    return delta > 0 ? Math.min(delta, MAX_RETRY_AFTER_MS) : 0;
+  }
+
+  return null;
+}
 
 const requestModeSchema = z
   .string()
@@ -121,19 +168,35 @@ export function createInfocareClient(options: RequestInitOptions = {}) {
         let lastError: Error | null = null;
 
         for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt += 1) {
-          const response = await fetchImpl(env.INFOCARE_BASE_URL, {
-            method: "POST",
-            headers: {
-              "content-type": "application/json",
-              accept: "application/json",
-            },
-            body: JSON.stringify({
-              username: env.INFOCAREUSER,
-              password: env.INFOCAREPASS,
-              mode: validatedMode,
-              parameters,
-            }),
-          });
+          let response: Response;
+
+          try {
+            response = await fetchImpl(env.INFOCARE_BASE_URL, {
+              method: "POST",
+              headers: {
+                "content-type": "application/json",
+                accept: "application/json",
+              },
+              body: JSON.stringify({
+                username: env.INFOCAREUSER,
+                password: env.INFOCAREPASS,
+                mode: validatedMode,
+                parameters,
+              }),
+              signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+            });
+          } catch (fetchError) {
+            if (isNetworkOrTimeoutError(fetchError) && attempt < RETRY_DELAYS_MS.length) {
+              lastError =
+                fetchError instanceof Error
+                  ? new Error(`Infocare request network error: ${fetchError.message}`)
+                  : new Error("Infocare request network error.");
+              await sleep(RETRY_DELAYS_MS[attempt] ?? 0);
+              continue;
+            }
+
+            throw fetchError;
+          }
 
           const responseText = await response.text();
 
@@ -142,8 +205,12 @@ export function createInfocareClient(options: RequestInitOptions = {}) {
               `Infocare request failed with status ${response.status} ${response.statusText}: ${responseText}`,
             );
 
-            if (response.status === 429 && attempt < RETRY_DELAYS_MS.length) {
-              await sleep(RETRY_DELAYS_MS[attempt] ?? 0);
+            if (isRetryableHttpStatus(response.status) && attempt < RETRY_DELAYS_MS.length) {
+              const retryAfterMs = parseRetryAfterMs(response.headers.get("retry-after"));
+              const backoffMs = RETRY_DELAYS_MS[attempt] ?? 0;
+              const waitMs = retryAfterMs != null ? Math.max(retryAfterMs, backoffMs) : backoffMs;
+
+              await sleep(waitMs);
               continue;
             }
 

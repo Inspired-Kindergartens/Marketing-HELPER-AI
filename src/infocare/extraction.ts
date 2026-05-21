@@ -13,6 +13,13 @@ import {
 export const CURRENT_ENROLMENTS_CATEGORY = "Current enrolments";
 export const WAITING_LIST_CATEGORY = "Waiting list";
 
+const EXTRACTION_REQUEST_DELAY_MS = 650;
+const EXTRACTION_CENTRE_DELAY_MS = 850;
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export type ExtractionDateRange = {
   startDate: string;
   endDate: string;
@@ -171,42 +178,54 @@ export async function extractCentreBundle(
   const client = options.client ?? createInfocareClient();
   const dateRange = options.dateRange ?? buildExtractionDateRange();
   const weeklyDateRange = buildWeeklyExtractionDateRange(new Date(dateRange.endDate));
-  const [enrolledChildren, waitingListChildren, licenses] = await Promise.all([
-    fetchCentreChildList(
-      {
-        centreKey: centre.centreKey,
-        category: CURRENT_ENROLMENTS_CATEGORY,
-        dateRange,
-      },
-      client,
-    ),
-    fetchCentreChildList(
-      {
-        centreKey: centre.centreKey,
-        category: WAITING_LIST_CATEGORY,
-        dateRange,
-      },
-      client,
-    ),
-    fetchCentreLicenseList(
-      {
-        centreKey: centre.centreKey,
-      },
-      client,
-    ),
-  ]);
-  const bookingLists = await Promise.all(
-    enrolledChildren.map(async (child) => ({
-      childKey: child.child_key,
-      bookings: await fetchChildBookingList(
+  const enrolledChildren = await fetchCentreChildList(
+    {
+      centreKey: centre.centreKey,
+      category: CURRENT_ENROLMENTS_CATEGORY,
+      dateRange,
+    },
+    client,
+  );
+  await sleep(EXTRACTION_REQUEST_DELAY_MS);
+  const waitingListChildren = await fetchCentreChildList(
+    {
+      centreKey: centre.centreKey,
+      category: WAITING_LIST_CATEGORY,
+      dateRange,
+    },
+    client,
+  );
+  await sleep(EXTRACTION_REQUEST_DELAY_MS);
+  const licenses = await fetchCentreLicenseList(
+    {
+      centreKey: centre.centreKey,
+    },
+    client,
+  );
+  const bookingLists: { childKey: number; bookings: InfocareBooking[] }[] = [];
+
+  for (const child of enrolledChildren) {
+    await sleep(EXTRACTION_REQUEST_DELAY_MS);
+
+    try {
+      const bookings = await fetchChildBookingList(
         {
           childKey: child.child_key,
           dateRange: weeklyDateRange,
         },
         client,
-      ),
-    })),
-  );
+      );
+
+      bookingLists.push({ childKey: child.child_key, bookings });
+    } catch (error) {
+      bookingLists.push({ childKey: child.child_key, bookings: [] });
+      console.warn(
+        `Skipping booking list for child ${child.child_key} in centre ${centre.name}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
   const bookingMinutesByChildKey = Object.fromEntries(
     bookingLists.map(({ childKey, bookings }) => [
       childKey,
@@ -244,14 +263,66 @@ export async function extractCentreBundles(
   const dateRange = options.dateRange ?? buildExtractionDateRange();
   const bundles: CentreExtractionBundle[] = [];
 
-  for (const centre of options.centres) {
+  for (const [index, centre] of options.centres.entries()) {
     bundles.push(
       await extractCentreBundle(centre, {
         client,
         dateRange,
       }),
     );
+
+    if (index < options.centres.length - 1) {
+      await sleep(EXTRACTION_CENTRE_DELAY_MS);
+    }
   }
 
   return bundles;
+}
+
+export type CentreExtractionFailure = {
+  centreKey: number;
+  centreName: string;
+  message: string;
+};
+
+export type CentreExtractionPartialResult = {
+  bundles: CentreExtractionBundle[];
+  failures: CentreExtractionFailure[];
+};
+
+export async function extractCentreBundlesPartial(
+  options: ExtractCentreBundlesOptions,
+): Promise<CentreExtractionPartialResult> {
+  const client = options.client ?? createInfocareClient();
+  const dateRange = options.dateRange ?? buildExtractionDateRange();
+  const bundles: CentreExtractionBundle[] = [];
+  const failures: CentreExtractionFailure[] = [];
+
+  for (const [index, centre] of options.centres.entries()) {
+    try {
+      bundles.push(
+        await extractCentreBundle(centre, {
+          client,
+          dateRange,
+        }),
+      );
+    } catch (error) {
+      failures.push({
+        centreKey: centre.centreKey,
+        centreName: centre.name,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      console.warn(
+        `Skipping centre ${centre.name} (${centre.centreKey}): ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+
+    if (index < options.centres.length - 1) {
+      await sleep(EXTRACTION_CENTRE_DELAY_MS);
+    }
+  }
+
+  return { bundles, failures };
 }

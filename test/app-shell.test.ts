@@ -354,7 +354,7 @@ test("analytics table note buttons open the shared meta ads note flow", () => {
   assert.match(html, /data-replacement-pressure/);
   assert.match(html, /const analyticsNoteButton = target\.closest\("\[data-analytics-meta-note\]"\)/);
   assert.match(html, /function openMetaNoteModal\(context\)/);
-  assert.match(html, /fetch\("\/api\/meta-recommendation-notes\/latest\?centre="/);
+  assert.match(html, /fetch\((?:window\.mhDemoUrl\()?"\/api\/meta-recommendation-notes\/latest\?centre="/);
   assert.match(html, /openMetaNoteModal\(getMetaNoteButtonContext\(analyticsNoteButton\)\)/);
   assert.match(html, /modal\.dataset\.refreshOnClose === "true"/);
   assert.match(html, /window\.location\.reload\(\)/);

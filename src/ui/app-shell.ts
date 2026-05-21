@@ -106,6 +106,15 @@ type AppShellOptions = {
   metaRecommendationNotes?: MetaRecommendationNoteView[];
   latestMetaRecommendationNotesForCentre?: MetaNotificationHistoryRow[];
   centreContacts?: CentreContact[];
+  demo?: boolean;
+  snapshotRefreshStatus?: "idle" | "in-progress" | "ready" | "error";
+  snapshotRefreshOutcome?: {
+    centresAttempted: number | null;
+    centresProcessed: number | null;
+    centresFailed: number | null;
+    failedCentres: { centreName: string; message: string }[];
+    errorMessage: string | null;
+  } | null;
 };
 
 function formatPercent(value: number) {
@@ -1537,21 +1546,43 @@ function renderWaitlistQualityPanel(
 
 function resolveSelectedRow(
   snapshotSet: LatestSnapshotSet | null,
-  selectedCentreKey?: number | null,
+  selectedCentreKey: number | null | undefined,
+  serviceSort: ServiceSort,
+  selectedWindowKey: WindowKey,
 ) {
   if (!snapshotSet?.snapshots.length) {
     return null;
   }
 
+  const sortedRows = sortAnalyticsRows(snapshotSet.snapshots, serviceSort, selectedWindowKey);
+
   if (selectedCentreKey == null) {
-    return snapshotSet.snapshots[0];
+    return sortedRows[0];
   }
 
   return (
-    snapshotSet.snapshots.find((row) => row.centreKey === selectedCentreKey) ??
-    snapshotSet.snapshots[0]
+    sortedRows.find((row) => row.centreKey === selectedCentreKey) ??
+    sortedRows[0]
   );
 }
+
+export function resolveDefaultAnalyticsCentreKey(
+  snapshotSet: LatestSnapshotSet | null,
+  selectedWindowKey: WindowKey,
+  serviceSort?: string | null,
+): number | null {
+  if (!snapshotSet?.snapshots.length) {
+    return null;
+  }
+  const sortedRows = sortAnalyticsRows(
+    snapshotSet.snapshots,
+    resolveServiceSort(serviceSort),
+    selectedWindowKey,
+  );
+  return sortedRows[0]?.centreKey ?? null;
+}
+
+let CURRENT_RENDER_IS_DEMO = false;
 
 function buildQueryString(
   selectedCentreKey: number | null | undefined,
@@ -1586,6 +1617,10 @@ function buildQueryString(
     }
   }
 
+  if (CURRENT_RENDER_IS_DEMO) {
+    params.set("demo", "1");
+  }
+
   return params.toString();
 }
 
@@ -1595,14 +1630,14 @@ function renderAnalyticsToolbarActions(
   serviceSort: ServiceSort,
 ) {
   const selectedCentreValue = selectedCentreKey == null ? null : selectedCentreKey;
-  const ascSortHref = `/?${buildQueryString(selectedCentreValue, selectedWindowKey, "asc")}`;
-  const descSortHref = `/?${buildQueryString(selectedCentreValue, selectedWindowKey, "desc")}`;
+  const ascSortHref = `/app?${buildQueryString(selectedCentreValue, selectedWindowKey, "asc")}`;
+  const descSortHref = `/app?${buildQueryString(selectedCentreValue, selectedWindowKey, "desc")}`;
 
   return `
     <div class="analytics-toolbar__actions">
       <a
         class="analytics-toolbar__icon-action"
-        href="/?${buildQueryString(selectedCentreValue, "3M", "critical")}"
+        href="/app?${buildQueryString(selectedCentreValue, "3M", "critical")}"
         aria-label="Reset analytics view"
         title="Reset analytics view"
       ><i class="bi bi-arrow-counterclockwise ui-icon" aria-hidden="true"></i></a>
@@ -1612,12 +1647,31 @@ function renderAnalyticsToolbarActions(
             ? "analytics-toolbar__window analytics-toolbar__window--active"
             : "analytics-toolbar__window";
 
-        return `<a class="${className}" href="/?${buildQueryString(selectedCentreValue, option.key, serviceSort)}">${option.label}</a>`;
+        return `<a class="${className}" href="/app?${buildQueryString(selectedCentreValue, option.key, serviceSort)}">${option.label}</a>`;
       }).join("")}
       <a class="analytics-toolbar__window${serviceSort === "asc" ? " analytics-toolbar__window--active" : ""}" href="${ascSortHref}" aria-label="Sort service A to Z">&uarr;</a>
       <a class="analytics-toolbar__window${serviceSort === "desc" ? " analytics-toolbar__window--active" : ""}" href="${descSortHref}" aria-label="Sort service Z to A">&darr;</a>
     </div>
   `;
+}
+
+function renderAnalyticsRefreshButton(
+  selectedCentreKey: number | null | undefined,
+  snapshotRefreshStatus: "idle" | "in-progress" | "ready" | "error",
+) {
+  const href = `/actions/refresh-snapshot?${buildQueryString(selectedCentreKey, "3M", "critical")}`;
+
+  if (snapshotRefreshStatus === "in-progress") {
+    return `<span class="panel-action-button panel-action-button--disabled" data-snapshot-refresh-button data-snapshot-refresh-status="in-progress" aria-label="Downloading latest Infocare analytics snapshot" title="Downloading latest Infocare analytics snapshot" role="img"><i class="bi bi-arrow-repeat ui-icon panel-action-button__spinner" aria-hidden="true"></i></span>`;
+  }
+
+  const pulsateClass = snapshotRefreshStatus === "ready" ? " panel-action-button--pulsate" : "";
+  const label =
+    snapshotRefreshStatus === "ready"
+      ? "Refresh dashboard with latest Infocare snapshot"
+      : "Download latest Infocare analytics snapshot";
+
+  return `<a class="panel-action-button${pulsateClass}" data-snapshot-refresh-button data-snapshot-refresh-status="${snapshotRefreshStatus}" href="${href}" aria-label="${label}" title="${label}"><i class="bi bi-download ui-icon" aria-hidden="true"></i></a>`;
 }
 
 function buildPanelActions(
@@ -1627,6 +1681,7 @@ function buildPanelActions(
   serviceSort: ServiceSort,
   focusPanelId?: string | null,
   googleAnalyticsRange?: GoogleAnalyticsRangeSelection,
+  snapshotRefreshStatus: "idle" | "in-progress" | "ready" | "error" = "idle",
 ) {
   if (panelId === "chat") {
     return `<button class="panel-action-button" type="button" data-print-mode="chat" aria-label="Print AI Chat" title="Print AI Chat"><i class="bi bi-printer ui-icon" aria-hidden="true"></i></button>`;
@@ -1642,7 +1697,7 @@ function buildPanelActions(
       : "";
   const analyticsRefreshAction =
     panelId === "analytics"
-      ? `<a class="panel-action-button" href="/actions/refresh-snapshot?${buildQueryString(selectedCentreKey, "3M", "critical")}" aria-label="Download latest Infocare analytics snapshot" title="Download latest Infocare analytics snapshot"><i class="bi bi-download ui-icon" aria-hidden="true"></i></a>`
+      ? renderAnalyticsRefreshButton(selectedCentreKey, snapshotRefreshStatus)
       : "";
   const metaRefreshAction =
     panelId === "meta-ads"
@@ -1656,7 +1711,7 @@ function buildPanelActions(
   const printAction = `<button class="panel-action-button" type="button" data-print-page aria-label="Print window" title="Print window"><i class="bi bi-printer ui-icon" aria-hidden="true"></i></button>`;
 
   if (focusPanelId === panelId) {
-    return `${analyticsViewActions}${analyticsRefreshAction}${metaRefreshAction}${googleAnalyticsRefreshAction}${printAction}${fullscreenAction}<a class="panel-action-link" href="/?${buildQueryString(selectedCentreKey, selectedWindowKey, serviceSort, null, googleAnalyticsRange)}"><i class="bi bi-arrow-left-short ui-icon" aria-hidden="true"></i><span>Return to dashboard</span></a>`;
+    return `${analyticsViewActions}${analyticsRefreshAction}${metaRefreshAction}${googleAnalyticsRefreshAction}${printAction}${fullscreenAction}<a class="panel-action-link" href="/app?${buildQueryString(selectedCentreKey, selectedWindowKey, serviceSort, null, googleAnalyticsRange)}"><i class="bi bi-arrow-left-short ui-icon" aria-hidden="true"></i><span>Return to dashboard</span></a>`;
   }
 
   const popupQuery = buildQueryString(selectedCentreKey, selectedWindowKey, serviceSort, panelId, googleAnalyticsRange);
@@ -1864,9 +1919,9 @@ function renderAnalyticsTable(
 ) {
   const analyticsRows = sortAnalyticsRows(snapshotSet?.snapshots ?? [], serviceSort, selectedWindowKey);
   const selectedCentreValue = selectedCentreKey == null ? null : selectedCentreKey;
-  const criticalSortHref = `/?${buildQueryString(selectedCentreValue, selectedWindowKey, "critical")}`;
-  const ascSortHref = `/?${buildQueryString(selectedCentreValue, selectedWindowKey, "asc")}`;
-  const descSortHref = `/?${buildQueryString(selectedCentreValue, selectedWindowKey, "desc")}`;
+  const criticalSortHref = `/app?${buildQueryString(selectedCentreValue, selectedWindowKey, "critical")}`;
+  const ascSortHref = `/app?${buildQueryString(selectedCentreValue, selectedWindowKey, "asc")}`;
+  const descSortHref = `/app?${buildQueryString(selectedCentreValue, selectedWindowKey, "desc")}`;
   const coverage = getMetaCoverageByCentre(metaAdsDashboardData);
   const rows = analyticsRows
     .map(
@@ -1885,7 +1940,7 @@ function renderAnalyticsTable(
         const noteAction = `<button type="button" class="analytics-table__note-action" data-analytics-meta-note data-notification-id="${escapeHtml(notificationId)}" data-centre-key="${row.centreKey}" data-window-key="${escapeHtml(selectedWindowKey)}" data-meta-history-heading="${escapeHtml(recommendation)}" data-meta-history-message="${escapeHtml(metaMessage)}" data-centre-name="${escapeHtml(row.serviceName)}" data-open-places="${openPlaces}" data-actionable-waitlist="${actionableWaitlist}" data-waitlist-count="${row.waitlistCount}" data-replacement-pressure="${replacementPressure}" data-active-campaign-count="${centreCoverage?.activeCampaignCount ?? 0}" data-spend-30d="${centreCoverage?.spend30d ?? 0}" title="Add Meta Ads note" aria-label="Add Meta Ads note for ${escapeHtml(row.serviceName)}"><i class="bi bi-journal-plus ui-icon" aria-hidden="true"></i></button>`;
 
         return `
-        <tr class="${row.centreKey === selectedCentreKey ? "analytics-table__row--selected analytics-table__row--clickable" : "analytics-table__row--clickable"}" data-row-href="/?${buildQueryString(row.centreKey, selectedWindowKey, serviceSort)}">
+        <tr class="${row.centreKey === selectedCentreKey ? "analytics-table__row--selected analytics-table__row--clickable" : "analytics-table__row--clickable"}" data-row-href="/app?${buildQueryString(row.centreKey, selectedWindowKey, serviceSort)}">
           <td class="analytics-table__service">
             <span title="${escapeHtml(row.serviceName)}">${escapeHtml(formatAnalyticsServiceDisplayName(row.serviceName))}</span>
           </td>
@@ -1980,8 +2035,9 @@ function renderSelectedCentreNarrative(
   centreHistory: CentreSnapshotHistoryEntry[],
   annualHistory: CentreSnapshotHistoryEntry[],
   latestMetaRecommendationNotesForCentre: MetaNotificationHistoryRow[] = [],
+  serviceSort: ServiceSort = "critical",
 ) {
-  const selectedRow = resolveSelectedRow(snapshotSet, selectedCentreKey);
+  const selectedRow = resolveSelectedRow(snapshotSet, selectedCentreKey, serviceSort, selectedWindowKey);
 
   if (!selectedRow) {
     return `
@@ -2044,8 +2100,12 @@ function renderAiChatPanel(
   centreHistory: CentreSnapshotHistoryEntry[],
   annualHistory: CentreSnapshotHistoryEntry[],
   latestMetaRecommendationNotesForCentre: MetaNotificationHistoryRow[] = [],
+  serviceSort: ServiceSort = "critical",
 ) {
-  const resolvedSelectedCentreKey = selectedCentreKey ?? resolveSelectedRow(snapshotSet, selectedCentreKey)?.centreKey ?? "";
+  const resolvedSelectedCentreKey =
+    selectedCentreKey ??
+    resolveSelectedRow(snapshotSet, selectedCentreKey, serviceSort, selectedWindowKey)?.centreKey ??
+    "";
 
   return `
     <div class="chat-shell" data-ai-chat data-centre-key="${escapeHtml(String(resolvedSelectedCentreKey))}" data-window-key="${escapeHtml(selectedWindowKey)}">
@@ -2057,6 +2117,7 @@ function renderAiChatPanel(
           centreHistory,
           annualHistory,
           latestMetaRecommendationNotesForCentre,
+          serviceSort,
         )}
       </div>
       <div class="chat-shell__composer">
@@ -2208,12 +2269,12 @@ function renderAiChatScript() {
               headers: {
                 "Content-Type": "application/json",
               },
-              body: JSON.stringify({
+              body: JSON.stringify(window.mhDemoBody({
                 prompt,
                 messages: chatHistory,
                 centreKey: shell.dataset.centreKey || null,
                 windowKey: shell.dataset.windowKey || null,
-              }),
+              })),
             });
 
             if (!response.ok) {
@@ -2727,7 +2788,7 @@ export function renderMetaRecommendationNotePopup(input: {
             headers: {
               "Content-Type": "application/json",
             },
-            body: JSON.stringify({ notificationId: context.notificationId, text, notification: context.notification }),
+            body: JSON.stringify(window.mhDemoBody({ notificationId: context.notificationId, text, notification: context.notification })),
           });
 
           if (!response.ok) {
@@ -3111,7 +3172,7 @@ function renderGoogleAnalyticsRangeFilter(
       .join("");
 
   return `
-    <form class="google-analytics-filter" method="get" action="/" autocomplete="off">
+    <form class="google-analytics-filter" method="get" action="/app" autocomplete="off">
       ${selectedCentreKey != null ? `<input type="hidden" name="centre" value="${selectedCentreKey}">` : ""}
       <input type="hidden" name="window" value="${selectedWindowKey}">
       ${serviceSort !== "critical" ? `<input type="hidden" name="sort" value="${serviceSort}">` : ""}
@@ -3317,6 +3378,139 @@ function renderGoogleAnalyticsPanel(
   `;
 }
 
+function renderSnapshotOutcomeBanner(
+  outcome: AppShellOptions["snapshotRefreshOutcome"],
+  demo: boolean,
+) {
+  if (demo || !outcome) {
+    return "";
+  }
+
+  const hasFailures = (outcome.centresFailed ?? 0) > 0;
+  const hasError = Boolean(outcome.errorMessage);
+
+  if (!hasFailures && !hasError) {
+    return "";
+  }
+
+  const processed = outcome.centresProcessed ?? 0;
+  const attempted = outcome.centresAttempted ?? 0;
+  const variant = processed > 0 ? "warning" : "error";
+  const heading = hasError && processed === 0
+    ? "Snapshot refresh failed"
+    : `Snapshot refresh partially completed: ${processed} of ${attempted} centres`;
+  const failureList = outcome.failedCentres
+    .slice(0, 10)
+    .map(
+      (failure) =>
+        `<li><strong>${escapeHtml(failure.centreName)}:</strong> ${escapeHtml(failure.message)}</li>`,
+    )
+    .join("");
+  const failureDetail = outcome.failedCentres.length > 0
+    ? `<details class="snapshot-outcome-banner__details"><summary>Show failed centres (${outcome.failedCentres.length})</summary><ul>${failureList}</ul></details>`
+    : "";
+  const errorDetail = outcome.errorMessage
+    ? `<p class="snapshot-outcome-banner__error">${escapeHtml(outcome.errorMessage)}</p>`
+    : "";
+
+  return `
+    <div class="snapshot-outcome-banner snapshot-outcome-banner--${variant}" role="alert">
+      <div class="snapshot-outcome-banner__body">
+        <p class="snapshot-outcome-banner__heading">${escapeHtml(heading)}</p>
+        ${errorDetail}
+        ${failureDetail}
+      </div>
+      <a class="snapshot-outcome-banner__dismiss" href="/actions/dismiss-snapshot-outcome" aria-label="Dismiss snapshot refresh message">Dismiss</a>
+    </div>
+  `;
+}
+
+function renderSnapshotRefreshScript() {
+  return `
+    <script>
+      (() => {
+        const POLL_MS = 10000;
+        let pollTimer = null;
+
+        function findButton() {
+          return document.querySelector("[data-snapshot-refresh-button]");
+        }
+
+        function applyStatus(status) {
+          const button = findButton();
+          if (!button) return;
+
+          const current = button.getAttribute("data-snapshot-refresh-status");
+          if (current === status) return;
+
+          if (status === "in-progress") {
+            const span = document.createElement("span");
+            span.className = "panel-action-button panel-action-button--disabled";
+            span.setAttribute("data-snapshot-refresh-button", "");
+            span.setAttribute("data-snapshot-refresh-status", "in-progress");
+            span.setAttribute("aria-label", "Downloading latest Infocare analytics snapshot");
+            span.setAttribute("title", "Downloading latest Infocare analytics snapshot");
+            span.setAttribute("role", "img");
+            span.innerHTML = '<i class="bi bi-arrow-repeat ui-icon panel-action-button__spinner" aria-hidden="true"></i>';
+            button.replaceWith(span);
+          } else {
+            const anchor = document.createElement("a");
+            anchor.className = "panel-action-button" + (status === "ready" ? " panel-action-button--pulsate" : "");
+            anchor.setAttribute("data-snapshot-refresh-button", "");
+            anchor.setAttribute("data-snapshot-refresh-status", status);
+            const href = button.getAttribute("href")
+              || (button.dataset && button.dataset.refreshHref)
+              || "/actions/refresh-snapshot";
+            anchor.setAttribute("href", href);
+            const label = status === "ready"
+              ? "Refresh dashboard with latest Infocare snapshot"
+              : "Download latest Infocare analytics snapshot";
+            anchor.setAttribute("aria-label", label);
+            anchor.setAttribute("title", label);
+            anchor.innerHTML = '<i class="bi bi-download ui-icon" aria-hidden="true"></i>';
+            button.replaceWith(anchor);
+          }
+        }
+
+        async function poll() {
+          try {
+            const response = await fetch("/actions/snapshot-status", { headers: { accept: "application/json" } });
+            if (!response.ok) return;
+            const body = await response.json();
+            if (typeof body?.status === "string") {
+              applyStatus(body.status);
+            }
+            const button = findButton();
+            const current = button?.getAttribute("data-snapshot-refresh-status");
+            if (current !== "in-progress" && current !== "ready") {
+              if (pollTimer) {
+                clearInterval(pollTimer);
+                pollTimer = null;
+              }
+            }
+          } catch (error) {
+            // network blip — keep polling
+          }
+        }
+
+        function ensurePolling() {
+          const button = findButton();
+          const current = button?.getAttribute("data-snapshot-refresh-status");
+          if ((current === "in-progress" || current === "ready") && !pollTimer) {
+            pollTimer = setInterval(poll, POLL_MS);
+          }
+        }
+
+        if (document.readyState === "loading") {
+          document.addEventListener("DOMContentLoaded", ensurePolling);
+        } else {
+          ensurePolling();
+        }
+      })();
+    </script>
+  `;
+}
+
 function renderBreakoutScript() {
   return `
     <script>
@@ -3419,7 +3613,7 @@ function renderBreakoutScript() {
             }
           }
 
-          const popup = window.open("/?" + query, "_blank", featureString);
+          const popup = window.open("/app?" + query, "_blank", featureString);
 
           if (popup) {
             try {
@@ -3527,7 +3721,7 @@ function renderBreakoutScript() {
           elements.body.innerHTML = '<tr><td colspan="9" class="meta-ads-table__empty">Loading notification history...</td></tr>';
 
           try {
-            const response = await fetch("/api/meta-recommendation-notifications/history?" + params.toString(), {
+            const response = await fetch(window.mhDemoUrl("/api/meta-recommendation-notifications/history?" + params.toString()), {
               headers: {
                 "Accept": "application/json",
               },
@@ -3698,7 +3892,7 @@ function renderBreakoutScript() {
             headers: {
               "Content-Type": "application/json",
             },
-            body: JSON.stringify({ notificationId: id, text }),
+            body: JSON.stringify(window.mhDemoBody({ notificationId: id, text })),
           });
 
           if (!response.ok) {
@@ -3802,7 +3996,7 @@ function renderBreakoutScript() {
 
           renderLatestNoteList(notesList, []);
 
-          const response = await fetch("/api/meta-recommendation-notes/latest?centre=" + encodeURIComponent(String(context.centreKey)) + "&limit=3");
+          const response = await fetch(window.mhDemoUrl("/api/meta-recommendation-notes/latest?centre=" + encodeURIComponent(String(context.centreKey)) + "&limit=3"));
 
           if (!response.ok) {
             return;
@@ -4297,7 +4491,7 @@ function renderBreakoutScript() {
                 headers: {
                   "Content-Type": "application/json",
                 },
-                body: JSON.stringify({ notificationId, text: sentNoteText }),
+                body: JSON.stringify(window.mhDemoBody({ notificationId, text: sentNoteText })),
               });
 
               if (!response.ok) {
@@ -4352,6 +4546,8 @@ function renderBreakoutScript() {
             if (note instanceof HTMLLIElement && id) {
               const response = await fetch("/api/meta-recommendation-notes/" + encodeURIComponent(id) + "/delete", {
                 method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(window.mhDemoBody({})),
               });
 
               if (response.ok) {
@@ -4372,6 +4568,8 @@ function renderBreakoutScript() {
             if (note instanceof HTMLLIElement && id) {
               const response = await fetch("/api/meta-recommendation-notes/" + encodeURIComponent(id) + "/restore", {
                 method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(window.mhDemoBody({})),
               });
 
               if (response.ok) {
@@ -4395,7 +4593,7 @@ function renderBreakoutScript() {
                 headers: {
                   "Content-Type": "application/json",
                 },
-                body: JSON.stringify({ notificationId }),
+                body: JSON.stringify(window.mhDemoBody({ notificationId })),
               });
 
               if (response.ok) {
@@ -4782,6 +4980,7 @@ export function renderAppShell(
   snapshotSet: LatestSnapshotSet | null,
   options: AppShellOptions = {},
 ) {
+  CURRENT_RENDER_IS_DEMO = options.demo === true;
   const selectedWindowKey = resolveWindowKey(options.selectedWindowKey);
   const serviceSort = resolveServiceSort(options.serviceSort);
   const selectedCentreKey = options.selectedCentreKey ?? null;
@@ -4802,11 +5001,12 @@ export function renderAppShell(
   const metaConfigStatus = options.metaConfigStatus ?? null;
   const googleAnalyticsConfigStatus = options.googleAnalyticsConfigStatus ?? null;
   const googleAnalyticsSnapshot = options.googleAnalyticsSnapshot ?? null;
+  const snapshotRefreshStatus = options.snapshotRefreshStatus ?? "idle";
   const panelContent = PANEL_DEFINITIONS.map((panel) => ({
     id: panel.id,
     title: panel.title,
     className: panel.className,
-    actions: buildPanelActions(panel.id, selectedCentreKey, selectedWindowKey, serviceSort, focusPanelId, googleAnalyticsRange),
+    actions: buildPanelActions(panel.id, selectedCentreKey, selectedWindowKey, serviceSort, focusPanelId, googleAnalyticsRange, snapshotRefreshStatus),
     meta:
       panel.id === "analytics"
         ? `
@@ -4863,6 +5063,7 @@ export function renderAppShell(
               centreHistory,
               annualHistory,
               options.latestMetaRecommendationNotesForCentre ?? [],
+              serviceSort,
             ),
   }));
   const layout = renderLayout({
@@ -4881,12 +5082,34 @@ export function renderAppShell(
     <link rel="stylesheet" href="/vendor/bootstrap-icons.css" />
     <link rel="stylesheet" href="/app.css" />
   </head>
-  <body>
+  <body class="app-shell-body"${options.demo ? ` data-demo="1"` : ""}>
+    <aside class="nav-rail" aria-label="Primary navigation">
+      <a class="nav-rail__item" href="/" aria-label="Back to landing" title="Landing"><i class="bi bi-house-door" aria-hidden="true"></i></a>
+      <a class="nav-rail__item" href="/app${options.demo ? "?demo=1" : ""}" aria-label="Online Marketing dashboard" title="Online Marketing"><i class="bi bi-bar-chart-line" aria-hidden="true"></i></a>
+      ${options.demo ? `<a class="nav-rail__item nav-rail__item--exit-demo" href="/app" aria-label="Exit demo mode" title="Exit demo"><i class="bi bi-eject" aria-hidden="true"></i></a>` : ""}
+    </aside>
+    ${renderSnapshotOutcomeBanner(options.snapshotRefreshOutcome ?? null, options.demo === true)}
     ${layout}
+    <script>
+      (function() {
+        var demo = document.body.dataset.demo === "1";
+        window.MH_DEMO = demo;
+        window.mhDemoBody = function(obj) {
+          if (!demo) return obj || {};
+          return Object.assign({}, obj || {}, { demo: "1" });
+        };
+        window.mhDemoUrl = function(url) {
+          if (!demo) return url;
+          var sep = url.indexOf("?") === -1 ? "?" : "&";
+          return url + sep + "demo=1";
+        };
+      })();
+    </script>
     <script src="/vendor/chart.umd.js"></script>
     ${renderWaitlistChartScript()}
     ${renderAiChatScript()}
     ${renderBreakoutScript()}
+    ${renderSnapshotRefreshScript()}
   </body>
 </html>`;
 }
