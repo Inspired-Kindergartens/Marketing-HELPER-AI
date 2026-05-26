@@ -1,7 +1,6 @@
 export type MetaEnv = {
   META_USER_ID?: string | null;
   META_ACCESS_TOKEN?: string | null;
-  META_APP_TOKEN?: string | null;
   META_AD_ACCOUNT_ID?: string | null;
 };
 
@@ -31,9 +30,7 @@ export function readMetaConfigStatus(env: MetaEnv): MetaConfigStatus {
   }
 
   if (!normalizeEnvValue(env.META_ACCESS_TOKEN)) {
-    if (!normalizeEnvValue(env.META_APP_TOKEN)) {
-      missingKeys.push("META_ACCESS_TOKEN");
-    }
+    missingKeys.push("META_ACCESS_TOKEN");
   }
 
   return {
@@ -45,7 +42,7 @@ export function readMetaConfigStatus(env: MetaEnv): MetaConfigStatus {
 
 export function getMetaConfig(env: MetaEnv): MetaConfig {
   const userId = normalizeEnvValue(env.META_USER_ID);
-  const accessToken = normalizeEnvValue(env.META_ACCESS_TOKEN) ?? normalizeEnvValue(env.META_APP_TOKEN);
+  const accessToken = normalizeEnvValue(env.META_ACCESS_TOKEN);
   const adAccountId = normalizeEnvValue(env.META_AD_ACCOUNT_ID);
   const missingKeys = readMetaConfigStatus(env).missingKeys;
 

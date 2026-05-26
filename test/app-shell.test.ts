@@ -109,6 +109,19 @@ test("app shell declares the favicon", () => {
   assert.match(html, /<link rel="icon" href="\/favicon\.ico" type="image\/png" \/>/);
 });
 
+test("nav rail links to the Online Communications breakout app", () => {
+  const html = renderAppShell(null);
+
+  assert.match(html, /href="\/comms"[^>]*aria-label="Online Communications dashboard"/);
+  assert.match(html, /bi-envelope-paper/);
+});
+
+test("nav rail preserves demo flag when linking to comms", () => {
+  const html = renderAppShell(null, { demo: true });
+
+  assert.match(html, /href="\/comms\?demo=1"[^>]*aria-label="Online Communications dashboard"/);
+});
+
 test("analytics enrol/max shows enrolled headcount with booked utilisation percent", () => {
   const snapshotSet: LatestSnapshotSet = {
     runDate: "2026-05-05T00:00:00.000Z",
@@ -1003,6 +1016,22 @@ test("meta ads table headers stick flush below the panel title", () => {
   assert.match(css, /\.panel--meta-ads \.panel__body\s*\{[\s\S]*?padding-top: 0;/);
   assert.match(css, /\.meta-ads-panel\s*\{[\s\S]*?padding-top: 10px;/);
   assert.match(css, /\.meta-ads-table th\s*\{[\s\S]*?position: sticky;[\s\S]*?top: 0;/);
+});
+
+test("dashboard panels animate an accordion layout with body-level scrolling", () => {
+  const html = renderAppShell(null);
+  const css = readFileSync(new URL("../src/ui/app.css", import.meta.url), "utf8");
+
+  assert.match(html, /data-panel-accordion/);
+  assert.match(html, /panel--system panel--accordion panel--accordion-active/);
+  assert.match(html, /panel--waitlist panel--accordion/);
+  assert.match(html, /panel--meta-ads panel--accordion/);
+  assert.match(html, /setAttribute\("aria-expanded"/);
+  assert.match(css, /\.left-grid\s*\{[\s\S]*?display: flex;/);
+  assert.match(css, /\.panel--accordion\s*\{[\s\S]*?transition: flex-grow 260ms ease;/);
+  assert.match(css, /\.panel--accordion \.panel__body\s*\{[\s\S]*?opacity: 0;[\s\S]*?visibility: hidden;/);
+  assert.match(css, /\.panel--accordion-active \.panel__body\s*\{[\s\S]*?overflow: auto;[\s\S]*?opacity: 1;/);
+  assert.match(css, /@media \(prefers-reduced-motion: reduce\)/);
 });
 
 test("confirmation dialogs use a blocking page backdrop", () => {

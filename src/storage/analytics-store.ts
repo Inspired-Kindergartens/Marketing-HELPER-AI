@@ -542,11 +542,21 @@ export async function readAnalyticsSnapshotSetForDate(dateInput: string | Date):
   const dayEnd = new Date(date);
   dayEnd.setHours(23, 59, 59, 999);
 
+  return readAnalyticsSnapshotSetInRange(dayStart, dayEnd);
+}
+
+export async function readAnalyticsSnapshotSetSince(sinceInput: string | Date): Promise<LatestSnapshotSet | null> {
+  const since = new Date(sinceInput);
+
+  return readAnalyticsSnapshotSetInRange(since, new Date(8640000000000000));
+}
+
+async function readAnalyticsSnapshotSetInRange(start: Date, end: Date): Promise<LatestSnapshotSet | null> {
   const run = await db.analyticsSnapshotRun.findFirst({
     where: {
       runDate: {
-        gte: dayStart,
-        lte: dayEnd,
+        gte: start,
+        lte: end,
       },
     },
     orderBy: [{ runDate: "desc" }, { createdAt: "desc" }],

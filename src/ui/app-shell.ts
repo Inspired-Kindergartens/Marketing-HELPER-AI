@@ -115,6 +115,10 @@ type AppShellOptions = {
     failedCentres: { centreName: string; message: string }[];
     errorMessage: string | null;
   } | null;
+  integrationError?: {
+    source: "google-analytics" | "meta-ads";
+    message: string;
+  } | null;
 };
 
 function formatPercent(value: number) {
@@ -3378,6 +3382,44 @@ function renderGoogleAnalyticsPanel(
   `;
 }
 
+function renderIntegrationErrorBanner(
+  integrationError: AppShellOptions["integrationError"],
+  demo: boolean,
+) {
+  if (demo || !integrationError) {
+    return "";
+  }
+
+  const sourceLabel =
+    integrationError.source === "meta-ads" ? "Meta Ads refresh" : "Google Analytics refresh";
+
+  return `
+    <div class="snapshot-outcome-banner snapshot-outcome-banner--error" role="alert" data-integration-error-banner>
+      <div class="snapshot-outcome-banner__body">
+        <p class="snapshot-outcome-banner__heading">${escapeHtml(sourceLabel)} couldn't complete</p>
+        <p class="snapshot-outcome-banner__error">${escapeHtml(integrationError.message)}</p>
+      </div>
+      <button class="snapshot-outcome-banner__dismiss" type="button" data-integration-error-dismiss aria-label="Dismiss refresh error">Dismiss</button>
+    </div>
+    <script>
+      (function() {
+        var banner = document.querySelector('[data-integration-error-banner]');
+        if (!banner) return;
+        var dismiss = banner.querySelector('[data-integration-error-dismiss]');
+        if (!dismiss) return;
+        dismiss.addEventListener('click', function() {
+          banner.remove();
+          try {
+            var url = new URL(window.location.href);
+            url.searchParams.delete('integrationError');
+            window.history.replaceState({}, '', url.toString());
+          } catch (e) {}
+        });
+      })();
+    </script>
+  `;
+}
+
 function renderSnapshotOutcomeBanner(
   outcome: AppShellOptions["snapshotRefreshOutcome"],
   demo: boolean,
@@ -5014,7 +5056,7 @@ export function renderAppShell(
             <span>${snapshotSet ? formatTimestamp(snapshotSet.createdAt) : "pending"}</span>
           `
         : panel.id === "meta-ads"
-          ? ""
+          ? `<span>${options.metaAdsDashboardData?.latestPullAt ? `last Meta pull ${formatTimestamp(options.metaAdsDashboardData.latestPullAt)}` : "no pull yet"}</span>`
           : panel.id === "waitlist"
             ? `<span>${waitlistReport?.generatedAt ? `report ${formatTimestamp(waitlistReport.generatedAt)}` : `last pulled ${formatDaysSince(waitlistSnapshotSet?.createdAt)}`}</span>`
             : panel.id === "google-analytics"
@@ -5085,10 +5127,12 @@ export function renderAppShell(
   <body class="app-shell-body"${options.demo ? ` data-demo="1"` : ""}>
     <aside class="nav-rail" aria-label="Primary navigation">
       <a class="nav-rail__item" href="/" aria-label="Back to landing" title="Landing"><i class="bi bi-house-door" aria-hidden="true"></i></a>
-      <a class="nav-rail__item" href="/app${options.demo ? "?demo=1" : ""}" aria-label="Online Marketing dashboard" title="Online Marketing"><i class="bi bi-bar-chart-line" aria-hidden="true"></i></a>
+      <a class="nav-rail__item nav-rail__item--current" href="/app${options.demo ? "?demo=1" : ""}" aria-label="Online Marketing dashboard" title="Online Marketing" aria-current="page"><i class="bi bi-bar-chart-line" aria-hidden="true"></i></a>
+      <a class="nav-rail__item" href="/comms${options.demo ? "?demo=1" : ""}" aria-label="Online Communications dashboard" title="Online Communications"><i class="bi bi-envelope-paper" aria-hidden="true"></i></a>
       ${options.demo ? `<a class="nav-rail__item nav-rail__item--exit-demo" href="/app" aria-label="Exit demo mode" title="Exit demo"><i class="bi bi-eject" aria-hidden="true"></i></a>` : ""}
     </aside>
     ${renderSnapshotOutcomeBanner(options.snapshotRefreshOutcome ?? null, options.demo === true)}
+    ${renderIntegrationErrorBanner(options.integrationError ?? null, options.demo === true)}
     ${layout}
     <script>
       (function() {

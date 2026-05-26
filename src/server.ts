@@ -15,7 +15,7 @@ import {
   recordSnapshotRefreshOutcome,
   tickWeeklySnapshotRefresh,
 } from "./analytics/background-snapshot.js";
-import { ensureDailyAnalyticsSnapshot, refreshAnalyticsSnapshot } from "./analytics/snapshot.js";
+import { ensureWeeklyAnalyticsSnapshot, refreshAnalyticsSnapshot } from "./analytics/snapshot.js";
 import { resolveWindowKey, resolveWindowStartDate } from "./analytics/windows.js";
 import { prisma } from "./db.js";
 import { getGoogleAnalyticsConfig, readGoogleAnalyticsConfigStatus } from "./google-analytics/config.js";
@@ -28,6 +28,8 @@ import { syncStoredCentreReferences } from "./infocare/centre-sync.js";
 import { readWaitlistDiscoveryReport } from "./infocare/waitlist-report.js";
 import { ensureWeeklyWaitlistReport, refreshWaitlistReport } from "./infocare/waitlist-refresh.js";
 import { getInfocareEnv } from "./infocare/client.js";
+import { getMailchimpConfig, readMailchimpConfigStatus } from "./mailchimp/config.js";
+import { ensureDailyMailchimpSnapshot, refreshMailchimpSnapshot } from "./mailchimp/refresh.js";
 import { getMetaConfig, readMetaConfigStatus } from "./meta/config.js";
 import { refreshMetaAds } from "./meta/refresh.js";
 import {
@@ -71,6 +73,8 @@ import {
   renderMetaNotificationHistoryRows,
   resolveDefaultAnalyticsCentreKey,
 } from "./ui/app-shell.js";
+import { renderCommsAppShell, VALID_COMMS_PANEL_IDS } from "./ui/comms-app-shell.js";
+import { ingestPostmarkEvent, isPostmarkSourceIp, verifyBasicAuth } from "./postmark/webhook.js";
 import { renderLandingPage } from "./ui/landing-page.js";
 import { renderReadmePage } from "./ui/readme-page.js";
 import { isDemoBody, isDemoRequest, resolveDemo } from "./demo/demo-flag.js";
@@ -101,7 +105,7 @@ const envSchema = z.object({
   HOST: z.string().default("127.0.0.1"),
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
   DATABASE_URL: z.string().min(1),
-  AUTO_DAILY_SNAPSHOT: z
+  AUTO_WEEKLY_SNAPSHOT: z
     .string()
     .trim()
     .transform((value) => value.toLowerCase() === "true")
@@ -114,7 +118,6 @@ const envSchema = z.object({
     .default("https://infocare.digiweb.net.nz/charley/servlet/RubyServlet"),
   META_USER_ID: z.string().trim().default(""),
   META_ACCESS_TOKEN: z.string().trim().default(""),
-  META_APP_TOKEN: z.string().trim().default(""),
   META_AD_ACCOUNT_ID: z.string().trim().default(""),
   GOOGLE_ANALYTICS_PROPERTY_ID: z.string().trim().default(""),
   GOOGLE_ANALYTICS_OAUTH_PATH: z.string().trim().default("OAuth.json"),
@@ -124,6 +127,10 @@ const envSchema = z.object({
   AI_BASE_URL: z.string().url().default("http://127.0.0.1:11434"),
   AI_CHAT_MODEL: z.string().trim().default("llama3.1:8b"),
   AI_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120000).default(60000),
+  POSTMARK_WEBHOOK_BASIC_AUTH: z.string().trim().default(""),
+  POSTMARK_SERVER_TOKEN: z.string().trim().default(""),
+  MAILCHIMP_API_KEY: z.string().trim().default(""),
+  MAILCHIMP_SERVER_PREFIX: z.string().trim().default(""),
 });
 
 const env = envSchema.parse(process.env);
@@ -131,6 +138,7 @@ const aiConfig = readAiConfig(env);
 getInfocareEnv(process.env);
 const metaConfigStatus = readMetaConfigStatus(env);
 const googleAnalyticsConfigStatus = readGoogleAnalyticsConfigStatus(env);
+const mailchimpConfigStatus = readMailchimpConfigStatus(env);
 
 if (env.HOST !== "127.0.0.1" && env.HOST.toLowerCase() !== "localhost") {
   throw new Error(`Refusing to start with non-local HOST "${env.HOST}". Use 127.0.0.1.`);
@@ -177,6 +185,74 @@ async function refreshMetaAdsIfConfigured() {
   }
 }
 
+const INTEGRATION_ERROR_MAX_LENGTH = 800;
+
+function resolveIntegrationErrorFromQuery(raw: string | undefined, focusPanelId: string | null) {
+  const trimmed = (raw ?? "").trim();
+
+  if (!trimmed) {
+    return null;
+  }
+
+  const source: "google-analytics" | "meta-ads" =
+    focusPanelId === "meta-ads" ? "meta-ads" : "google-analytics";
+
+  return {
+    source,
+    message: trimmed.slice(0, INTEGRATION_ERROR_MAX_LENGTH),
+  };
+}
+
+function describeIntegrationError(source: "google-analytics" | "meta-ads" | "mailchimp", error: unknown) {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  const sourceLabel =
+    source === "google-analytics" ? "Google Analytics" : source === "meta-ads" ? "Meta Ads" : "Mailchimp";
+
+  if (/Missing\s+(Google Analytics|Meta Ads|Mailchimp)\s+configuration/i.test(message)) {
+    return `${sourceLabel} is not configured on the server. Check the .env values and restart.`;
+  }
+
+  if (
+    source === "meta-ads" &&
+    /Application request limit reached|request limit reached|"code":4\b|"error_subcode":150402[0-9]|Too many API requests|"is_transient":true/i.test(message)
+  ) {
+    return "Meta is rate-limiting requests (too many calls in a short window). Wait a minute or two and try the refresh again.";
+  }
+
+  if (
+    source === "meta-ads" &&
+    /Invalid OAuth access token|Session has expired|invalid_token|"code":190\b|"code":102\b/i.test(message)
+  ) {
+    return (
+      "Meta access token is invalid or expired. Generate a new one: " +
+      "Business Manager → Business Settings → Users → System Users → pick your System User → " +
+      "Generate New Token → select your Meta App → scopes ads_read + business_management → " +
+      "expiry Never → copy. Paste it into .env as META_ACCESS_TOKEN=\"...\" and restart the server. " +
+      "(Short-lived fallback: developers.facebook.com/tools/explorer — lasts ~1 hour.)"
+    );
+  }
+
+  if (
+    /invalid_grant|Token has been expired or revoked|invalid_token|invalid_client/i.test(message)
+  ) {
+    return `${sourceLabel} credentials have expired or been revoked. Re-authorise the integration and try again.`;
+  }
+
+  if (/runReport failed with 403|insufficient(_| )?permissions|PERMISSION_DENIED/i.test(message)) {
+    return `${sourceLabel} rejected the request: the service account or token lacks permission for this property.`;
+  }
+
+  if (/runReport failed with 429|rate(_| )?limit|too many requests/i.test(message)) {
+    return `${sourceLabel} is rate-limiting requests. Wait a minute and try again.`;
+  }
+
+  if (/ENOTFOUND|ECONNREFUSED|ETIMEDOUT|fetch failed/i.test(message)) {
+    return `Could not reach ${sourceLabel}. Check the server's internet connection and try again.`;
+  }
+
+  return `${sourceLabel} refresh failed. Check server logs for details.`;
+}
+
 async function ensureGoogleAnalyticsSnapshotIfConfigured() {
   let googleAnalyticsConfig;
 
@@ -212,6 +288,46 @@ async function ensureGoogleAnalyticsSnapshotIfConfigured() {
         error: error instanceof Error ? { message: error.message, stack: error.stack } : error,
       },
       "Google Analytics daily snapshot failed",
+    );
+
+    return null;
+  }
+}
+
+async function ensureMailchimpSnapshotIfConfigured() {
+  let mailchimpConfig;
+
+  try {
+    mailchimpConfig = getMailchimpConfig(env);
+  } catch (error) {
+    app.log.error(
+      {
+        error: error instanceof Error ? { message: error.message, stack: error.stack } : error,
+      },
+      "Mailchimp snapshot blocked by missing server configuration",
+    );
+
+    return null;
+  }
+
+  try {
+    const result = await ensureDailyMailchimpSnapshot(mailchimpConfig);
+
+    app.log.info(
+      {
+        serverPrefix: mailchimpConfig.serverPrefix,
+        ...result,
+      },
+      "Mailchimp daily snapshot ready",
+    );
+
+    return result;
+  } catch (error) {
+    app.log.error(
+      {
+        error: error instanceof Error ? { message: error.message, stack: error.stack } : error,
+      },
+      "Mailchimp daily snapshot failed",
     );
 
     return null;
@@ -400,7 +516,7 @@ app.get("/readme", async (_request, reply) => {
   return reply.type("text/html; charset=utf-8").send(await renderReadmePage());
 });
 
-app.get<{ Querystring: { centre?: string; window?: string; panel?: string; sort?: string; waitlistSection?: string; googleAnalyticsSection?: string; gaRange?: string; gaFrom?: string; gaTo?: string; gaFromMonth?: string; gaFromYear?: string; gaToMonth?: string; gaToYear?: string; metaRefreshed?: string; demo?: string } }>("/app", async (request, reply) => {
+app.get<{ Querystring: { centre?: string; window?: string; panel?: string; sort?: string; waitlistSection?: string; googleAnalyticsSection?: string; gaRange?: string; gaFrom?: string; gaTo?: string; gaFromMonth?: string; gaFromYear?: string; gaToMonth?: string; gaToYear?: string; metaRefreshed?: string; integrationError?: string; demo?: string } }>("/app", async (request, reply) => {
   if (!isDemoRequest(request.query)) {
     void tickWeeklySnapshotRefresh(app.log);
   }
@@ -629,8 +745,19 @@ app.get<{ Querystring: { centre?: string; window?: string; panel?: string; sort?
                 errorMessage: snapshotRefreshState.errorMessage,
               }
             : null,
+        integrationError: resolveIntegrationErrorFromQuery(request.query?.integrationError, focusPanelId),
       }),
     );
+});
+
+app.get<{ Querystring: { panel?: string; demo?: string } }>("/comms", async (request, reply) => {
+  const demo = resolveDemo(request, reply, request.query);
+  const panel = String(request.query?.panel ?? "");
+  const focusPanelId = VALID_COMMS_PANEL_IDS.has(panel) ? panel : null;
+
+  return reply
+    .type("text/html; charset=utf-8")
+    .send(renderCommsAppShell({ focusPanelId, demo }));
 });
 
 app.get<{ Querystring: {
@@ -680,15 +807,51 @@ app.get<{ Querystring: { centre?: string; window?: string; sort?: string; gaRang
     reply.code(303);
     return reply.redirect(`/app?demo=1&panel=google-analytics`);
   }
+
+  const buildRedirectParams = (extra?: Record<string, string>) => {
+    const params = new URLSearchParams();
+
+    if (request.query?.centre) {
+      params.set("centre", request.query.centre);
+    }
+
+    params.set("window", resolveWindowKey(request.query?.window));
+    params.set("panel", "google-analytics");
+
+    const monthSelection = resolveGoogleAnalyticsMonthSelection(request.query);
+
+    if (monthSelection.mode === "months") {
+      params.set("gaRange", "months");
+      params.set("gaFromMonth", String(monthSelection.fromMonth));
+      params.set("gaFromYear", String(monthSelection.fromYear));
+      params.set("gaToMonth", String(monthSelection.toMonth));
+      params.set("gaToYear", String(monthSelection.toYear));
+    }
+
+    if (request.query?.sort) {
+      params.set("sort", request.query.sort);
+    }
+
+    if (extra) {
+      for (const [key, value] of Object.entries(extra)) {
+        params.set(key, value);
+      }
+    }
+
+    return params;
+  };
+
   let googleAnalyticsConfig;
 
   try {
     googleAnalyticsConfig = getGoogleAnalyticsConfig(env);
   } catch (error) {
     app.log.error({ error }, "Google Analytics refresh blocked by missing server configuration");
-    reply.code(500);
+    reply.code(303);
 
-    return reply.type("text/plain; charset=utf-8").send("Google Analytics is not configured on the server.");
+    return reply.redirect(
+      `/app?${buildRedirectParams({ integrationError: describeIntegrationError("google-analytics", error) }).toString()}`,
+    );
   }
 
   try {
@@ -700,9 +863,11 @@ app.get<{ Querystring: { centre?: string; window?: string; sort?: string; gaRang
       },
       "Google Analytics refresh failed",
     );
-    reply.code(502);
+    reply.code(303);
 
-    return reply.type("text/plain; charset=utf-8").send("Google Analytics refresh failed. Check server logs for details.");
+    return reply.redirect(
+      `/app?${buildRedirectParams({ integrationError: describeIntegrationError("google-analytics", error) }).toString()}`,
+    );
   }
 
   const params = new URLSearchParams();
@@ -1155,15 +1320,41 @@ app.get<{ Querystring: { centre?: string; window?: string; sort?: string; demo?:
     reply.code(303);
     return reply.redirect(`/app?demo=1&panel=meta-ads`);
   }
+
+  const buildRedirectParams = (extra?: Record<string, string>) => {
+    const params = new URLSearchParams();
+
+    if (request.query?.centre) {
+      params.set("centre", request.query.centre);
+    }
+
+    params.set("window", resolveWindowKey(request.query?.window));
+    params.set("panel", "meta-ads");
+
+    if (request.query?.sort) {
+      params.set("sort", request.query.sort);
+    }
+
+    if (extra) {
+      for (const [key, value] of Object.entries(extra)) {
+        params.set(key, value);
+      }
+    }
+
+    return params;
+  };
+
   let metaConfig;
 
   try {
     metaConfig = getMetaConfig(env);
   } catch (error) {
     app.log.error({ error }, "Meta Ads refresh blocked by missing server configuration");
-    reply.code(500);
+    reply.code(303);
 
-    return reply.type("text/plain; charset=utf-8").send("Meta Ads refresh is not configured on the server.");
+    return reply.redirect(
+      `/app?${buildRedirectParams({ integrationError: describeIntegrationError("meta-ads", error) }).toString()}`,
+    );
   }
 
   try {
@@ -1177,9 +1368,11 @@ app.get<{ Querystring: { centre?: string; window?: string; sort?: string; demo?:
       },
       "Meta Ads refresh failed",
     );
-    reply.code(502);
+    reply.code(303);
 
-    return reply.type("text/plain; charset=utf-8").send("Meta Ads refresh failed. Check server logs for details.");
+    return reply.redirect(
+      `/app?${buildRedirectParams({ integrationError: describeIntegrationError("meta-ads", error) }).toString()}`,
+    );
   }
 
   const params = new URLSearchParams();
@@ -1199,6 +1392,48 @@ app.get<{ Querystring: { centre?: string; window?: string; sort?: string; demo?:
   reply.code(303);
 
   return reply.redirect(`/app?${params.toString()}`);
+});
+
+app.get<{ Querystring: { demo?: string } }>("/actions/refresh-mailchimp", async (request, reply) => {
+  if (isDemoRequest(request.query)) {
+    reply.code(303);
+    return reply.redirect(`/comms?demo=1&panel=mailchimp`);
+  }
+
+  let mailchimpConfig;
+
+  try {
+    mailchimpConfig = getMailchimpConfig(env);
+  } catch (error) {
+    app.log.error({ error }, "Mailchimp refresh blocked by missing server configuration");
+    reply.code(303);
+
+    return reply.redirect(
+      `/comms?panel=mailchimp&integrationError=${encodeURIComponent(describeIntegrationError("mailchimp", error))}`,
+    );
+  }
+
+  try {
+    const result = await refreshMailchimpSnapshot(mailchimpConfig);
+
+    app.log.info(result, "Mailchimp refresh completed");
+  } catch (error) {
+    app.log.error(
+      {
+        error: error instanceof Error ? { message: error.message, stack: error.stack } : error,
+      },
+      "Mailchimp refresh failed",
+    );
+    reply.code(303);
+
+    return reply.redirect(
+      `/comms?panel=mailchimp&integrationError=${encodeURIComponent(describeIntegrationError("mailchimp", error))}`,
+    );
+  }
+
+  reply.code(303);
+
+  return reply.redirect(`/comms?panel=mailchimp&mailchimpRefreshed=1`);
 });
 
 app.get<{ Querystring: { centre?: string; window?: string; sort?: string; demo?: string } }>("/actions/refresh-centres", async (request, reply) => {
@@ -1374,12 +1609,74 @@ app.get("/health", async () => {
   return { ok: true };
 });
 
+app.post("/webhooks/postmark/events", async (request, reply) => {
+  if (!verifyBasicAuth(request, env.POSTMARK_WEBHOOK_BASIC_AUTH)) {
+    request.log.warn({ ip: request.ip }, "postmark webhook: auth failed");
+    return reply.code(401).send({ ok: false });
+  }
+
+  // Cloudflare passes original client IP via cf-connecting-ip; Fastify's request.ip
+  // falls back to the socket peer (which will be 127.0.0.1 from cloudflared).
+  const sourceIp =
+    (request.headers["cf-connecting-ip"] as string | undefined) ??
+    (request.headers["x-forwarded-for"] as string | undefined)?.split(",")[0]?.trim() ??
+    request.ip;
+
+  if (!isPostmarkSourceIp(sourceIp)) {
+    request.log.warn({ sourceIp }, "postmark webhook: source IP not in allowlist");
+    return reply.code(403).send({ ok: false });
+  }
+
+  const serverToken = env.POSTMARK_SERVER_TOKEN || "unknown";
+
+  try {
+    const result = await ingestPostmarkEvent(request.body, serverToken);
+    if (!result.stored) {
+      request.log.warn({ reason: result.reason }, "postmark webhook: payload skipped");
+    }
+  } catch (error) {
+    request.log.error({ error }, "postmark webhook: ingestion failed");
+  }
+
+  // Always 200 after auth+IP pass so Postmark stops retrying. Errors are logged for review.
+  return reply.code(200).send({ ok: true });
+});
+
+function logIntegrationConfigWarnings() {
+  if (!metaConfigStatus.isConfigured) {
+    app.log.warn(
+      { missingKeys: metaConfigStatus.missingKeys },
+      "Meta Ads is not fully configured — refresh will fail until these env vars are set",
+    );
+  }
+
+  if (!googleAnalyticsConfigStatus.isConfigured) {
+    app.log.warn(
+      {
+        missingKeys: googleAnalyticsConfigStatus.missingKeys,
+        oauthPath: googleAnalyticsConfigStatus.oauthPath,
+        oauthFileExists: googleAnalyticsConfigStatus.oauthFileExists,
+        tokenPath: googleAnalyticsConfigStatus.tokenPath,
+        tokenFileExists: googleAnalyticsConfigStatus.tokenFileExists,
+      },
+      "Google Analytics is not fully configured — refresh will fail until these env vars / credential files are set",
+    );
+  }
+
+  if (!mailchimpConfigStatus.isConfigured) {
+    app.log.warn(
+      { missingKeys: mailchimpConfigStatus.missingKeys },
+      "Mailchimp is not fully configured — daily snapshot will be skipped until these env vars are set",
+    );
+  }
+}
+
 async function start() {
   await prisma.$connect();
   await prisma.$queryRaw`SELECT 1`;
 
-  if (env.AUTO_DAILY_SNAPSHOT) {
-    await ensureDailyAnalyticsSnapshot();
+  if (env.AUTO_WEEKLY_SNAPSHOT) {
+    await ensureWeeklyAnalyticsSnapshot();
   }
   await ensureWeeklyWaitlistReport();
 
@@ -1387,6 +1684,12 @@ async function start() {
     host: "127.0.0.1",
     port: env.PORT,
   });
+
+  logIntegrationConfigWarnings();
+
+  if (mailchimpConfigStatus.isConfigured) {
+    void ensureMailchimpSnapshotIfConfigured();
+  }
 }
 
 start().catch(async (error) => {

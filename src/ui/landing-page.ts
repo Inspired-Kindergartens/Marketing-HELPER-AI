@@ -9,14 +9,29 @@ function escapeHtml(value: string) {
 
 export function renderLandingPage() {
   const tiles = [
-    { label: "Online Marketing", description: "Dashboard for centres, waitlists, ads, and traffic.", href: "/app", primary: true },
-    { label: "Demo", description: "Showcase the dashboard with fixture data.", href: "/app?demo=1", primary: false },
-    { label: "Read Me", description: "Open the project README in the browser.", href: "/readme", primary: false },
+    { label: "Marketing", description: "Infocare, Meta Ads & Google Analytics", href: "/app", primary: true },
+    { label: "Communications", description: "Postmark, Mailchimp & Formstack", href: "/comms", primary: false },
   ];
 
-  const placeholderTiles = Array.from({ length: 5 }).map(
-    () => `<div class="landing-tile landing-tile--placeholder" aria-hidden="true"><span>Coming soon</span></div>`,
-  );
+  const secondaryTiles = [
+    { label: "Marketing Demo", href: "/app?demo=1", external: false },
+    { label: "Comms Demo", href: "/comms?demo=1", external: false },
+    { label: "Read Me", href: "/readme", external: false },
+    { label: "SharePoint", href: "https://ikindergartens.sharepoint.com/", external: true },
+    { label: "Website", href: "https://inspiredkindergartens.nz/admin/", external: true },
+  ];
+
+  const placeholderTiles: string[] = [];
+
+  const secondaryTileRow = secondaryTiles
+    .map(
+      (tile) => `
+        <a class="landing-tile landing-tile--link" href="${escapeHtml(tile.href)}"${tile.external ? ' target="_blank" rel="noopener noreferrer"' : ""}>
+          <span>${escapeHtml(tile.label)}</span>
+        </a>
+      `,
+    )
+    .join("");
 
   const buttonRow = tiles
     .map(
@@ -52,6 +67,7 @@ export function renderLandingPage() {
         ${buttonRow}
       </nav>
       <section class="landing__tiles" aria-label="Upcoming tools">
+        ${secondaryTileRow}
         ${placeholderTiles.join("")}
       </section>
       <footer class="landing__footer">

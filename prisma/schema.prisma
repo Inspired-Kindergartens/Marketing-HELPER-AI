@@ -35,6 +35,11 @@ model CentreReference {
   metaAds        MetaAd[]
   metaInsights   MetaInsightSnapshot[]
   metaEmailContent MetaEmailContent?
+  postmarkOutboundSnapshotsByTag PostmarkOutboundSnapshotByTag[]
+  postmarkMessageEvents          PostmarkMessageEvent[]
+  mailchimpCampaigns             MailchimpCampaign[]
+  formstackForms                 FormstackForm[]
+  formstackSubmissions           FormstackSubmission[]
 
   @@index([ignored, openStatus, name])
 }
@@ -349,4 +354,186 @@ model GoogleAnalyticsPageSnapshot {
   @@index([propertyId, snapshotDate(sort: Desc)])
   @@index([propertyId, rangeStartDate, rangeEndDate])
   @@index([snapshotId, screenPageViews(sort: Desc)])
+}
+
+model PostmarkOutboundSnapshot {
+  id                 Int      @id @default(autoincrement())
+  serverToken        String
+  snapshotDate       DateTime
+  rangeStartDate     DateTime
+  rangeEndDate       DateTime
+  pulledAt           DateTime
+  sent               Int      @default(0)
+  delivered          Int      @default(0)
+  opened             Int      @default(0)
+  uniqueOpened       Int      @default(0)
+  clicked            Int      @default(0)
+  uniqueClicked      Int      @default(0)
+  bounced            Int      @default(0)
+  spamComplained     Int      @default(0)
+  suppressed         Int      @default(0)
+  raw                Json?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@unique([serverToken, rangeStartDate, rangeEndDate])
+  @@index([serverToken, snapshotDate(sort: Desc)])
+  @@index([pulledAt(sort: Desc)])
+}
+
+model PostmarkOutboundSnapshotByTag {
+  id                 Int              @id @default(autoincrement())
+  serverToken        String
+  tag                String
+  centreKey          Int?
+  snapshotDate       DateTime
+  rangeStartDate     DateTime
+  rangeEndDate       DateTime
+  pulledAt           DateTime
+  sent               Int              @default(0)
+  delivered          Int              @default(0)
+  opened             Int              @default(0)
+  uniqueOpened       Int              @default(0)
+  clicked            Int              @default(0)
+  uniqueClicked      Int              @default(0)
+  bounced            Int              @default(0)
+  spamComplained     Int              @default(0)
+  raw                Json?
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+  centre             CentreReference? @relation(fields: [centreKey], references: [centreKey], onDelete: SetNull, onUpdate: Cascade)
+
+  @@unique([serverToken, tag, rangeStartDate, rangeEndDate])
+  @@index([serverToken, tag, snapshotDate(sort: Desc)])
+  @@index([centreKey, snapshotDate(sort: Desc)])
+  @@index([pulledAt(sort: Desc)])
+}
+
+model PostmarkMessageEvent {
+  id                Int              @id @default(autoincrement())
+  serverToken       String
+  messageId         String
+  eventType         String
+  recipient         String?
+  tag               String?
+  centreKey         Int?
+  occurredAt        DateTime
+  receivedAt        DateTime
+  raw               Json?
+  createdAt         DateTime         @default(now())
+  centre            CentreReference? @relation(fields: [centreKey], references: [centreKey], onDelete: SetNull, onUpdate: Cascade)
+
+  @@unique([serverToken, messageId, eventType, occurredAt])
+  @@index([serverToken, occurredAt(sort: Desc)])
+  @@index([centreKey, occurredAt(sort: Desc)])
+  @@index([tag, occurredAt(sort: Desc)])
+}
+
+model MailchimpCampaign {
+  id              Int                       @id @default(autoincrement())
+  mailchimpId     String                    @unique
+  serverPrefix    String
+  listId          String?
+  centreKey       Int?
+  subject         String                    @default("")
+  previewText     String                    @default("")
+  status          String?
+  type            String?
+  archiveUrl      String?
+  sendTime        DateTime?
+  emailsSent      Int                       @default(0)
+  pulledAt        DateTime
+  createdAt       DateTime                  @default(now())
+  updatedAt       DateTime                  @updatedAt
+  centre          CentreReference?          @relation(fields: [centreKey], references: [centreKey], onDelete: SetNull, onUpdate: Cascade)
+  report          MailchimpCampaignReport?
+
+  @@index([serverPrefix, sendTime(sort: Desc)])
+  @@index([centreKey, sendTime(sort: Desc)])
+  @@index([listId, sendTime(sort: Desc)])
+  @@index([pulledAt(sort: Desc)])
+}
+
+model MailchimpCampaignReport {
+  id                Int               @id @default(autoincrement())
+  mailchimpId       String            @unique
+  opens             Int               @default(0)
+  uniqueOpens       Int               @default(0)
+  openRate          Decimal           @default(0) @db.Decimal(18, 6)
+  clicks            Int               @default(0)
+  uniqueClicks      Int               @default(0)
+  clickRate         Decimal           @default(0) @db.Decimal(18, 6)
+  unsubscribes      Int               @default(0)
+  bounces           Int               @default(0)
+  abuseReports      Int               @default(0)
+  forwardCount      Int               @default(0)
+  sendTime          DateTime?
+  fetchedAt         DateTime
+  raw               Json?
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+  campaign          MailchimpCampaign @relation(fields: [mailchimpId], references: [mailchimpId], onDelete: Cascade, onUpdate: Cascade)
+
+  @@index([sendTime(sort: Desc)])
+  @@index([fetchedAt(sort: Desc)])
+}
+
+model MailchimpListGrowthSnapshot {
+  id              Int      @id @default(autoincrement())
+  serverPrefix    String
+  listId          String
+  snapshotDate    DateTime
+  memberCount     Int      @default(0)
+  subscribed      Int      @default(0)
+  unsubscribed    Int      @default(0)
+  cleaned         Int      @default(0)
+  pending         Int      @default(0)
+  pulledAt        DateTime
+  raw             Json?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([serverPrefix, listId, snapshotDate])
+  @@index([listId, snapshotDate(sort: Desc)])
+  @@index([pulledAt(sort: Desc)])
+}
+
+model FormstackForm {
+  id                Int                    @id @default(autoincrement())
+  formstackId       String                 @unique
+  name              String                 @default("")
+  folder            String?
+  centreKey         Int?
+  submissionCount   Int                    @default(0)
+  viewCount         Int?
+  lastSubmissionAt  DateTime?
+  pulledAt          DateTime
+  createdAt         DateTime               @default(now())
+  updatedAt         DateTime               @updatedAt
+  centre            CentreReference?       @relation(fields: [centreKey], references: [centreKey], onDelete: SetNull, onUpdate: Cascade)
+  submissions       FormstackSubmission[]
+
+  @@index([centreKey, lastSubmissionAt(sort: Desc)])
+  @@index([folder])
+  @@index([pulledAt(sort: Desc)])
+}
+
+model FormstackSubmission {
+  id              Int              @id @default(autoincrement())
+  formstackId     String           @unique
+  formFormstackId String
+  centreKey       Int?
+  submittedAt     DateTime
+  payload         Json
+  syncCursor      String?
+  pulledAt        DateTime
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  form            FormstackForm    @relation(fields: [formFormstackId], references: [formstackId], onDelete: Cascade, onUpdate: Cascade)
+  centre          CentreReference? @relation(fields: [centreKey], references: [centreKey], onDelete: SetNull, onUpdate: Cascade)
+
+  @@index([formFormstackId, submittedAt(sort: Desc)])
+  @@index([centreKey, submittedAt(sort: Desc)])
+  @@index([submittedAt(sort: Desc)])
+  @@index([pulledAt(sort: Desc)])
 }

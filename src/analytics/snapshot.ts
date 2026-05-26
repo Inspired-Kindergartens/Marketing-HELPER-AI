@@ -4,11 +4,13 @@ import {
   type ExtractionDateRange,
 } from "../infocare/extraction.js";
 import {
-  readAnalyticsSnapshotSetForDate,
+  readAnalyticsSnapshotSetSince,
   readManualCentreCapacities,
   readOpenCentreReferences,
   writeAnalyticsSnapshotSet,
 } from "../storage/analytics-store.js";
+
+const WEEKLY_SNAPSHOT_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 import { computeAnalyticsSnapshots } from "./compute.js";
 
 type RefreshAnalyticsSnapshotOptions = {
@@ -62,15 +64,16 @@ export async function refreshAnalyticsSnapshot(
   };
 }
 
-export async function ensureDailyAnalyticsSnapshot(referenceDate: Date = new Date()) {
-  const existing = await readAnalyticsSnapshotSetForDate(referenceDate);
+export async function ensureWeeklyAnalyticsSnapshot(referenceDate: Date = new Date()) {
+  const sevenDaysAgo = new Date(referenceDate.getTime() - WEEKLY_SNAPSHOT_WINDOW_MS);
+  const existing = await readAnalyticsSnapshotSetSince(sevenDaysAgo);
 
   if (existing) {
     return existing;
   }
 
   return refreshAnalyticsSnapshot({
-    source: "daily-auto",
+    source: "weekly-auto",
     referenceDate,
   });
 }

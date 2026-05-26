@@ -130,7 +130,7 @@ The app reads `.env` through `dotenv`. Required core values are:
 
 Optional integrations:
 
-- `META_USER_ID`, `META_ACCESS_TOKEN`, `META_APP_TOKEN`, `META_AD_ACCOUNT_ID`.
+- `META_USER_ID`, `META_ACCESS_TOKEN`, `META_AD_ACCOUNT_ID`. Generate the token via Graph API Explorer (`developers.facebook.com/tools/explorer`, scopes `ads_read` and `business_management`), then extend it to 60 days in the Access Token Debugger.
 - `GOOGLE_ANALYTICS_PROPERTY_ID`.
 - `GOOGLE_ANALYTICS_OAUTH_PATH`, `GOOGLE_ANALYTICS_TOKEN_PATH`, or `GOOGLE_ANALYTICS_REFRESH_TOKEN`.
 

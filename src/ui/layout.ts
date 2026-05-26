@@ -34,18 +34,19 @@ export function renderLayout({ panels, focusPanelId }: LayoutOptions) {
 
   const chatPanel = panels.find((panel) => panel.className?.includes("panel--chat"));
   const leftPanels = panels.filter((panel) => !panel.className?.includes("panel--chat"));
+  const activeAccordionPanelId = leftPanels[0]?.id ?? "";
 
   return `
     <main class="app-shell">
       <div class="app-shell__left">
-        <div class="left-grid">
+        <div class="left-grid" data-panel-accordion>
           ${leftPanels
             .map((panel) =>
               renderPanel({
                 id: panel.id,
                 title: panel.title,
                 children: panel.children,
-                className: panel.className,
+                className: `${panel.className ?? ""} panel--accordion${panel.id === activeAccordionPanelId ? " panel--accordion-active" : ""}`.trim(),
                 meta: panel.meta,
                 actions: panel.actions,
               }),
@@ -68,5 +69,65 @@ export function renderLayout({ panels, focusPanelId }: LayoutOptions) {
         }
       </div>
     </main>
+    <script>
+      (function() {
+        var accordions = document.querySelectorAll("[data-panel-accordion]");
+
+        function activatePanel(accordion, panel) {
+          if (!panel || panel.classList.contains("panel--accordion-active")) {
+            return;
+          }
+
+          accordion.querySelectorAll(".panel--accordion-active").forEach(function(activePanel) {
+            activePanel.classList.remove("panel--accordion-active");
+            activePanel.querySelector(".panel__header")?.setAttribute("aria-expanded", "false");
+          });
+
+          panel.classList.add("panel--accordion-active");
+          panel.querySelector(".panel__header")?.setAttribute("aria-expanded", "true");
+        }
+
+        accordions.forEach(function(accordion) {
+          accordion.querySelectorAll(".panel--accordion .panel__header").forEach(function(header) {
+            var panel = header.closest(".panel--accordion");
+            header.setAttribute("role", "button");
+            header.setAttribute("tabindex", "0");
+            header.setAttribute("aria-expanded", panel?.classList.contains("panel--accordion-active") ? "true" : "false");
+          });
+
+          accordion.addEventListener("click", function(event) {
+            var target = event.target;
+            var header = target instanceof Element ? target.closest(".panel__header") : null;
+
+            if (!header || !accordion.contains(header)) {
+              return;
+            }
+
+            if (target instanceof Element && target.closest("a, button, input, select, textarea")) {
+              return;
+            }
+
+            var panel = header.closest(".panel--accordion");
+            activatePanel(accordion, panel);
+          });
+
+          accordion.addEventListener("keydown", function(event) {
+            if (event.key !== "Enter" && event.key !== " ") {
+              return;
+            }
+
+            var target = event.target;
+            var header = target instanceof Element ? target.closest(".panel__header") : null;
+
+            if (!header || !accordion.contains(header)) {
+              return;
+            }
+
+            event.preventDefault();
+            activatePanel(accordion, header.closest(".panel--accordion"));
+          });
+        });
+      })();
+    </script>
   `;
 }

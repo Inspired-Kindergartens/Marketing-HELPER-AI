@@ -19,6 +19,7 @@
     "prisma:migrate": "prisma migrate dev",
     "prisma:generate": "prisma generate",
     "google:oauth": "tsx scripts/google-oauth-token.ts",
+    "google:grant-service-account": "tsx scripts/google-grant-service-account.ts",
     "typecheck": "tsc --noEmit",
     "test": "tsx test/run-tests.ts"
   },
