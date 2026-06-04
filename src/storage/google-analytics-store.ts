@@ -128,7 +128,7 @@ function mapGoogleAnalyticsSnapshot(record: {
   };
 }
 
-export async function upsertGoogleAnalyticsDailySnapshot(input: GoogleAnalyticsSnapshotInput) {
+export async function createGoogleAnalyticsDailySnapshot(input: GoogleAnalyticsSnapshotInput) {
   const snapshotDate = toDateOnly(input.snapshotDate);
   const rangeStartDate = toDateOnly(input.rangeStartDate ?? input.snapshotDate);
   const rangeEndDate = toDateOnly(input.rangeEndDate ?? input.snapshotDate);
@@ -147,25 +147,13 @@ export async function upsertGoogleAnalyticsDailySnapshot(input: GoogleAnalyticsS
     raw: toJson(input.raw),
   };
   const record = await db.$transaction(async (tx) => {
-    const snapshot = await tx.googleAnalyticsDailySnapshot.upsert({
-      where: {
-        propertyId_rangeStartDate_rangeEndDate: {
-          propertyId: input.propertyId,
-          rangeStartDate,
-          rangeEndDate,
-        },
-      },
-      update: data,
-      create: {
+    const snapshot = await tx.googleAnalyticsDailySnapshot.create({
+      data: {
         propertyId: input.propertyId,
         rangeStartDate,
         rangeEndDate,
         ...data,
       },
-    });
-
-    await tx.googleAnalyticsPageSnapshot.deleteMany({
-      where: { snapshotId: snapshot.id },
     });
 
     if (input.pages && input.pages.length > 0) {
@@ -219,14 +207,13 @@ export async function readGoogleAnalyticsRangeSnapshot(
   rangeStartInput: string | Date,
   rangeEndInput: string | Date,
 ) {
-  const record = await db.googleAnalyticsDailySnapshot.findUnique({
+  const record = await db.googleAnalyticsDailySnapshot.findFirst({
     where: {
-      propertyId_rangeStartDate_rangeEndDate: {
-        propertyId,
-        rangeStartDate: toDateOnly(rangeStartInput),
-        rangeEndDate: toDateOnly(rangeEndInput),
-      },
+      propertyId,
+      rangeStartDate: toDateOnly(rangeStartInput),
+      rangeEndDate: toDateOnly(rangeEndInput),
     },
+    orderBy: [{ pulledAt: "desc" }, { createdAt: "desc" }],
     include: {
       pages: {
         orderBy: [{ screenPageViews: "desc" }, { pagePath: "asc" }],

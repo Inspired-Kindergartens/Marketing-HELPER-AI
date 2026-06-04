@@ -1,14 +1,12 @@
 import { prisma } from "../db.js";
-import type { MatchableCentre } from "../meta/centre-match.js";
-import { matchMailchimpCampaignToCentre } from "./centre-match.js";
-import { MailchimpClient } from "./client.js";
+import { MailchimpApiError, MailchimpClient } from "./client.js";
 import type { MailchimpConfig } from "./config.js";
 import {
   readLatestMailchimpPulledAt,
   readMailchimpListGrowthSnapshotForDate,
   upsertMailchimpCampaign,
-  upsertMailchimpCampaignReport,
-  upsertMailchimpListGrowthSnapshot,
+  createMailchimpCampaignReportSnapshot,
+  createMailchimpListGrowthSnapshot,
 } from "../storage/mailchimp-store.js";
 
 export type MailchimpRefreshResult = {
@@ -28,18 +26,10 @@ function isSentStatus(status: string | undefined | null) {
   return status === "sent" || status === "sending" || status === "schedule";
 }
 
-async function loadMatchableCentres(): Promise<MatchableCentre[]> {
-  return prisma.centreReference.findMany({
-    where: { ignored: false, openStatus: "Open" },
-    select: { centreKey: true, name: true },
-  });
-}
-
 export async function refreshMailchimpSnapshot(config: MailchimpConfig): Promise<MailchimpRefreshResult> {
   const client = new MailchimpClient(config);
   const pulledAt = new Date();
   const snapshotDate = toUtcDateOnly(pulledAt);
-  const centres = await loadMatchableCentres();
   const result: MailchimpRefreshResult = {
     pulledAt: pulledAt.toISOString(),
     campaigns: 0,
@@ -51,22 +41,10 @@ export async function refreshMailchimpSnapshot(config: MailchimpConfig): Promise
   const campaigns = await client.listCampaigns();
 
   for (const campaign of campaigns) {
-    const centreKey = matchMailchimpCampaignToCentre(
-      {
-        subject: campaign.settings?.subject_line ?? null,
-        title: campaign.settings?.title ?? null,
-        previewText: campaign.settings?.preview_text ?? null,
-        listName: campaign.recipients?.list_name ?? null,
-        segmentText: campaign.recipients?.segment_text ?? null,
-      },
-      centres,
-    )?.centreKey ?? null;
-
     await upsertMailchimpCampaign({
       mailchimpId: campaign.id,
       serverPrefix: config.serverPrefix,
       listId: campaign.recipients?.list_id ?? null,
-      centreKey,
       subject: campaign.settings?.subject_line ?? null,
       previewText: campaign.settings?.preview_text ?? null,
       status: campaign.status ?? null,
@@ -82,7 +60,7 @@ export async function refreshMailchimpSnapshot(config: MailchimpConfig): Promise
       try {
         const report = await client.getCampaignReport(campaign.id);
 
-        await upsertMailchimpCampaignReport({
+        await createMailchimpCampaignReportSnapshot({
           mailchimpId: campaign.id,
           opens: report.opens?.opens_total ?? 0,
           uniqueOpens: report.opens?.unique_opens ?? 0,
@@ -102,9 +80,12 @@ export async function refreshMailchimpSnapshot(config: MailchimpConfig): Promise
           raw: report,
         });
         result.reports += 1;
-      } catch {
+      } catch (error) {
         // Reports endpoint can 404 for very-recently-sent or draft campaigns;
-        // skip silently so one bad campaign doesn't fail the whole snapshot.
+        // skip that known API case, but never suppress persistence failures.
+        if (!(error instanceof MailchimpApiError) || error.status !== 404) {
+          throw error;
+        }
       }
     }
   }
@@ -114,7 +95,7 @@ export async function refreshMailchimpSnapshot(config: MailchimpConfig): Promise
 
   for (const list of lists) {
     const stats = list.stats ?? {};
-    await upsertMailchimpListGrowthSnapshot({
+    await createMailchimpListGrowthSnapshot({
       serverPrefix: config.serverPrefix,
       listId: list.id,
       snapshotDate,

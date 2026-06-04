@@ -1,7 +1,11 @@
 import "./ai-chat.test.js";
 import "./analytics-compute.test.js";
+import "./append-only-storage.test.js";
 import "./app-shell.test.js";
 import "./centre-contact-store.test.js";
 import "./comms-app-shell.test.js";
+import "./comms-context.test.js";
+import "./formstack-centre-match.test.js";
 import "./meta-centre-match.test.js";
+import "./postmark-centre-match.test.js";
 import "./waitlist-report.test.js";

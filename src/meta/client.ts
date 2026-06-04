@@ -1,4 +1,5 @@
 import type { MetaConfig } from "./config.js";
+import { appendExternalApiCapture } from "../storage/external-api-capture-store.js";
 
 const META_GRAPH_API_BASE_URL = "https://graph.facebook.com/v23.0";
 
@@ -143,10 +144,29 @@ export class MetaAdsClient {
 
     if (!response.ok) {
       const responseBody = await response.text().catch(() => "");
+      await appendExternalApiCapture({
+        source: "meta",
+        operation: endpointPath,
+        httpStatus: response.status,
+        outcome: "error",
+        requestContext: queryParams,
+        payload: responseBody,
+      });
       throw new Error(`Meta GET ${endpointPath} failed with ${response.status}: ${responseBody}`);
     }
 
-    return (await response.json()) as T;
+    const payload = (await response.json()) as T;
+
+    await appendExternalApiCapture({
+      source: "meta",
+      operation: endpointPath,
+      httpStatus: response.status,
+      outcome: "success",
+      requestContext: queryParams,
+      payload,
+    });
+
+    return payload;
   }
 
   async getList<T>(endpointPath: string, queryParams: Record<string, string | number | boolean | undefined> = {}) {

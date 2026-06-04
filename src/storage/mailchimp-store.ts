@@ -7,7 +7,6 @@ export type MailchimpCampaignUpsertInput = {
   mailchimpId: string;
   serverPrefix: string;
   listId?: string | null;
-  centreKey?: number | null;
   subject?: string | null;
   previewText?: string | null;
   status?: string | null;
@@ -18,7 +17,7 @@ export type MailchimpCampaignUpsertInput = {
   pulledAt: string | Date;
 };
 
-export type MailchimpCampaignReportUpsertInput = {
+export type MailchimpCampaignReportSnapshotInput = {
   mailchimpId: string;
   opens?: number | null;
   uniqueOpens?: number | null;
@@ -52,7 +51,6 @@ export type MailchimpCampaignView = {
   mailchimpId: string;
   serverPrefix: string;
   listId: string | null;
-  centreKey: number | null;
   subject: string;
   previewText: string;
   status: string | null;
@@ -80,6 +78,7 @@ export type MailchimpCampaignView = {
 export type MailchimpListGrowthSnapshotView = {
   serverPrefix: string;
   listId: string;
+  listName: string;
   snapshotDate: string;
   memberCount: number;
   subscribed: number;
@@ -120,13 +119,21 @@ function toOptionalDate(value: string | Date | null | undefined) {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
+function listNameFromRaw(raw: Prisma.JsonValue | null | undefined) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return "Unnamed audience";
+  }
+
+  const name = raw.name;
+  return typeof name === "string" && name.trim() ? name.trim() : "Unnamed audience";
+}
+
 export async function upsertMailchimpCampaign(input: MailchimpCampaignUpsertInput) {
   const pulledAt = new Date(input.pulledAt);
   const sendTime = toOptionalDate(input.sendTime ?? null);
   const data = {
     serverPrefix: input.serverPrefix,
     listId: input.listId ?? null,
-    centreKey: input.centreKey ?? null,
     subject: input.subject ?? "",
     previewText: input.previewText ?? "",
     status: input.status ?? null,
@@ -144,7 +151,7 @@ export async function upsertMailchimpCampaign(input: MailchimpCampaignUpsertInpu
   });
 }
 
-export async function upsertMailchimpCampaignReport(input: MailchimpCampaignReportUpsertInput) {
+export async function createMailchimpCampaignReportSnapshot(input: MailchimpCampaignReportSnapshotInput) {
   const fetchedAt = new Date(input.fetchedAt);
   const sendTime = toOptionalDate(input.sendTime ?? null);
   const data = {
@@ -163,14 +170,12 @@ export async function upsertMailchimpCampaignReport(input: MailchimpCampaignRepo
     raw: toJson(input.raw),
   };
 
-  return db.mailchimpCampaignReport.upsert({
-    where: { mailchimpId: input.mailchimpId },
-    create: { mailchimpId: input.mailchimpId, ...data },
-    update: data,
+  return db.mailchimpCampaignReport.create({
+    data: { mailchimpId: input.mailchimpId, ...data },
   });
 }
 
-export async function upsertMailchimpListGrowthSnapshot(input: MailchimpListGrowthSnapshotInput) {
+export async function createMailchimpListGrowthSnapshot(input: MailchimpListGrowthSnapshotInput) {
   const snapshotDate = toDateOnly(input.snapshotDate);
   const pulledAt = new Date(input.pulledAt);
   const data = {
@@ -183,21 +188,13 @@ export async function upsertMailchimpListGrowthSnapshot(input: MailchimpListGrow
     raw: toJson(input.raw),
   };
 
-  return db.mailchimpListGrowthSnapshot.upsert({
-    where: {
-      serverPrefix_listId_snapshotDate: {
-        serverPrefix: input.serverPrefix,
-        listId: input.listId,
-        snapshotDate,
-      },
-    },
-    create: {
+  return db.mailchimpListGrowthSnapshot.create({
+    data: {
       serverPrefix: input.serverPrefix,
       listId: input.listId,
       snapshotDate,
       ...data,
     },
-    update: data,
   });
 }
 
@@ -219,8 +216,13 @@ export async function readMailchimpDashboardData(
       ...(options.serverPrefix ? { serverPrefix: options.serverPrefix } : {}),
       ...(sendTimeFilter ? { sendTime: sendTimeFilter } : {}),
     },
-    orderBy: [{ sendTime: "desc" }, { pulledAt: "desc" }],
-    include: { report: true },
+    orderBy: [{ sendTime: { sort: "desc", nulls: "last" } }, { pulledAt: "desc" }],
+    include: {
+      reports: {
+        orderBy: [{ fetchedAt: "desc" }, { createdAt: "desc" }],
+        take: 1,
+      },
+    },
     take: 200,
   });
 
@@ -250,7 +252,6 @@ export async function readMailchimpDashboardData(
       mailchimpId: campaign.mailchimpId,
       serverPrefix: campaign.serverPrefix,
       listId: campaign.listId,
-      centreKey: campaign.centreKey,
       subject: campaign.subject,
       previewText: campaign.previewText,
       status: campaign.status,
@@ -259,26 +260,27 @@ export async function readMailchimpDashboardData(
       sendTime: campaign.sendTime?.toISOString() ?? null,
       emailsSent: campaign.emailsSent,
       pulledAt: campaign.pulledAt.toISOString(),
-      report: campaign.report
+      report: campaign.reports[0]
         ? {
-            opens: campaign.report.opens,
-            uniqueOpens: campaign.report.uniqueOpens,
-            openRate: toNumber(campaign.report.openRate),
-            clicks: campaign.report.clicks,
-            uniqueClicks: campaign.report.uniqueClicks,
-            clickRate: toNumber(campaign.report.clickRate),
-            unsubscribes: campaign.report.unsubscribes,
-            bounces: campaign.report.bounces,
-            abuseReports: campaign.report.abuseReports,
-            forwardCount: campaign.report.forwardCount,
-            sendTime: campaign.report.sendTime?.toISOString() ?? null,
-            fetchedAt: campaign.report.fetchedAt.toISOString(),
+            opens: campaign.reports[0].opens,
+            uniqueOpens: campaign.reports[0].uniqueOpens,
+            openRate: toNumber(campaign.reports[0].openRate),
+            clicks: campaign.reports[0].clicks,
+            uniqueClicks: campaign.reports[0].uniqueClicks,
+            clickRate: toNumber(campaign.reports[0].clickRate),
+            unsubscribes: campaign.reports[0].unsubscribes,
+            bounces: campaign.reports[0].bounces,
+            abuseReports: campaign.reports[0].abuseReports,
+            forwardCount: campaign.reports[0].forwardCount,
+            sendTime: campaign.reports[0].sendTime?.toISOString() ?? null,
+            fetchedAt: campaign.reports[0].fetchedAt.toISOString(),
           }
         : null,
     })),
     listGrowth: listGrowth.map((entry) => ({
       serverPrefix: entry.serverPrefix,
       listId: entry.listId,
+      listName: listNameFromRaw(entry.raw),
       snapshotDate: entry.snapshotDate.toISOString(),
       memberCount: entry.memberCount,
       subscribed: entry.subscribed,
@@ -306,13 +308,12 @@ export async function readMailchimpListGrowthSnapshotForDate(
   listId: string,
   snapshotDate: string | Date,
 ) {
-  return db.mailchimpListGrowthSnapshot.findUnique({
+  return db.mailchimpListGrowthSnapshot.findFirst({
     where: {
-      serverPrefix_listId_snapshotDate: {
-        serverPrefix,
-        listId,
-        snapshotDate: toDateOnly(snapshotDate),
-      },
+      serverPrefix,
+      listId,
+      snapshotDate: toDateOnly(snapshotDate),
     },
+    orderBy: [{ pulledAt: "desc" }, { createdAt: "desc" }],
   });
 }

@@ -2,7 +2,7 @@ import type { GoogleAnalyticsConfig } from "./config.js";
 import { GoogleAnalyticsClient, type GoogleAnalyticsRunReportResponse } from "./client.js";
 import {
   readGoogleAnalyticsRangeSnapshot,
-  upsertGoogleAnalyticsDailySnapshot,
+  createGoogleAnalyticsDailySnapshot,
 } from "../storage/google-analytics-store.js";
 
 export const GOOGLE_ANALYTICS_MONTH_RANGE_START = "2025-05-01";
@@ -166,7 +166,7 @@ export async function refreshGoogleAnalyticsRangeSnapshot(
     }))
     .sort((left, right) => right.screenPageViews - left.screenPageViews);
 
-  return upsertGoogleAnalyticsDailySnapshot({
+  return createGoogleAnalyticsDailySnapshot({
     propertyId: config.propertyId,
     snapshotDate: rangeEnd,
     rangeStartDate: rangeStart,

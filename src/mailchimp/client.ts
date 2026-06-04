@@ -1,4 +1,5 @@
 import type { MailchimpConfig } from "./config.js";
+import { appendExternalApiCapture } from "../storage/external-api-capture-store.js";
 
 export class MailchimpApiError extends Error {
   status: number;
@@ -176,7 +177,18 @@ export class MailchimpClient {
       });
 
       if (response.ok) {
-        return (await response.json()) as T;
+        const payload = (await response.json()) as T;
+
+        await appendExternalApiCapture({
+          source: "mailchimp",
+          operation: path,
+          httpStatus: response.status,
+          outcome: "success",
+          requestContext: { params, attempt },
+          payload,
+        });
+
+        return payload;
       }
 
       const bodyText = await response.text();
@@ -186,6 +198,15 @@ export class MailchimpClient {
       } catch {
         // leave as text
       }
+
+      await appendExternalApiCapture({
+        source: "mailchimp",
+        operation: path,
+        httpStatus: response.status,
+        outcome: "error",
+        requestContext: { params, attempt },
+        payload: parsedBody,
+      });
 
       if (response.status === 429 || (response.status >= 500 && response.status < 600)) {
         lastError = new MailchimpApiError(

@@ -298,15 +298,11 @@ export async function upsertCentreReferences(centres: CentreReferenceUpsertInput
   return readCentreReferences();
 }
 
-async function replaceSnapshotRows(
+async function appendSnapshotRows(
   tx: PrismaTransactionClient,
   runId: number,
   snapshots: ServiceAnalyticsSnapshot[],
 ) {
-  await tx.serviceAnalyticsSnapshot.deleteMany({
-    where: { runId },
-  });
-
   if (snapshots.length === 0) {
     return;
   }
@@ -357,21 +353,19 @@ export async function writeAnalyticsSnapshotSet(input: AnalyticsSnapshotSetInput
   const source = input.source ?? "manual";
 
   const run = await db.$transaction(async (tx) => {
-    const snapshotRun = await tx.analyticsSnapshotRun.upsert({
-      where: { runDate },
-      update: { source },
-      create: {
+    const snapshotRun = await tx.analyticsSnapshotRun.create({
+      data: {
         runDate,
         source,
       },
     });
 
-    await replaceSnapshotRows(tx, snapshotRun.id, input.snapshots);
+    await appendSnapshotRows(tx, snapshotRun.id, input.snapshots);
 
     return snapshotRun;
   });
 
-  return readSnapshotSetByRunDate(run.runDate);
+  return readSnapshotSetByRunId(run.id);
 }
 
 export async function readLatestAnalyticsSnapshotSet(): Promise<LatestSnapshotSet | null> {
@@ -581,8 +575,31 @@ async function readAnalyticsSnapshotSetInRange(start: Date, end: Date): Promise<
 
 export async function readSnapshotSetByRunDate(runDateInput: string | Date): Promise<LatestSnapshotSet | null> {
   const runDate = new Date(runDateInput);
-  const run = await db.analyticsSnapshotRun.findUnique({
+  const run = await db.analyticsSnapshotRun.findFirst({
     where: { runDate },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    include: {
+      snapshots: {
+        orderBy: [{ urgencyScore: "desc" }, { serviceName: "asc" }],
+      },
+    },
+  });
+
+  if (!run) {
+    return null;
+  }
+
+  return {
+    runDate: run.runDate.toISOString(),
+    source: run.source,
+    createdAt: run.createdAt.toISOString(),
+    snapshots: run.snapshots.map(mapSnapshot),
+  };
+}
+
+async function readSnapshotSetByRunId(runId: number): Promise<LatestSnapshotSet | null> {
+  const run = await db.analyticsSnapshotRun.findUnique({
+    where: { id: runId },
     include: {
       snapshots: {
         orderBy: [{ urgencyScore: "desc" }, { serviceName: "asc" }],

@@ -2,6 +2,8 @@ import { timingSafeEqual } from "node:crypto";
 import type { FastifyRequest } from "fastify";
 
 import { prisma } from "../db.js";
+import { matchPostmarkEventToCentre } from "./centre-match.js";
+import { appendExternalApiCapture } from "../storage/external-api-capture-store.js";
 
 const POSTMARK_WEBHOOK_IPS = new Set([
   "3.134.147.250",
@@ -10,7 +12,14 @@ const POSTMARK_WEBHOOK_IPS = new Set([
   "18.217.206.57",
 ]);
 
-const SUPPORTED_RECORD_TYPES = new Set(["Delivery", "Bounce", "Open", "Click"]);
+const SUPPORTED_RECORD_TYPES = new Set([
+  "Delivery",
+  "Bounce",
+  "Open",
+  "Click",
+  "SpamComplaint",
+  "SubscriptionChange",
+]);
 
 export function verifyBasicAuth(request: FastifyRequest, expectedPassword: string): boolean {
   if (!expectedPassword) return false;
@@ -59,9 +68,6 @@ function normalizeEvent(payload: RawPostmarkPayload, serverToken: string): Norma
   const recordType = asString(payload.RecordType);
   if (!recordType || !SUPPORTED_RECORD_TYPES.has(recordType)) return null;
 
-  const messageId = asString(payload.MessageID);
-  if (!messageId) return null;
-
   // Bounce uses `Email`; Delivery / Open / Click use `Recipient`.
   const recipient = asString(payload.Recipient) ?? asString(payload.Email);
   const tag = asString(payload.Tag);
@@ -70,9 +76,15 @@ function normalizeEvent(payload: RawPostmarkPayload, serverToken: string): Norma
   const timestampRaw =
     asString(payload.DeliveredAt) ??
     asString(payload.BouncedAt) ??
+    asString(payload.ChangedAt) ??
     asString(payload.ReceivedAt);
   const occurredAt = timestampRaw ? new Date(timestampRaw) : new Date();
   if (Number.isNaN(occurredAt.getTime())) return null;
+  const messageId = asString(payload.MessageID) ??
+    (recordType === "SubscriptionChange" && recipient && timestampRaw
+      ? `subscription-change:${recipient}:${timestampRaw}`
+      : null);
+  if (!messageId) return null;
 
   return {
     serverToken,
@@ -88,6 +100,14 @@ export async function ingestPostmarkEvent(
   payload: unknown,
   serverToken: string,
 ): Promise<{ stored: boolean; reason?: string }> {
+  await appendExternalApiCapture({
+    source: "postmark",
+    operation: "webhook-event",
+    outcome: "success",
+    requestContext: { serverTokenConfigured: serverToken !== "unknown" },
+    payload,
+  });
+
   if (!payload || typeof payload !== "object") {
     return { stored: false, reason: "payload-not-object" };
   }
@@ -96,32 +116,28 @@ export async function ingestPostmarkEvent(
   if (!normalized) {
     return { stored: false, reason: "unsupported-or-malformed" };
   }
+  const centreKey = matchPostmarkEventToCentre(
+    { tag: normalized.tag, recipient: normalized.recipient },
+    await prisma.centreReference.findMany({
+      where: { ignored: false, openStatus: "Open" },
+      select: { centreKey: true, name: true },
+    }),
+  )?.centreKey ?? null;
 
-  await prisma.postmarkMessageEvent.upsert({
-    where: {
-      serverToken_messageId_eventType_occurredAt: {
-        serverToken: normalized.serverToken,
-        messageId: normalized.messageId,
-        eventType: normalized.eventType,
-        occurredAt: normalized.occurredAt,
-      },
-    },
-    create: {
+  const stored = await prisma.postmarkMessageEvent.createMany({
+    data: [{
       serverToken: normalized.serverToken,
       messageId: normalized.messageId,
       eventType: normalized.eventType,
       recipient: normalized.recipient,
       tag: normalized.tag,
+      centreKey,
       occurredAt: normalized.occurredAt,
       receivedAt: new Date(),
       raw: payload as object,
-    },
-    update: {
-      recipient: normalized.recipient,
-      tag: normalized.tag,
-      raw: payload as object,
-    },
+    }],
+    skipDuplicates: true,
   });
 
-  return { stored: true };
+  return stored.count > 0 ? { stored: true } : { stored: false, reason: "duplicate-event" };
 }

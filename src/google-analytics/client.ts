@@ -2,6 +2,7 @@ import { createSign } from "node:crypto";
 import { readFile } from "node:fs/promises";
 
 import type { GoogleAnalyticsConfig } from "./config.js";
+import { appendExternalApiCapture } from "../storage/external-api-capture-store.js";
 
 const GOOGLE_ANALYTICS_SCOPE = "https://www.googleapis.com/auth/analytics.readonly";
 const GOOGLE_OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token";
@@ -161,9 +162,28 @@ export class GoogleAnalyticsClient {
 
     if (!response.ok) {
       const responseBody = await response.text().catch(() => "");
+      await appendExternalApiCapture({
+        source: "google-analytics",
+        operation: "runReport",
+        httpStatus: response.status,
+        outcome: "error",
+        requestContext: { propertyId: this.config.propertyId, body },
+        payload: responseBody,
+      });
       throw new Error(`Google Analytics runReport failed with ${response.status}: ${responseBody}`);
     }
 
-    return (await response.json()) as GoogleAnalyticsRunReportResponse;
+    const payload = (await response.json()) as GoogleAnalyticsRunReportResponse;
+
+    await appendExternalApiCapture({
+      source: "google-analytics",
+      operation: "runReport",
+      httpStatus: response.status,
+      outcome: "success",
+      requestContext: { propertyId: this.config.propertyId, body },
+      payload,
+    });
+
+    return payload;
   }
 }

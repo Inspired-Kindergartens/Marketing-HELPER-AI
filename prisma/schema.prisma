@@ -15,29 +15,44 @@ model Note {
   updatedAt DateTime @updatedAt
 }
 
+model ExternalApiCapture {
+  id             BigInt   @id @default(autoincrement())
+  source         String
+  operation      String
+  receivedAt     DateTime
+  httpStatus     Int?
+  outcome        String
+  requestContext Json?
+  payload        Json
+  createdAt      DateTime @default(now())
+
+  @@index([source, receivedAt(sort: Desc)])
+  @@index([operation, receivedAt(sort: Desc)])
+  @@index([outcome, receivedAt(sort: Desc)])
+}
+
 model CentreReference {
-  id             Int                        @id @default(autoincrement())
-  centreKey      Int                        @unique
-  name           String
-  openStatus     String
-  licenseNumber  Int?
-  regionName     String?
-  areaName       String?
-  subgroupName   String?
-  ignored        Boolean                    @default(false)
-  lastSyncedAt   DateTime
-  createdAt      DateTime                   @default(now())
-  updatedAt      DateTime                   @updatedAt
-  manualCapacity ManualCentreCapacity?
-  snapshots      ServiceAnalyticsSnapshot[]
-  metaCampaigns  MetaCampaign[]
-  metaAdSets     MetaAdSet[]
-  metaAds        MetaAd[]
-  metaInsights   MetaInsightSnapshot[]
-  metaEmailContent MetaEmailContent?
+  id                             Int                             @id @default(autoincrement())
+  centreKey                      Int                             @unique
+  name                           String
+  openStatus                     String
+  licenseNumber                  Int?
+  regionName                     String?
+  areaName                       String?
+  subgroupName                   String?
+  ignored                        Boolean                         @default(false)
+  lastSyncedAt                   DateTime
+  createdAt                      DateTime                        @default(now())
+  updatedAt                      DateTime                        @updatedAt
+  manualCapacity                 ManualCentreCapacity?
+  snapshots                      ServiceAnalyticsSnapshot[]
+  metaCampaigns                  MetaCampaign[]
+  metaAdSets                     MetaAdSet[]
+  metaAds                        MetaAd[]
+  metaInsights                   MetaInsightSnapshot[]
+  metaEmailContent               MetaEmailContent?
   postmarkOutboundSnapshotsByTag PostmarkOutboundSnapshotByTag[]
   postmarkMessageEvents          PostmarkMessageEvent[]
-  mailchimpCampaigns             MailchimpCampaign[]
   formstackForms                 FormstackForm[]
   formstackSubmissions           FormstackSubmission[]
 
@@ -70,7 +85,7 @@ model ManualCentreCapacity {
 
 model AnalyticsSnapshotRun {
   id        Int                        @id @default(autoincrement())
-  runDate   DateTime                   @unique
+  runDate   DateTime
   source    String                     @default("manual")
   createdAt DateTime                   @default(now())
   snapshots ServiceAnalyticsSnapshot[]
@@ -79,42 +94,42 @@ model AnalyticsSnapshotRun {
 }
 
 model ServiceAnalyticsSnapshot {
-  id                            Int                  @id @default(autoincrement())
-  runId                         Int
-  centreKey                     Int
-  serviceName                   String
-  date                          DateTime
-  enrolledCount                 Int
-  enrolledFteCount              Decimal              @default(0) @db.Decimal(8, 4)
-  bookedAverageDailyCount       Decimal              @default(0) @db.Decimal(8, 4)
-  bookedUtilisationRatio        Decimal              @default(0) @db.Decimal(8, 4)
-  enrolledUnder2Count           Int                  @default(0)
-  enrolledOver2Count            Int                  @default(0)
-  licensedCapacity              Int
-  licensedUnder2Capacity        Int?
-  licensedOver2Capacity         Int?
-  enrolmentRatio                Decimal              @db.Decimal(8, 4)
-  waitlistCount                 Int
-  waitlistUnder2Count           Int                  @default(0)
-  waitlistUnder5Count           Int                  @default(0)
-  waitlistTurning5ThisYearCount Int                  @default(0)
-  waitlistAged5PlusCount        Int                  @default(0)
-  waitlistUnknownAgeCount       Int                  @default(0)
-  waitlistOldestEntryDays       Int?
-  waitlistAverageEntryDays      Decimal?             @db.Decimal(8, 4)
-  knownLeavingCount             Int
-  knownLeavingCountsByWindow    Json                 @default("{\"1W\":0,\"2W\":0,\"3W\":0,\"1M\":0,\"2M\":0,\"3M\":0,\"6M\":0,\"12M\":0}")
-  agedOutCount                  Int
-  approachingFiveCount          Int
-  approachingFiveCountsByWindow Json                 @default("{\"1W\":0,\"2W\":0,\"3W\":0,\"1M\":0,\"2M\":0,\"3M\":0,\"6M\":0,\"12M\":0}")
-  replacementPressureCountsByWindow Json             @default("{\"1W\":0,\"2W\":0,\"3W\":0,\"1M\":0,\"2M\":0,\"3M\":0,\"6M\":0,\"12M\":0}")
-  replacementPressure           Int
-  waitlistCoverRatio            Decimal              @db.Decimal(8, 4)
-  urgencyScore                  Decimal              @db.Decimal(8, 4)
-  urgencyBand                   String
-  createdAt                     DateTime             @default(now())
-  centre                        CentreReference      @relation(fields: [centreKey], references: [centreKey], onDelete: Restrict, onUpdate: Cascade)
-  run                           AnalyticsSnapshotRun @relation(fields: [runId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  id                                Int                  @id @default(autoincrement())
+  runId                             Int
+  centreKey                         Int
+  serviceName                       String
+  date                              DateTime
+  enrolledCount                     Int
+  enrolledFteCount                  Decimal              @default(0) @db.Decimal(8, 4)
+  bookedAverageDailyCount           Decimal              @default(0) @db.Decimal(8, 4)
+  bookedUtilisationRatio            Decimal              @default(0) @db.Decimal(8, 4)
+  enrolledUnder2Count               Int                  @default(0)
+  enrolledOver2Count                Int                  @default(0)
+  licensedCapacity                  Int
+  licensedUnder2Capacity            Int?
+  licensedOver2Capacity             Int?
+  enrolmentRatio                    Decimal              @db.Decimal(8, 4)
+  waitlistCount                     Int
+  waitlistUnder2Count               Int                  @default(0)
+  waitlistUnder5Count               Int                  @default(0)
+  waitlistTurning5ThisYearCount     Int                  @default(0)
+  waitlistAged5PlusCount            Int                  @default(0)
+  waitlistUnknownAgeCount           Int                  @default(0)
+  waitlistOldestEntryDays           Int?
+  waitlistAverageEntryDays          Decimal?             @db.Decimal(8, 4)
+  knownLeavingCount                 Int
+  knownLeavingCountsByWindow        Json                 @default("{\"1W\":0,\"2W\":0,\"3W\":0,\"1M\":0,\"2M\":0,\"3M\":0,\"6M\":0,\"12M\":0}")
+  agedOutCount                      Int
+  approachingFiveCount              Int
+  approachingFiveCountsByWindow     Json                 @default("{\"1W\":0,\"2W\":0,\"3W\":0,\"1M\":0,\"2M\":0,\"3M\":0,\"6M\":0,\"12M\":0}")
+  replacementPressureCountsByWindow Json                 @default("{\"1W\":0,\"2W\":0,\"3W\":0,\"1M\":0,\"2M\":0,\"3M\":0,\"6M\":0,\"12M\":0}")
+  replacementPressure               Int
+  waitlistCoverRatio                Decimal              @db.Decimal(8, 4)
+  urgencyScore                      Decimal              @db.Decimal(8, 4)
+  urgencyBand                       String
+  createdAt                         DateTime             @default(now())
+  centre                            CentreReference      @relation(fields: [centreKey], references: [centreKey], onDelete: Restrict, onUpdate: Cascade)
+  run                               AnalyticsSnapshotRun @relation(fields: [runId], references: [id], onDelete: Cascade, onUpdate: Cascade)
 
   @@unique([runId, centreKey])
   @@index([runId, urgencyScore(sort: Desc)])
@@ -282,25 +297,25 @@ model MetaRecommendationNote {
 }
 
 model MetaRecommendationNotification {
-  id                 Int       @id @default(autoincrement())
-  notificationId     String    @unique
-  centreKey          Int
-  centreName         String
-  windowKey          String
-  recommendation     String
-  message            String
-  priority           Int
-  openPlaces         Int
-  actionableWaitlist Int
-  waitlistCount      Int
+  id                  Int       @id @default(autoincrement())
+  notificationId      String    @unique
+  centreKey           Int
+  centreName          String
+  windowKey           String
+  recommendation      String
+  message             String
+  priority            Int
+  openPlaces          Int
+  actionableWaitlist  Int
+  waitlistCount       Int
   replacementPressure Int
   activeCampaignCount Int
-  spend30d           Decimal   @default(0) @db.Decimal(18, 6)
-  firstSeenAt        DateTime  @default(now())
-  lastSeenAt         DateTime  @default(now())
-  dismissedAt        DateTime?
-  createdAt          DateTime  @default(now())
-  updatedAt          DateTime  @updatedAt
+  spend30d            Decimal   @default(0) @db.Decimal(18, 6)
+  firstSeenAt         DateTime  @default(now())
+  lastSeenAt          DateTime  @default(now())
+  dismissedAt         DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
 
   @@index([centreKey, lastSeenAt(sort: Desc)])
   @@index([dismissedAt])
@@ -308,7 +323,7 @@ model MetaRecommendationNotification {
 }
 
 model GoogleAnalyticsDailySnapshot {
-  id                     Int      @id @default(autoincrement())
+  id                     Int                           @id @default(autoincrement())
   propertyId             String
   snapshotDate           DateTime
   rangeStartDate         DateTime
@@ -318,16 +333,15 @@ model GoogleAnalyticsDailySnapshot {
   sessions               Int?
   engagedSessions        Int?
   screenPageViews        Int?
-  conversions            Decimal? @db.Decimal(18, 6)
-  totalRevenue           Decimal? @db.Decimal(18, 6)
-  engagementRate         Decimal? @db.Decimal(18, 6)
-  averageSessionDuration Decimal? @db.Decimal(18, 6)
+  conversions            Decimal?                      @db.Decimal(18, 6)
+  totalRevenue           Decimal?                      @db.Decimal(18, 6)
+  engagementRate         Decimal?                      @db.Decimal(18, 6)
+  averageSessionDuration Decimal?                      @db.Decimal(18, 6)
   raw                    Json?
-  createdAt              DateTime @default(now())
-  updatedAt              DateTime @updatedAt
+  createdAt              DateTime                      @default(now())
+  updatedAt              DateTime                      @updatedAt
   pages                  GoogleAnalyticsPageSnapshot[]
 
-  @@unique([propertyId, rangeStartDate, rangeEndDate])
   @@index([propertyId, snapshotDate(sort: Desc)])
   @@index([propertyId, rangeStartDate, rangeEndDate])
   @@index([pulledAt(sort: Desc)])
@@ -357,71 +371,69 @@ model GoogleAnalyticsPageSnapshot {
 }
 
 model PostmarkOutboundSnapshot {
-  id                 Int      @id @default(autoincrement())
-  serverToken        String
-  snapshotDate       DateTime
-  rangeStartDate     DateTime
-  rangeEndDate       DateTime
-  pulledAt           DateTime
-  sent               Int      @default(0)
-  delivered          Int      @default(0)
-  opened             Int      @default(0)
-  uniqueOpened       Int      @default(0)
-  clicked            Int      @default(0)
-  uniqueClicked      Int      @default(0)
-  bounced            Int      @default(0)
-  spamComplained     Int      @default(0)
-  suppressed         Int      @default(0)
-  raw                Json?
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+  id             Int      @id @default(autoincrement())
+  serverToken    String
+  snapshotDate   DateTime
+  rangeStartDate DateTime
+  rangeEndDate   DateTime
+  pulledAt       DateTime
+  sent           Int      @default(0)
+  delivered      Int      @default(0)
+  opened         Int      @default(0)
+  uniqueOpened   Int      @default(0)
+  clicked        Int      @default(0)
+  uniqueClicked  Int      @default(0)
+  bounced        Int      @default(0)
+  spamComplained Int      @default(0)
+  suppressed     Int      @default(0)
+  raw            Json?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
-  @@unique([serverToken, rangeStartDate, rangeEndDate])
   @@index([serverToken, snapshotDate(sort: Desc)])
   @@index([pulledAt(sort: Desc)])
 }
 
 model PostmarkOutboundSnapshotByTag {
-  id                 Int              @id @default(autoincrement())
-  serverToken        String
-  tag                String
-  centreKey          Int?
-  snapshotDate       DateTime
-  rangeStartDate     DateTime
-  rangeEndDate       DateTime
-  pulledAt           DateTime
-  sent               Int              @default(0)
-  delivered          Int              @default(0)
-  opened             Int              @default(0)
-  uniqueOpened       Int              @default(0)
-  clicked            Int              @default(0)
-  uniqueClicked      Int              @default(0)
-  bounced            Int              @default(0)
-  spamComplained     Int              @default(0)
-  raw                Json?
-  createdAt          DateTime         @default(now())
-  updatedAt          DateTime         @updatedAt
-  centre             CentreReference? @relation(fields: [centreKey], references: [centreKey], onDelete: SetNull, onUpdate: Cascade)
+  id             Int              @id @default(autoincrement())
+  serverToken    String
+  tag            String
+  centreKey      Int?
+  snapshotDate   DateTime
+  rangeStartDate DateTime
+  rangeEndDate   DateTime
+  pulledAt       DateTime
+  sent           Int              @default(0)
+  delivered      Int              @default(0)
+  opened         Int              @default(0)
+  uniqueOpened   Int              @default(0)
+  clicked        Int              @default(0)
+  uniqueClicked  Int              @default(0)
+  bounced        Int              @default(0)
+  spamComplained Int              @default(0)
+  raw            Json?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  centre         CentreReference? @relation(fields: [centreKey], references: [centreKey], onDelete: SetNull, onUpdate: Cascade)
 
-  @@unique([serverToken, tag, rangeStartDate, rangeEndDate])
   @@index([serverToken, tag, snapshotDate(sort: Desc)])
   @@index([centreKey, snapshotDate(sort: Desc)])
   @@index([pulledAt(sort: Desc)])
 }
 
 model PostmarkMessageEvent {
-  id                Int              @id @default(autoincrement())
-  serverToken       String
-  messageId         String
-  eventType         String
-  recipient         String?
-  tag               String?
-  centreKey         Int?
-  occurredAt        DateTime
-  receivedAt        DateTime
-  raw               Json?
-  createdAt         DateTime         @default(now())
-  centre            CentreReference? @relation(fields: [centreKey], references: [centreKey], onDelete: SetNull, onUpdate: Cascade)
+  id          Int              @id @default(autoincrement())
+  serverToken String
+  messageId   String
+  eventType   String
+  recipient   String?
+  tag         String?
+  centreKey   Int?
+  occurredAt  DateTime
+  receivedAt  DateTime
+  raw         Json?
+  createdAt   DateTime         @default(now())
+  centre      CentreReference? @relation(fields: [centreKey], references: [centreKey], onDelete: SetNull, onUpdate: Cascade)
 
   @@unique([serverToken, messageId, eventType, occurredAt])
   @@index([serverToken, occurredAt(sort: Desc)])
@@ -430,88 +442,86 @@ model PostmarkMessageEvent {
 }
 
 model MailchimpCampaign {
-  id              Int                       @id @default(autoincrement())
-  mailchimpId     String                    @unique
-  serverPrefix    String
-  listId          String?
-  centreKey       Int?
-  subject         String                    @default("")
-  previewText     String                    @default("")
-  status          String?
-  type            String?
-  archiveUrl      String?
-  sendTime        DateTime?
-  emailsSent      Int                       @default(0)
-  pulledAt        DateTime
-  createdAt       DateTime                  @default(now())
-  updatedAt       DateTime                  @updatedAt
-  centre          CentreReference?          @relation(fields: [centreKey], references: [centreKey], onDelete: SetNull, onUpdate: Cascade)
-  report          MailchimpCampaignReport?
+  id           Int                       @id @default(autoincrement())
+  mailchimpId  String                    @unique
+  serverPrefix String
+  listId       String?
+  subject      String                    @default("")
+  previewText  String                    @default("")
+  status       String?
+  type         String?
+  archiveUrl   String?
+  sendTime     DateTime?
+  emailsSent   Int                       @default(0)
+  pulledAt     DateTime
+  createdAt    DateTime                  @default(now())
+  updatedAt    DateTime                  @updatedAt
+  reports      MailchimpCampaignReport[]
 
   @@index([serverPrefix, sendTime(sort: Desc)])
-  @@index([centreKey, sendTime(sort: Desc)])
   @@index([listId, sendTime(sort: Desc)])
   @@index([pulledAt(sort: Desc)])
 }
 
 model MailchimpCampaignReport {
-  id                Int               @id @default(autoincrement())
-  mailchimpId       String            @unique
-  opens             Int               @default(0)
-  uniqueOpens       Int               @default(0)
-  openRate          Decimal           @default(0) @db.Decimal(18, 6)
-  clicks            Int               @default(0)
-  uniqueClicks      Int               @default(0)
-  clickRate         Decimal           @default(0) @db.Decimal(18, 6)
-  unsubscribes      Int               @default(0)
-  bounces           Int               @default(0)
-  abuseReports      Int               @default(0)
-  forwardCount      Int               @default(0)
-  sendTime          DateTime?
-  fetchedAt         DateTime
-  raw               Json?
-  createdAt         DateTime          @default(now())
-  updatedAt         DateTime          @updatedAt
-  campaign          MailchimpCampaign @relation(fields: [mailchimpId], references: [mailchimpId], onDelete: Cascade, onUpdate: Cascade)
+  id           Int               @id @default(autoincrement())
+  mailchimpId  String
+  opens        Int               @default(0)
+  uniqueOpens  Int               @default(0)
+  openRate     Decimal           @default(0) @db.Decimal(18, 6)
+  clicks       Int               @default(0)
+  uniqueClicks Int               @default(0)
+  clickRate    Decimal           @default(0) @db.Decimal(18, 6)
+  unsubscribes Int               @default(0)
+  bounces      Int               @default(0)
+  abuseReports Int               @default(0)
+  forwardCount Int               @default(0)
+  sendTime     DateTime?
+  fetchedAt    DateTime
+  raw          Json?
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+  campaign     MailchimpCampaign @relation(fields: [mailchimpId], references: [mailchimpId], onDelete: Cascade, onUpdate: Cascade)
 
   @@index([sendTime(sort: Desc)])
   @@index([fetchedAt(sort: Desc)])
+  @@index([mailchimpId, fetchedAt(sort: Desc)])
 }
 
 model MailchimpListGrowthSnapshot {
-  id              Int      @id @default(autoincrement())
-  serverPrefix    String
-  listId          String
-  snapshotDate    DateTime
-  memberCount     Int      @default(0)
-  subscribed      Int      @default(0)
-  unsubscribed    Int      @default(0)
-  cleaned         Int      @default(0)
-  pending         Int      @default(0)
-  pulledAt        DateTime
-  raw             Json?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  id           Int      @id @default(autoincrement())
+  serverPrefix String
+  listId       String
+  snapshotDate DateTime
+  memberCount  Int      @default(0)
+  subscribed   Int      @default(0)
+  unsubscribed Int      @default(0)
+  cleaned      Int      @default(0)
+  pending      Int      @default(0)
+  pulledAt     DateTime
+  raw          Json?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
-  @@unique([serverPrefix, listId, snapshotDate])
   @@index([listId, snapshotDate(sort: Desc)])
+  @@index([serverPrefix, listId, snapshotDate(sort: Desc)])
   @@index([pulledAt(sort: Desc)])
 }
 
 model FormstackForm {
-  id                Int                    @id @default(autoincrement())
-  formstackId       String                 @unique
-  name              String                 @default("")
-  folder            String?
-  centreKey         Int?
-  submissionCount   Int                    @default(0)
-  viewCount         Int?
-  lastSubmissionAt  DateTime?
-  pulledAt          DateTime
-  createdAt         DateTime               @default(now())
-  updatedAt         DateTime               @updatedAt
-  centre            CentreReference?       @relation(fields: [centreKey], references: [centreKey], onDelete: SetNull, onUpdate: Cascade)
-  submissions       FormstackSubmission[]
+  id               Int                   @id @default(autoincrement())
+  formstackId      String                @unique
+  name             String                @default("")
+  folder           String?
+  centreKey        Int?
+  submissionCount  Int                   @default(0)
+  viewCount        Int?
+  lastSubmissionAt DateTime?
+  pulledAt         DateTime
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+  centre           CentreReference?      @relation(fields: [centreKey], references: [centreKey], onDelete: SetNull, onUpdate: Cascade)
+  submissions      FormstackSubmission[]
 
   @@index([centreKey, lastSubmissionAt(sort: Desc)])
   @@index([folder])

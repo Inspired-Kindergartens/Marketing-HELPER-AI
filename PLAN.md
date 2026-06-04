@@ -11,39 +11,39 @@ Implementation plan for the second breakout app inside Marketing Helper AI.
 ## Phase 0 — Pre-work
 
 - [ ] Confirm with stakeholders that Postmark, Mailchimp, and Formstack are all in-scope for v1 (vs. shipping one at a time).
-- [ ] Get API credentials into a sealed location and add placeholder env vars to `.env.example`:
-  - [ ] `POSTMARK_SERVER_TOKEN`
-  - [ ] `POSTMARK_ACCOUNT_TOKEN` (optional, for account-wide stats)
-  - [ ] `MAILCHIMP_API_KEY` and `MAILCHIMP_SERVER_PREFIX` (the `usX` data-centre prefix)
-  - [ ] `FORMSTACK_API_TOKEN` (OAuth bearer or personal access token)
-- [ ] Decide on the route prefix (recommendation: `/comms`) and the nav-rail icon (recommendation: `bi-envelope-paper` or `bi-chat-square-text`).
-- [ ] Decide whether centre attribution for emails uses Postmark **tags** or **metadata** (recommendation: tags, since tag-level stats are first-class in the Postmark API).
+- [x] Get API credentials into a sealed location and add placeholder env vars to `.env.example`:
+  - [x] `POSTMARK_SERVER_TOKEN` unavailable from provider; Webmail v1 operates from webhooks only.
+  - [x] `POSTMARK_ACCOUNT_TOKEN` (optional, for account-wide stats)
+  - [x] `MAILCHIMP_API_KEY` and `MAILCHIMP_SERVER_PREFIX` (the `usX` data-centre prefix)
+  - [x] `FORMSTACK_API_TOKEN` (OAuth bearer or personal access token)
+- [x] Decide on the route prefix (recommendation: `/comms`) and the nav-rail icon (recommendation: `bi-envelope-paper` or `bi-chat-square-text`).
+- [x] Decide whether centre attribution for emails uses Postmark **tags** or **metadata** (recommendation: tags, since tag-level stats are first-class in the Postmark API).
 
 ---
 
 ## Phase 1 — Scaffold the breakout app shell
 
-- [ ] Add a `commsLanding` tile to `src/ui/landing-page.ts` so the landing page exposes the new app. Keep it `primary: true` once it's usable; until then leave it in the "Coming soon" placeholder grid.
-- [ ] Add a nav-rail entry in `src/ui/app-shell.ts` next to the Online Marketing one, linking to `/comms` (and `/comms?demo=1` when demo is on). Mirror the title/aria-label pattern.
-- [ ] Create `src/ui/comms-app-shell.ts` — the equivalent of `app-shell.ts` for the comms app. Start by re-using `renderLayout`, `renderBreakoutScript`, and `renderAiChatScript` from the existing shell; only the panel content differs.
-- [ ] Add `GET /comms` and `GET /comms?demo=1` routes in `src/server.ts` that render the new shell. Mirror the existing `/app` route handler structure.
-- [ ] Add a `commsBreakout` toggle test in `test/app-shell.test.ts` to assert the nav-rail and routes exist.
+- [x] Add a `commsLanding` tile to `src/ui/landing-page.ts` so the landing page exposes the new app. Keep it `primary: true` once it's usable; until then leave it in the "Coming soon" placeholder grid.
+- [x] Add a nav-rail entry in `src/ui/app-shell.ts` next to the Online Marketing one, linking to `/comms` (and `/comms?demo=1` when demo is on). Mirror the title/aria-label pattern.
+- [x] Create `src/ui/comms-app-shell.ts` — the equivalent of `app-shell.ts` for the comms app. Start by re-using `renderLayout`, `renderBreakoutScript`, and `renderAiChatScript` from the existing shell; only the panel content differs.
+- [x] Add `GET /comms` and `GET /comms?demo=1` routes in `src/server.ts` that render the new shell. Mirror the existing `/app` route handler structure.
+- [x] Add a `commsBreakout` toggle test in `test/app-shell.test.ts` to assert the nav-rail and routes exist.
 
 ---
 
 ## Phase 2 — Database schema
 
-- [ ] Add Prisma models for raw + snapshot data (mirror the meta-store / google-analytics-store pattern):
-  - [ ] `PostmarkOutboundSnapshot` — daily row per server: sent, delivered, opened, clicked, bounced, spam-complained, suppressed.
-  - [ ] `PostmarkOutboundSnapshotByTag` — daily row per (server, tag). Tag will carry the centre key/name.
-  - [ ] `PostmarkMessageEvent` (optional v1, useful v2) — per-message event log if we ingest webhooks.
-  - [ ] `MailchimpCampaign` — id, list_id, subject, send_time, status, centre_key (matched).
-  - [ ] `MailchimpCampaignReport` — opens, unique_opens, clicks, unique_clicks, unsubscribes, bounces, abuse_reports, send_time, fetched_at.
-  - [ ] `MailchimpListGrowthSnapshot` — daily list size per list, member churn.
-  - [ ] `FormstackForm` — id, name, folder, centre_key (matched), submission_count.
-  - [ ] `FormstackSubmission` — id, form_id, submitted_at, payload (JSON), centre_key (matched).
-- [ ] Run `npm run prisma:migrate` to create the migration; commit the migration files.
-- [ ] Run `npm run prisma:generate`.
+- [x] Add Prisma models for raw + snapshot data (mirror the meta-store / google-analytics-store pattern):
+  - [x] `PostmarkOutboundSnapshot` — daily row per server: sent, delivered, opened, clicked, bounced, spam-complained, suppressed.
+  - [x] `PostmarkOutboundSnapshotByTag` — daily row per (server, tag). Tag will carry the centre key/name.
+  - [x] `PostmarkMessageEvent` (optional v1, useful v2) — per-message event log if we ingest webhooks.
+  - [x] `MailchimpCampaign` — id, list_id, subject, send_time, status. Panui is organisation-wide and is not matched to centres.
+  - [x] `MailchimpCampaignReport` — opens, unique_opens, clicks, unique_clicks, unsubscribes, bounces, abuse_reports, send_time, fetched_at.
+  - [x] `MailchimpListGrowthSnapshot` — daily list size per list, member churn.
+  - [x] `FormstackForm` — id, name, folder, centre_key (matched), submission_count.
+  - [x] `FormstackSubmission` — id, form_id, submitted_at, payload (JSON), centre_key (matched).
+- [x] Run `npm run prisma:migrate` to create the migration; commit the migration files.
+- [x] Run `npm run prisma:generate`.
 
 ---
 
@@ -57,37 +57,36 @@ Mirror the structure of `src/meta/client.ts` and `src/google-analytics/client.ts
 - [ ] `src/postmark/client.ts` — minimal fetch wrapper with the `X-Postmark-Server-Token` header, exponential backoff on 429/5xx.
 - [ ] `src/postmark/stats.ts` — pulls for `/stats/outbound`, `/stats/outbound/opens`, `/stats/outbound/clicks`, `/stats/outbound/bounces`, scoped by date range and optional tag.
 - [ ] `src/postmark/refresh.ts` — orchestrator that runs daily and writes snapshots via the storage layer.
-- [ ] `src/storage/postmark-store.ts` — Prisma reads/writes; `readPostmarkDashboardData({ fromDate, toDate })`.
-- [ ] Centre matcher: tag → centre via `matchMetaNameToCentre`-style fuzzy match in `src/postmark/centre-match.ts`.
+- [x] `src/storage/postmark-store.ts` — Prisma reads/writes; `readPostmarkDashboardData({ fromDate, toDate })`.
+- [x] Centre matcher: tag → centre via `matchMetaNameToCentre`-style fuzzy match in `src/postmark/centre-match.ts`.
 
 ### Mailchimp
 
-- [ ] `src/mailchimp/config.ts`
-- [ ] `src/mailchimp/client.ts` — basic-auth with `anystring:API_KEY`, base URL derived from `MAILCHIMP_SERVER_PREFIX`.
+- [x] `src/mailchimp/config.ts`
+- [x] `src/mailchimp/client.ts` — basic-auth with `anystring:API_KEY`, base URL derived from `MAILCHIMP_SERVER_PREFIX`.
 - [ ] `src/mailchimp/campaigns.ts` — list campaigns, fetch report per campaign, fetch click details.
 - [ ] `src/mailchimp/lists.ts` — list growth snapshot, segment membership counts.
-- [ ] `src/mailchimp/refresh.ts` — orchestrator (daily by default; campaigns refreshed for 30 days after send).
-- [ ] `src/storage/mailchimp-store.ts` — `readMailchimpDashboardData({ fromDate, toDate })`.
-- [ ] `src/mailchimp/centre-match.ts` — segment name / merge-field based.
+- [x] `src/mailchimp/refresh.ts` — orchestrator (daily by default; campaigns refreshed for 30 days after send).
+- [x] `src/storage/mailchimp-store.ts` — `readMailchimpDashboardData({ fromDate, toDate })`.
 
 ### Formstack
 
-- [ ] `src/formstack/config.ts`
-- [ ] `src/formstack/client.ts` — bearer token, paginated GETs.
+- [x] `src/formstack/config.ts`
+- [x] `src/formstack/client.ts` — bearer token, paginated GETs.
 - [ ] `src/formstack/forms.ts` — list forms, fetch form metadata.
 - [ ] `src/formstack/submissions.ts` — paginate submissions since last cursor; store raw payload.
-- [ ] `src/formstack/refresh.ts` — incremental sync (cursor-based) so we don't re-pull historical submissions every run.
-- [ ] `src/storage/formstack-store.ts` — `readFormstackDashboardData({ fromDate, toDate })`.
-- [ ] `src/formstack/centre-match.ts` — folder name → centre, fallback to a designated field in the submission payload.
+- [x] `src/formstack/refresh.ts` — incremental sync (cursor-based) so we don't re-pull historical submissions every run.
+- [x] `src/storage/formstack-store.ts` — `readFormstackDashboardData({ fromDate, toDate })`.
+- [x] `src/formstack/centre-match.ts` — folder name → centre, fallback to a designated field in the submission payload.
 
 ---
 
 ## Phase 4 — Sync scheduling
 
 - [ ] Extend the existing background snapshot scheduler (`src/analytics/background-snapshot.ts` pattern) to include Postmark/Mailchimp/Formstack refreshes.
-- [ ] Decide cadence (recommendation: hourly for Formstack submissions, daily for Postmark stats and Mailchimp reports).
+- [x] Decide cadence (recommendation: hourly for Formstack submissions, daily for Postmark stats and Mailchimp reports).
 - [ ] Add an audit-log entry per refresh for visibility — reuse `src/infocare/audit-log.ts` if it's general enough, otherwise add `src/storage/comms-audit-log.ts`.
-- [ ] Surface "last successful pull" + "last error" timestamps in the dashboard header (mirrors how Meta + GA do it).
+- [x] Surface "last successful pull" + "last error" timestamps in the dashboard header (mirrors how Meta + GA do it).
 
 ---
 
@@ -101,58 +100,58 @@ Each panel mirrors the look/feel of the Online Marketing panels (analytics table
   - [ ] Trend chart: sent vs. delivered vs. opened over selected range.
   - [ ] Top-clicked links table.
   - [ ] Suppression list growth (count + delta).
-- [ ] **Mailchimp panel** (`src/ui/comms/mailchimp-panel.ts`):
-  - [ ] Recent campaigns table: subject, sent count, open rate, CTR, unsub rate, sent date, centre.
-  - [ ] Audience growth chart per list.
+- [x] **Mailchimp panel** (`src/ui/comms/mailchimp-panel.ts`):
+  - [x] Recent campaigns table: subject, sent count, open rate, CTR, unsub rate, sent date, centre.
+  - [x] Audience growth chart per list.
   - [ ] Click-detail drilldown when a campaign row is focused.
-- [ ] **Formstack panel** (`src/ui/comms/formstack-panel.ts`):
-  - [ ] Submissions per form table (filtered by centre).
+- [x] **Formstack panel** (`src/ui/comms/formstack-panel.ts`):
+  - [x] Submissions per form table (filtered by centre).
   - [ ] Weekly submission trend chart.
-  - [ ] Latest submissions list (last 20) with payload preview.
+  - [x] Latest submissions list (last 20) with payload preview.
   - [ ] "Time to waitlist" metric where the submission's centre matches an Infocare waitlist entry created within N days.
-- [ ] **Cross-source "Funnel" panel** (`src/ui/comms/funnel-panel.ts`):
+- [x] **Cross-source "Funnel" panel** (`src/ui/comms/funnel-panel.ts`):
   - [ ] Per centre: form submission → email engagement (Postmark+Mailchimp) → Infocare waitlist entry → tour scheduled.
   - [ ] This is the panel that justifies the whole app — it ties the three services together with data we already have.
 - [ ] Reuse `renderBreakoutScript` for the existing multi-screen pop-out behaviour.
-- [ ] Reuse the print stylesheet additions from the Online Marketing app.
+- [x] Reuse the print stylesheet additions from the Online Marketing app.
 
 ---
 
 ## Phase 6 — AI chat for comms
 
-- [ ] Create `src/ai/comms-context.ts` — equivalent of `src/ai/context.ts` but the JSON describes the comms world:
+- [x] Create `src/ai/comms-context.ts` — equivalent of `src/ai/context.ts` but the JSON describes the comms world:
   - [ ] `generatedAt`, `selectedRangeStart`, `selectedRangeEnd`, `selectedCentre` (re-used from snapshot)
   - [ ] `postmark`: sends, delivery rate, open/click rate, top clicked links, bounce reasons, suppression delta
-  - [ ] `mailchimp`: recent campaigns (subject, send time, open/CTR/unsub, centre), audience growth per list
+  - [ ] `mailchimp`: recent campaigns (subject, send time, open/CTR/unsub), audience growth per list
   - [ ] `formstack`: submissions per form (last range), weekly submission count, last-N submissions summary
   - [ ] `funnel`: per-centre funnel counts (submissions → engaged → waitlist → tour)
-- [ ] `buildCommsSystemPrompt()` in the same file, modelled on `buildDashboardSystemPrompt()`. Same Beep Beep persona, same "answer only from named fields" rule, but tuned to email/forms language.
-- [ ] Add `POST /api/comms/ai/chat` and `POST /api/comms/ai/chat/stream` in `src/server.ts`. Mirror the `/api/ai/chat` handler — only the context builder and system prompt differ.
-- [ ] Reuse `runLocalChat`, `streamLocalChat`, `sanitizeChatHistory`, and `buildAiChatMessages` unchanged.
-- [ ] Build a `renderCommsAiChatPanel` in `src/ui/comms-app-shell.ts` that mirrors `renderAiChatPanel` — same shell, same composer, same data attributes. The existing `renderAiChatScript` is parametric enough; if it isn't, generalise it (don't fork it) by adding a `data-ai-chat-endpoint` attribute on `.chat-shell`.
+- [x] `buildCommsSystemPrompt()` in the same file, modelled on `buildDashboardSystemPrompt()`. Same Beep Beep persona, same "answer only from named fields" rule, but tuned to email/forms language.
+- [x] Add `POST /api/comms/ai/chat` and `POST /api/comms/ai/chat/stream` in `src/server.ts`. Mirror the `/api/ai/chat` handler — only the context builder and system prompt differ.
+- [x] Reuse `runLocalChat`, `streamLocalChat`, `sanitizeChatHistory`, and `buildAiChatMessages` unchanged.
+- [x] Build a `renderCommsAiChatPanel` in `src/ui/comms-app-shell.ts` that mirrors `renderAiChatPanel` — same shell, same composer, same data attributes. The existing `renderAiChatScript` is parametric enough; if it isn't, generalise it (don't fork it) by adding a `data-ai-chat-endpoint` attribute on `.chat-shell`.
 - [ ] Add deterministic guardrails where the answer is structural (e.g. "which centre has the lowest open rate" — compute it server-side and force it into the answer), mirroring `buildCampaignTimingGuardrail`.
 
 ---
 
 ## Phase 7 — Demo mode
 
-- [ ] Add fixtures:
+- [x] Add fixtures:
   - [ ] `src/demo/fixtures/postmark.ts` — 90 days of plausible send/open/click/bounce numbers per centre tag.
   - [ ] `src/demo/fixtures/mailchimp.ts` — 10–15 fake campaigns across the centres, with reports.
   - [ ] `src/demo/fixtures/formstack.ts` — a "Tour request" form per centre with 30–80 submissions over 90 days.
-- [ ] Wire the fixtures through `src/demo/fixtures/index.ts` and respect the existing `isDemoBody` / `?demo=1` flag in the new routes and chat endpoints.
-- [ ] Add a demo-mode banner to the comms shell using the existing `data-demo` attribute pattern.
+- [x] Wire the fixtures through `src/demo/fixtures/index.ts` and respect the existing `isDemoBody` / `?demo=1` flag in the new routes and chat endpoints.
+- [x] Add a demo-mode banner to the comms shell using the existing `data-demo` attribute pattern.
 
 ---
 
 ## Phase 8 — Tests
 
-- [ ] Extend `test/app-shell.test.ts` (or add `test/comms-app-shell.test.ts`):
-  - [ ] Comms shell renders without throwing for empty data.
-  - [ ] Nav-rail contains the Online Communications entry.
-  - [ ] AI chat panel is present and has the expected `data-` attributes.
-- [ ] Add unit tests for each centre matcher (`postmark/centre-match.ts`, `mailchimp/centre-match.ts`, `formstack/centre-match.ts`).
-- [ ] Add a unit test for `buildCommsAiDashboardContext` that asserts shape and field names (since the AI prompt references them by name).
+- [x] Extend `test/app-shell.test.ts` (or add `test/comms-app-shell.test.ts`):
+  - [x] Comms shell renders without throwing for empty data.
+  - [x] Nav-rail contains the Online Communications entry.
+  - [x] AI chat panel is present and has the expected `data-` attributes.
+- [x] Add unit tests for each centre matcher (`postmark/centre-match.ts`, `formstack/centre-match.ts`).
+- [x] Add a unit test for `buildCommsAiDashboardContext` that asserts shape and field names (since the AI prompt references them by name).
 - [ ] Add a unit test for any deterministic guardrails added in Phase 6.
 
 ---
@@ -186,6 +185,18 @@ Each panel mirrors the look/feel of the Online Marketing panels (analytics table
 
 ---
 
+## Data retention rule — confirmed 2026-05-26
+
+- Every external API response and authenticated webhook payload received by the application must be retained as an append-only raw capture record, whether or not the current UI uses it.
+- Every dashboard snapshot is a timestamped immutable record. Refreshes insert a new record; they do not update, replace or delete earlier snapshots.
+- Mutable current-state projections may exist for dashboard convenience, but they do not replace the raw capture history or snapshot history.
+- The live application database must never be reset, truncated or destroyed to resolve migrations.
+- Applied on 2026-05-26 with `prisma migrate deploy` after explicit approval: `prisma/migrations/20260526020000_add_append_only_external_api_capture/` adds raw capture storage and relaxes only overwrite-forcing uniqueness indexes; it does not delete or rewrite existing data.
+- Post-application verification confirmed existing centre records, Meta recommendation notes and Google Analytics snapshots remained present.
+- Code captures future Infocare, Meta, Google Analytics, Mailchimp and Postmark responses/payloads in `ExternalApiCapture`, and changes Google Analytics, Infocare computed snapshots and Mailchimp report/list snapshots to append new rows instead of replacing previous records.
+
+---
+
 ## Postmark webhook ingestion — current state (2026-05-22)
 
 Webhooks turned out to be the only viable path for the use case, so the v2 webhook ingestion has been brought forward and partially built. **Blocked on:** webdev needs to attach the production webhook URL on the Postmark Server.
@@ -199,7 +210,7 @@ Webhooks turned out to be the only viable path for the use case, so the v2 webho
 - **Webhook handler module:** `src/postmark/webhook.ts` — pure functions for verification + ingestion; reused by the route.
 - **Env vars:**
   - `POSTMARK_WEBHOOK_BASIC_AUTH` — generated 32-char URL-safe password, in `.env` only (also placeholder in `.env.example`).
-  - `POSTMARK_SERVER_TOKEN` — declared in schema; **still empty**, fill once webdev provides it.
+  - `POSTMARK_SERVER_TOKEN` — declared for a possible later API integration; unavailable for this deployment, so Webmail must operate from webhooks only.
 - **End-to-end smoke test (local):** Delivery, Bounce (uses `Email` not `Recipient`), Open, Click all stored with correct timestamp field mapping (`DeliveredAt` / `BouncedAt` / `ReceivedAt`). Unsupported `RecordType` returns 200 but skips the DB write. Test rows cleared.
 
 ### Blocked / waiting on webdev
@@ -209,7 +220,7 @@ Webhooks turned out to be the only viable path for the use case, so the v2 webho
   https://webhooks:<POSTMARK_WEBHOOK_BASIC_AUTH>@webhooks.inspiredkindergartens.net/webhooks/postmark/events
   ```
   Tick **Delivery, Bounce, Open, Click** in the Server's webhook settings. Provide the password out-of-band, not in the PR.
-- Provide the **Server Token** so it can be stored in `.env` as `POSTMARK_SERVER_TOKEN`. Once present it's stored on every webhook event row (so multiple Postmark Servers can be distinguished later).
+- No Server Token is available for this deployment. Use incoming webhook events only; historical Postmark Activity and `Processed` records cannot be imported.
 - Confirm the centre-tagging convention being used at send time. The endpoint reads `Tag` straight off the payload — the centre match (Phase 3 bullet "Centre matcher: tag → centre") still has to be wired before events get a `centreKey`.
 
 ### Not yet built (next pass once events start flowing)
@@ -230,7 +241,7 @@ Phase 3 (Mailchimp) was built in this session. Daily snapshot wired into server 
 - **Schema:** `MailchimpCampaign`, `MailchimpCampaignReport`, `MailchimpListGrowthSnapshot` already declared in `prisma/schema.prisma` (relations on `CentreReference` for centre matching).
 - **Service client:** `src/mailchimp/client.ts` — Basic-auth (`anystring:API_KEY`), base URL from data-centre prefix, 429/5xx exponential backoff with `Retry-After` honouring, paginated list helper (`count`/`offset`, 100 per page, 50-page cap).
 - **Config:** `src/mailchimp/config.ts` — `MAILCHIMP_API_KEY` + `MAILCHIMP_SERVER_PREFIX`. Server prefix is auto-extracted from the API key suffix (`-us14`) if the env var is omitted, and accepts bare prefix / hostname / URL forms.
-- **Centre matcher:** `src/mailchimp/centre-match.ts` — wraps `matchMetaNameToCentre`, scoring subject → title → preview → segment → list name in order so a subject-level match isn't drowned by generic list copy.
+- **Attribution:** Panui campaigns are organisation-wide staff newsletters and are deliberately not matched to centres.
 - **Refresh orchestrator:** `src/mailchimp/refresh.ts` — pulls campaigns + reports + list-growth, upserts via storage module, idempotent per day (`ensureDailyMailchimpSnapshot` short-circuits if today's list-growth snapshot already exists).
 - **Storage:** `src/storage/mailchimp-store.ts` — `upsertMailchimpCampaign`, `upsertMailchimpCampaignReport`, `upsertMailchimpListGrowthSnapshot`, `readMailchimpDashboardData({fromDate,toDate,serverPrefix})`, `readLatestMailchimpPulledAt`.
 - **Server wiring:** env schema extended, refresh route `/actions/refresh-mailchimp`, daily snapshot fired non-blocking at startup, `describeIntegrationError` extended for the Mailchimp source, config warning logged when env is missing.
@@ -238,12 +249,42 @@ Phase 3 (Mailchimp) was built in this session. Daily snapshot wired into server 
 
 ### Retry pending
 
-- **Run `npm run prisma:migrate -- --name add_mailchimp_postmark_snapshots_formstack`** to create the Mailchimp tables (plus the also-declared `PostmarkOutboundSnapshot`, `PostmarkOutboundSnapshotByTag`, `FormstackForm`, `FormstackSubmission`). On 2026-05-22 the startup snapshot logged `The table public.MailchimpListGrowthSnapshot does not exist in the current database` because the schema was edited but never migrated. Kill the dev server before running so Prisma can hold the lock.
-- After migration: restart `npm run dev`, watch for the `"Mailchimp daily snapshot ready"` log line. If `MAILCHIMP_API_KEY` is empty the snapshot will skip with a warning (expected).
+- **Migration applied on 2026-05-26:** `prisma/migrations/20260526000000_add_mailchimp_postmark_snapshots_formstack/` was applied with `prisma migrate deploy`, creating the Mailchimp tables plus the declared `PostmarkOutboundSnapshot`, `PostmarkOutboundSnapshotByTag`, `FormstackForm`, and `FormstackSubmission` tables without resetting existing data.
+- **Data preservation verified after application:** stored centre records, Meta recommendation notes, Google Analytics snapshots and Postmark events remained available after the additive migration.
+- On server restart, watch for the `"Mailchimp daily snapshot ready"` log line. If `MAILCHIMP_API_KEY` is empty the snapshot will skip with a warning (expected).
 
 ### Not yet built
 
-- **Dashboard panel** (Phase 5) — `src/ui/comms/mailchimp-panel.ts` to render `readMailchimpDashboardData`.
+- **Dashboard data import:** the Mailchimp panel now renders campaign summary metrics, recent campaign performance and audience snapshot tables from `readMailchimpDashboardData`.
 - **AI context** (Phase 6) — Mailchimp fields in `buildCommsAiDashboardContext`.
 - **Demo fixtures** (Phase 7) — `src/demo/fixtures/mailchimp.ts`.
-- **Tests** — unit test for `matchMailchimpCampaignToCentre` candidate ordering; storage round-trip.
+- **Tests** — campaign dashboard rendering and storage round-trip.
+
+---
+
+## Communications non-Postmark delivery - current state (2026-05-26)
+
+This section supersedes earlier Mailchimp implementation wording above where it conflicts with the append-only retention rule.
+
+### Completed
+
+- **Mailchimp UI:** campaign/report and audience snapshot data render in `/comms`, with sent campaigns shown latest-to-oldest and unsent items after dated campaigns.
+- **Mailchimp retention correction:** campaign reports and audience growth pulls now insert historical snapshots; raw Mailchimp responses are appended to `ExternalApiCapture`.
+- **Formstack integration:** implemented against the Formstack V2025 read-only API using the configured Personal Access Token, with `GET /forms` and `GET /forms/{formId}/submissions`.
+- **Formstack retention:** every Formstack API response is first appended to `ExternalApiCapture`; `FormstackForm` and `FormstackSubmission` are queryable current-resource projections for the dashboard.
+- **Formstack UI:** `/comms` now renders imported forms, stored submission totals, latest submissions and centre matching, with an explicit refresh action at `/actions/refresh-formstack`.
+- **Centre Activity panel:** renders Postmark webhook events, Mailchimp activity and Formstack submissions aligned by matched centre and explicitly does not claim individual conversion attribution.
+- **Communications chat:** context, routes and UI are wired for imported Mailchimp and Formstack data; if the optional local model is unavailable, an evidence-only built-in summary is used.
+- **Demo and tests:** Communications demo fixtures and focused tests cover Mailchimp ordering, Formstack matching, Formstack/Funnel rendering, Communications context and external-response capture requirements.
+
+### Initial Formstack import
+
+- On 2026-05-26, the approved initial Formstack import stored 12 forms and 1,572 submissions.
+- The import stored 25 immutable Formstack raw capture rows, including the initial V2 `401` response that exposed the need to switch to the configured V2025 Personal Access Token endpoint.
+- **Webmail / Postmark webhook dashboard:** webhook events are now arriving and are rendered from `PostmarkMessageEvent`; the first stored events are one Delivery and one Open event tagged `welcome-email`.
+- **Webmail retention:** raw webhook payloads remain append-only in `ExternalApiCapture`, while event projections are inserted immutably; the read path does not alter stored webhook history.
+- **Centre matching:** future Postmark events first use any confidently matching tag, then fall back to the recipient mailbox name before `@` (for example `paengaroa@ikindergartens.nz` -> Paengaroa) where it maps uniquely to an open centre. Ambiguous/generic recipients remain unmatched; already stored webhook events are not rewritten.
+- **Webhook-only operation (confirmed 2026-05-27):** production Webmail monitoring must operate without a Postmark API token. The endpoint stores future webhook events received after configuration; Postmark webhooks do not backfill existing Activity rows. Delivery, Open, Click and Bounce are sufficient for current event tracking; Spam Complaint and Subscription Change may be enabled if suppression visibility is wanted.
+- **Unavailable without a Postmark token:** Postmark's `Processed` Activity rows and historical message/subject retrieval require `/messages/outbound`. Since the server token is not being provided, the dashboard must not promise those fields or historical imports.
+- **Verification remaining:** confirm the webhook is saved on `Inspired Kindergartens` -> `Default Transactional Stream` (`outbound`), then trigger one new transactional message after configuration and verify its new webhook event reaches the app.
+- **Message consolidation:** Postmark webhook `MessageID` is stored on every supported message event. The Webmail table groups future Delivery, Open, Click and Bounce events by message ID and renders their statuses as badges on one message row; immutable event records remain unchanged.

@@ -6,6 +6,7 @@ import { z } from "zod";
 
 import { buildAiChatMessages, buildDeterministicChatAnswer, type AiChatHistoryMessageInput } from "./ai/chat.js";
 import { runLocalChat, streamLocalChat, AiClientError } from "./ai/client.js";
+import { buildBuiltinCommsAnswer, buildCommsAiChatMessages, buildCommsAiDashboardContext } from "./ai/comms-context.js";
 import { buildAiDashboardContext, buildDashboardSystemPrompt } from "./ai/context.js";
 import { readAiConfig } from "./ai/config.js";
 import {
@@ -28,6 +29,8 @@ import { syncStoredCentreReferences } from "./infocare/centre-sync.js";
 import { readWaitlistDiscoveryReport } from "./infocare/waitlist-report.js";
 import { ensureWeeklyWaitlistReport, refreshWaitlistReport } from "./infocare/waitlist-refresh.js";
 import { getInfocareEnv } from "./infocare/client.js";
+import { getFormstackConfig, readFormstackConfigStatus } from "./formstack/config.js";
+import { refreshFormstackData } from "./formstack/refresh.js";
 import { getMailchimpConfig, readMailchimpConfigStatus } from "./mailchimp/config.js";
 import { ensureDailyMailchimpSnapshot, refreshMailchimpSnapshot } from "./mailchimp/refresh.js";
 import { getMetaConfig, readMetaConfigStatus } from "./meta/config.js";
@@ -44,6 +47,9 @@ import {
   readLatestGoogleAnalyticsDailySnapshot,
 } from "./storage/google-analytics-store.js";
 import { readMetaAdsDashboardData } from "./storage/meta-store.js";
+import { readFormstackDashboardData } from "./storage/formstack-store.js";
+import { readMailchimpDashboardData } from "./storage/mailchimp-store.js";
+import { readPostmarkDashboardData, readPostmarkWebhookCheck } from "./storage/postmark-store.js";
 import {
   buildMetaRecommendationNotificationInputs,
   countMetaRecommendationNotifications,
@@ -74,6 +80,7 @@ import {
   resolveDefaultAnalyticsCentreKey,
 } from "./ui/app-shell.js";
 import { renderCommsAppShell, VALID_COMMS_PANEL_IDS } from "./ui/comms-app-shell.js";
+import { renderPostmarkMessageList } from "./ui/comms/postmark-panel.js";
 import { ingestPostmarkEvent, isPostmarkSourceIp, verifyBasicAuth } from "./postmark/webhook.js";
 import { renderLandingPage } from "./ui/landing-page.js";
 import { renderReadmePage } from "./ui/readme-page.js";
@@ -91,7 +98,9 @@ import {
 } from "./demo/demo-notes-store.js";
 import {
   DEMO_GA_SNAPSHOT,
+  DEMO_FORMSTACK_DASHBOARD,
   DEMO_LATEST_SNAPSHOT_SET,
+  DEMO_MAILCHIMP_DASHBOARD,
   DEMO_META_DASHBOARD,
   DEMO_WAITLIST_REPORT,
   buildDemoCentreHistory,
@@ -131,6 +140,7 @@ const envSchema = z.object({
   POSTMARK_SERVER_TOKEN: z.string().trim().default(""),
   MAILCHIMP_API_KEY: z.string().trim().default(""),
   MAILCHIMP_SERVER_PREFIX: z.string().trim().default(""),
+  FORMSTACK_API_TOKEN: z.string().trim().default(""),
 });
 
 const env = envSchema.parse(process.env);
@@ -139,6 +149,7 @@ getInfocareEnv(process.env);
 const metaConfigStatus = readMetaConfigStatus(env);
 const googleAnalyticsConfigStatus = readGoogleAnalyticsConfigStatus(env);
 const mailchimpConfigStatus = readMailchimpConfigStatus(env);
+const formstackConfigStatus = readFormstackConfigStatus(env);
 
 if (env.HOST !== "127.0.0.1" && env.HOST.toLowerCase() !== "localhost") {
   throw new Error(`Refusing to start with non-local HOST "${env.HOST}". Use 127.0.0.1.`);
@@ -203,12 +214,18 @@ function resolveIntegrationErrorFromQuery(raw: string | undefined, focusPanelId:
   };
 }
 
-function describeIntegrationError(source: "google-analytics" | "meta-ads" | "mailchimp", error: unknown) {
+function describeIntegrationError(source: "google-analytics" | "meta-ads" | "mailchimp" | "formstack", error: unknown) {
   const message = error instanceof Error ? error.message : String(error ?? "");
   const sourceLabel =
-    source === "google-analytics" ? "Google Analytics" : source === "meta-ads" ? "Meta Ads" : "Mailchimp";
+    source === "google-analytics"
+      ? "Google Analytics"
+      : source === "meta-ads"
+        ? "Meta Ads"
+        : source === "formstack"
+          ? "Formstack"
+          : "Mailchimp";
 
-  if (/Missing\s+(Google Analytics|Meta Ads|Mailchimp)\s+configuration/i.test(message)) {
+  if (/Missing\s+(Google Analytics|Meta Ads|Mailchimp|Formstack)\s+configuration/i.test(message)) {
     return `${sourceLabel} is not configured on the server. Check the .env values and restart.`;
   }
 
@@ -251,6 +268,20 @@ function describeIntegrationError(source: "google-analytics" | "meta-ads" | "mai
   }
 
   return `${sourceLabel} refresh failed. Check server logs for details.`;
+}
+
+function resolveCommsMetaAdsFilter(input?: string | null) {
+  return input === "active-recent" ? "active-recent" : "all";
+}
+
+function getCurrentOrRecentMetaAdvertCentreKeys(metaAdsDashboardData: Awaited<ReturnType<typeof readMetaAdsDashboardData>> | null) {
+  const relevantStatuses = new Set(["Active", "Learning", "Learning Limited", "Completed"]);
+
+  return [...new Set(
+    (metaAdsDashboardData?.currentAds ?? [])
+      .filter((ad) => ad.centreKey != null && relevantStatuses.has(ad.status))
+      .map((ad) => ad.centreKey as number),
+  )];
 }
 
 async function ensureGoogleAnalyticsSnapshotIfConfigured() {
@@ -750,14 +781,101 @@ app.get<{ Querystring: { centre?: string; window?: string; panel?: string; sort?
     );
 });
 
-app.get<{ Querystring: { panel?: string; demo?: string } }>("/comms", async (request, reply) => {
+app.get<{ Querystring: { panel?: string; window?: string; metaAdsFilter?: string; demo?: string; integrationError?: string; integrationSource?: string; webmailPage?: string } }>("/comms", async (request, reply) => {
   const demo = resolveDemo(request, reply, request.query);
   const panel = String(request.query?.panel ?? "");
   const focusPanelId = VALID_COMMS_PANEL_IDS.has(panel) ? panel : null;
+  const selectedWindowKey = resolveWindowKey(request.query?.window);
+  const windowStartDate = resolveWindowStartDate(new Date(), selectedWindowKey);
+  const metaAdsFilter = resolveCommsMetaAdsFilter(request.query?.metaAdsFilter);
+  let integrationError = (request.query?.integrationError ?? "").trim().slice(0, INTEGRATION_ERROR_MAX_LENGTH) || null;
+  const integrationSource = request.query?.integrationSource === "formstack"
+    ? "formstack"
+    : request.query?.integrationSource === "postmark"
+      ? "postmark"
+      : "mailchimp";
+  let mailchimpDashboardData = demo ? DEMO_MAILCHIMP_DASHBOARD : null;
+  let formstackDashboardData = demo ? DEMO_FORMSTACK_DASHBOARD : null;
+  let postmarkDashboardData = null;
+  const metaAdsDashboardForFilter = metaAdsFilter === "active-recent"
+    ? demo
+      ? DEMO_META_DASHBOARD
+      : await readMetaAdsDashboardData({ fromDate: windowStartDate, toDate: new Date() })
+    : null;
+  const metaAdvertCentreKeys = metaAdsFilter === "active-recent"
+    ? getCurrentOrRecentMetaAdvertCentreKeys(metaAdsDashboardForFilter)
+    : null;
+
+  if (!demo) {
+    try {
+      postmarkDashboardData = await readPostmarkDashboardData({
+        messagePage: Number(request.query?.webmailPage ?? 1),
+        fromDate: windowStartDate,
+        centreKeys: metaAdvertCentreKeys,
+      });
+    } catch (error) {
+      app.log.error({ error }, "Postmark dashboard read failed");
+      integrationError ??= "Webmail dashboard storage is unavailable until database migrations have been applied.";
+    }
+
+    try {
+      mailchimpDashboardData = await readMailchimpDashboardData({
+        serverPrefix: mailchimpConfigStatus.serverPrefix ?? undefined,
+      });
+    } catch (error) {
+      app.log.error({ error }, "Mailchimp dashboard read failed");
+      integrationError ??= "Mailchimp dashboard storage is unavailable until database migrations have been applied.";
+    }
+
+    try {
+      formstackDashboardData = await readFormstackDashboardData();
+    } catch (error) {
+      app.log.error({ error }, "Formstack dashboard read failed");
+      integrationError ??= "Formstack dashboard storage is unavailable until database migrations have been applied.";
+    }
+  }
 
   return reply
     .type("text/html; charset=utf-8")
-    .send(renderCommsAppShell({ focusPanelId, demo }));
+    .send(renderCommsAppShell({
+      focusPanelId,
+      demo,
+      mailchimpDashboardData,
+      mailchimpConfigStatus,
+      formstackDashboardData,
+      formstackConfigStatus,
+      postmarkDashboardData,
+      selectedWindowKey,
+      metaAdsFilter,
+      metaAdvertCentreCount: metaAdvertCentreKeys?.length ?? null,
+      integrationError,
+      integrationSource,
+    }));
+});
+
+app.get<{ Querystring: { page?: string; window?: string; metaAdsFilter?: string } }>("/api/comms/postmark/messages", async (request, reply) => {
+  try {
+    const selectedWindowKey = resolveWindowKey(request.query?.window);
+    const windowStartDate = resolveWindowStartDate(new Date(), selectedWindowKey);
+    const metaAdsFilter = resolveCommsMetaAdsFilter(request.query?.metaAdsFilter);
+    const metaAdvertCentreKeys = metaAdsFilter === "active-recent"
+      ? getCurrentOrRecentMetaAdvertCentreKeys(await readMetaAdsDashboardData({ fromDate: windowStartDate, toDate: new Date() }))
+      : null;
+    const dashboardData = await readPostmarkDashboardData({
+      messagePage: Number(request.query?.page ?? 1),
+      fromDate: windowStartDate,
+      centreKeys: metaAdvertCentreKeys,
+    });
+
+    return reply.send({
+      html: renderPostmarkMessageList(dashboardData),
+      page: dashboardData.messagePage,
+      total: dashboardData.relevantMessageCount,
+    });
+  } catch (error) {
+    request.log.error({ error }, "Postmark messages read failed");
+    return reply.code(503).send({ error: "Webmail message storage is currently unavailable." });
+  }
 });
 
 app.get<{ Querystring: {
@@ -1088,6 +1206,100 @@ app.post<{ Params: { id: string }; Body: { demo?: string | boolean } }>("/api/me
 app.post<{
   Body: {
     prompt?: string;
+    messages?: AiChatHistoryMessageInput[];
+    demo?: string | boolean;
+  };
+}>("/api/comms/ai/chat", async (request, reply) => {
+  const prompt = String(request.body?.prompt ?? "").trim();
+
+  if (!prompt) {
+    reply.code(400);
+    return { error: "Prompt is required." };
+  }
+
+  if (prompt.length > 2000) {
+    reply.code(400);
+    return { error: "Prompt is too long. Keep it under 2,000 characters." };
+  }
+
+  const demo = isDemoBody(request.body);
+  const context = buildCommsAiDashboardContext({
+    postmark: demo ? null : await readPostmarkDashboardData(),
+    mailchimp: demo
+      ? DEMO_MAILCHIMP_DASHBOARD
+      : await readMailchimpDashboardData({ serverPrefix: mailchimpConfigStatus.serverPrefix ?? undefined }),
+    formstack: demo ? DEMO_FORMSTACK_DASHBOARD : await readFormstackDashboardData(),
+  });
+
+  if (aiConfig.AI_PROVIDER === "builtin") {
+    return { answer: buildBuiltinCommsAnswer(context, prompt), model: "built-in communications" };
+  }
+
+  try {
+    const answer = await runLocalChat(aiConfig, buildCommsAiChatMessages(context, prompt, request.body?.messages));
+    return { answer, model: aiConfig.AI_CHAT_MODEL };
+  } catch (error) {
+    app.log.warn({ error }, "Communications AI model unavailable; using built-in summary fallback");
+    return { answer: buildBuiltinCommsAnswer(context, prompt), model: "built-in communications fallback" };
+  }
+});
+
+app.post<{
+  Body: {
+    prompt?: string;
+    messages?: AiChatHistoryMessageInput[];
+    demo?: string | boolean;
+  };
+}>("/api/comms/ai/chat/stream", async (request, reply) => {
+  const prompt = String(request.body?.prompt ?? "").trim();
+
+  if (!prompt || prompt.length > 2000) {
+    reply.code(400);
+    return { error: !prompt ? "Prompt is required." : "Prompt is too long. Keep it under 2,000 characters." };
+  }
+
+  const demo = isDemoBody(request.body);
+  const context = buildCommsAiDashboardContext({
+    postmark: demo ? null : await readPostmarkDashboardData(),
+    mailchimp: demo
+      ? DEMO_MAILCHIMP_DASHBOARD
+      : await readMailchimpDashboardData({ serverPrefix: mailchimpConfigStatus.serverPrefix ?? undefined }),
+    formstack: demo ? DEMO_FORMSTACK_DASHBOARD : await readFormstackDashboardData(),
+  });
+
+  reply.raw.writeHead(200, {
+    "Content-Type": "text/event-stream; charset=utf-8",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+  });
+
+  const writeEvent = (event: string, data: unknown) => {
+    reply.raw.write(`event: ${event}\n`);
+    reply.raw.write(`data: ${JSON.stringify(data)}\n\n`);
+  };
+
+  try {
+    if (aiConfig.AI_PROVIDER === "builtin") {
+      writeEvent("chunk", { chunk: buildBuiltinCommsAnswer(context, prompt) });
+    } else {
+      for await (const chunk of streamLocalChat(aiConfig, buildCommsAiChatMessages(context, prompt, request.body?.messages))) {
+        writeEvent("chunk", { chunk });
+      }
+    }
+
+    writeEvent("done", {});
+  } catch (error) {
+    app.log.warn({ error }, "Communications AI stream unavailable; using built-in summary fallback");
+    writeEvent("chunk", { chunk: buildBuiltinCommsAnswer(context, prompt) });
+    writeEvent("done", {});
+  } finally {
+    reply.raw.end();
+  }
+});
+
+app.post<{
+  Body: {
+    prompt?: string;
     centreKey?: number | string | null;
     windowKey?: string | null;
     messages?: AiChatHistoryMessageInput[];
@@ -1394,10 +1606,48 @@ app.get<{ Querystring: { centre?: string; window?: string; sort?: string; demo?:
   return reply.redirect(`/app?${params.toString()}`);
 });
 
+app.get<{ Querystring: { demo?: string; window?: string; metaAdsFilter?: string } }>("/actions/check-postmark", async (request, reply) => {
+  const selectedWindowKey = resolveWindowKey(request.query?.window);
+  const metaAdsFilter = resolveCommsMetaAdsFilter(request.query?.metaAdsFilter);
+  const filterParam = metaAdsFilter === "active-recent" ? "&metaAdsFilter=active-recent" : "";
+  if (isDemoRequest(request.query)) {
+    reply.code(303);
+    return reply.redirect(`/comms?demo=1&panel=comms-postmark&window=${selectedWindowKey}${filterParam}`);
+  }
+
+  try {
+    const result = await readPostmarkWebhookCheck();
+    const logPayload = {
+      status: result.status,
+      latestReceivedAt: result.latestReceivedAt,
+      hoursSinceLatestReceived: result.hoursSinceLatestReceived,
+      eventsLast24h: result.eventsLast24h,
+      eventsLast48h: result.eventsLast48h,
+    };
+
+    if (result.status === "ok") {
+      app.log.info(logPayload, "Postmark webhook check completed");
+    } else {
+      app.log.warn(logPayload, "Postmark webhook check found no recent events");
+    }
+  } catch (error) {
+    app.log.error({ error }, "Postmark webhook check failed");
+    reply.code(303);
+
+    return reply.redirect(
+      `/comms?panel=comms-postmark&window=${selectedWindowKey}${filterParam}&integrationSource=postmark&integrationError=${encodeURIComponent("Webmail webhook storage is currently unavailable.")}`,
+    );
+  }
+
+  reply.code(303);
+
+  return reply.redirect(`/comms?panel=comms-postmark&window=${selectedWindowKey}${filterParam}`);
+});
+
 app.get<{ Querystring: { demo?: string } }>("/actions/refresh-mailchimp", async (request, reply) => {
   if (isDemoRequest(request.query)) {
     reply.code(303);
-    return reply.redirect(`/comms?demo=1&panel=mailchimp`);
+    return reply.redirect(`/comms?demo=1&panel=comms-mailchimp`);
   }
 
   let mailchimpConfig;
@@ -1409,7 +1659,7 @@ app.get<{ Querystring: { demo?: string } }>("/actions/refresh-mailchimp", async 
     reply.code(303);
 
     return reply.redirect(
-      `/comms?panel=mailchimp&integrationError=${encodeURIComponent(describeIntegrationError("mailchimp", error))}`,
+      `/comms?panel=comms-mailchimp&integrationError=${encodeURIComponent(describeIntegrationError("mailchimp", error))}`,
     );
   }
 
@@ -1427,13 +1677,52 @@ app.get<{ Querystring: { demo?: string } }>("/actions/refresh-mailchimp", async 
     reply.code(303);
 
     return reply.redirect(
-      `/comms?panel=mailchimp&integrationError=${encodeURIComponent(describeIntegrationError("mailchimp", error))}`,
+      `/comms?panel=comms-mailchimp&integrationError=${encodeURIComponent(describeIntegrationError("mailchimp", error))}`,
     );
   }
 
   reply.code(303);
 
-  return reply.redirect(`/comms?panel=mailchimp&mailchimpRefreshed=1`);
+  return reply.redirect(`/comms?panel=comms-mailchimp`);
+});
+
+app.get<{ Querystring: { demo?: string } }>("/actions/refresh-formstack", async (request, reply) => {
+  if (isDemoRequest(request.query)) {
+    reply.code(303);
+    return reply.redirect(`/comms?demo=1&panel=comms-formstack`);
+  }
+
+  let formstackConfig;
+
+  try {
+    formstackConfig = getFormstackConfig(env);
+  } catch (error) {
+    app.log.error({ error }, "Formstack refresh blocked by missing server configuration");
+    reply.code(303);
+
+    return reply.redirect(
+      `/comms?panel=comms-formstack&integrationSource=formstack&integrationError=${encodeURIComponent(describeIntegrationError("formstack", error))}`,
+    );
+  }
+
+  try {
+    const result = await refreshFormstackData(formstackConfig);
+    app.log.info(result, "Formstack refresh completed");
+  } catch (error) {
+    app.log.error(
+      { error: error instanceof Error ? { message: error.message, stack: error.stack } : error },
+      "Formstack refresh failed",
+    );
+    reply.code(303);
+
+    return reply.redirect(
+      `/comms?panel=comms-formstack&integrationSource=formstack&integrationError=${encodeURIComponent(describeIntegrationError("formstack", error))}`,
+    );
+  }
+
+  reply.code(303);
+
+  return reply.redirect(`/comms?panel=comms-formstack`);
 });
 
 app.get<{ Querystring: { centre?: string; window?: string; sort?: string; demo?: string } }>("/actions/refresh-centres", async (request, reply) => {
@@ -1636,9 +1925,10 @@ app.post("/webhooks/postmark/events", async (request, reply) => {
     }
   } catch (error) {
     request.log.error({ error }, "postmark webhook: ingestion failed");
+    return reply.code(503).send({ ok: false });
   }
 
-  // Always 200 after auth+IP pass so Postmark stops retrying. Errors are logged for review.
+  // Acknowledge only after the payload is captured; storage failures must be retried.
   return reply.code(200).send({ ok: true });
 });
 
@@ -1671,6 +1961,27 @@ function logIntegrationConfigWarnings() {
   }
 }
 
+async function checkPostmarkWebhookOnStartup() {
+  try {
+    const result = await readPostmarkWebhookCheck();
+    const logPayload = {
+      status: result.status,
+      latestReceivedAt: result.latestReceivedAt,
+      hoursSinceLatestReceived: result.hoursSinceLatestReceived,
+      eventsLast24h: result.eventsLast24h,
+      eventsLast48h: result.eventsLast48h,
+    };
+
+    if (result.status === "ok") {
+      app.log.info(logPayload, "Postmark webhook startup check completed");
+    } else {
+      app.log.warn(logPayload, "Postmark webhook startup check found no recent events");
+    }
+  } catch (error) {
+    app.log.error({ error }, "Postmark webhook startup check failed");
+  }
+}
+
 async function start() {
   await prisma.$connect();
   await prisma.$queryRaw`SELECT 1`;
@@ -1686,6 +1997,7 @@ async function start() {
   });
 
   logIntegrationConfigWarnings();
+  void checkPostmarkWebhookOnStartup();
 
   if (mailchimpConfigStatus.isConfigured) {
     void ensureMailchimpSnapshotIfConfigured();

@@ -22,6 +22,7 @@ Planned breakout apps:
 3. **Local Presence** — Google Business Profile + Google Search Console + Meta Page insights (organic).
 4. **Workspace & Calendar** — Microsoft 365 Graph (Outlook, Bookings, SharePoint, Teams).
 5. **Creative & Assets** — Adobe Creative Cloud / Express asset library.
+6. **Job Tracking** — internal job/work tracker for signage, adverts, and other marketing jobs per centre, with relationship metadata on the people involved.
 
 ---
 
@@ -136,6 +137,51 @@ Planned breakout apps:
 
 - **Why it fits:** if enrolment confirmations or tour follow-ups need a signed document, Sign integrates with M365 and could close the loop from waitlist → tour → enrolment.
 - **API:** Adobe Sign REST API v6.
+
+---
+
+## 5. Job Tracking
+
+**Status:** scoped, not started. Source: `D:\iK\Documents\Future Work.txt`.
+
+Internal tracker for marketing jobs (signage, adverts, and other categories) attached to kindergartens or other entities. Unlike the other breakout apps, this is a first-party system — no upstream SaaS API — so it owns its own schema in Postgres and lives entirely behind the existing auth/UI shell.
+
+### Scope
+
+- **Job categories:** Signage, Adverts, and an open-ended "Other" bucket. Categories are first-class so new ones (e.g. Print, Web, Event) can be added without migrations.
+- **Entity attachment:** every job belongs to either a `centreKey` (kindergarten) or a generic "other" entity (e.g. head office, supplier). Reuse the same centre matcher used elsewhere so jobs can be cross-referenced with waitlist, Meta, GA, and Mailchimp data.
+- **Lifecycle:** status field (e.g. `requested → in-progress → review → done → cancelled`), assignee, due date, and a free-form notes/activity log. Keep it boring — Trello-card level of detail, not Jira.
+- **People metadata (the differentiator):**
+  - Per-person profile recording how easy/difficult they are to work with (e.g. 1–5 scale or named tiers).
+  - Communication sensitivity ("walk on eggshells") flag with a short note on *why* and *how* to manage them.
+  - Preferred channel / cadence / tone notes.
+  - Stored against a `Person` record that can be linked to one or more centres or jobs, so the same notes follow them across jobs.
+
+### Data model (sketch)
+
+- `Job` — id, category, title, description, entity (centreKey or other-entity ref), status, assignee (User), createdAt, dueAt, completedAt.
+- `JobCategory` — id, name, colour/icon (seeded with Signage, Adverts).
+- `Person` — id, name, role, organisation, contact channels.
+- `PersonProfile` — personId, difficultyTier, sensitivityFlag, managementNotes (markdown), preferredChannel, updatedAt, updatedBy. Versioned so we don't lose prior context when notes change.
+- `JobPerson` — many-to-many: jobId, personId, role-on-job (requester, approver, supplier, etc.).
+- `JobEvent` — append-only activity log (status changes, comments, attachments).
+
+### UI
+
+- New tile on the landing page → `/jobs`.
+- Job board view (columns by status) and list view (filter by centre/category/person).
+- Person directory with the relationship/sensitivity notes surfaced inline on every job they appear on.
+- AI chat panel grounded on `buildJobsContext` — answers questions like "what's overdue for centre X" or "remind me how to approach this person".
+
+### Cross-links with existing apps
+
+- A job can reference a Mailchimp campaign, Postmark broadcast, Formstack form, or Meta ad set as an "output" — the job is the brief, the comms/marketing tools are the execution. Use a soft link (external URL + service tag), not a hard FK, since the upstream IDs are owned by those SaaS providers.
+- People records can be reused as Postmark/Mailchimp recipient hints (fuzzy match on email) — but the source of truth for that person's contact stays in Postmark/Mailchimp; the job tracker only holds the working-relationship notes.
+
+### Privacy / handling
+
+- Difficulty and sensitivity notes are subjective and sensitive. Restrict read access to authenticated users; never expose via demo mode. Log every edit (who/when) and surface the audit trail on the profile.
+- No export endpoint by default — these notes shouldn't leave the app.
 
 ---
 

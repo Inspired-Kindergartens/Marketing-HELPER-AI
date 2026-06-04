@@ -5,6 +5,7 @@ import { DEMO_CENTRES, DEMO_CONTACTS, DEMO_RUN_DATE, DEMO_SNAPSHOTS } from "./ce
 import { DEMO_META_DASHBOARD } from "./meta-ads.js";
 import { DEMO_GA_SNAPSHOT } from "./google-analytics.js";
 import { DEMO_WAITLIST_REPORT } from "./waitlist-report.js";
+import { DEMO_FORMSTACK_DASHBOARD, DEMO_MAILCHIMP_DASHBOARD } from "./comms.js";
 import {
   DEMO_META_RECOMMENDATION_NOTES,
   DEMO_META_RECOMMENDATION_NOTIFICATIONS,
@@ -84,5 +85,7 @@ export {
   DEMO_RUN_DATE,
   DEMO_SNAPSHOTS,
   DEMO_WAITLIST_REPORT,
+  DEMO_FORMSTACK_DASHBOARD,
+  DEMO_MAILCHIMP_DASHBOARD,
   loadDemoNotesForCentre,
 };

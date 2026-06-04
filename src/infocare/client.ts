@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import { appendInfocareAuditEvent } from "./audit-log.js";
 import { infocareEnvelopeSchema } from "./models.js";
+import { appendExternalApiCapture } from "../storage/external-api-capture-store.js";
 
 export const ALLOWED_INFOCARE_MODES = [
   "get_centre_list",
@@ -199,6 +200,22 @@ export function createInfocareClient(options: RequestInitOptions = {}) {
           }
 
           const responseText = await response.text();
+          let receivedPayload: unknown = responseText;
+
+          try {
+            receivedPayload = JSON.parse(responseText);
+          } catch {
+            // Retain non-JSON API response text in the capture ledger.
+          }
+
+          await appendExternalApiCapture({
+            source: "infocare",
+            operation: validatedMode,
+            httpStatus: response.status,
+            outcome: response.ok ? "success" : "error",
+            requestContext: { parameters, attempt: attempt + 1 },
+            payload: receivedPayload,
+          });
 
           if (!response.ok) {
             lastError = new Error(
@@ -217,15 +234,11 @@ export function createInfocareClient(options: RequestInitOptions = {}) {
             throw lastError;
           }
 
-          let parsedJson: unknown;
-
-          try {
-            parsedJson = JSON.parse(responseText);
-          } catch {
+          if (typeof receivedPayload === "string") {
             throw new Error("Infocare response was not valid JSON.");
           }
 
-          const parsedResponse = infocareEnvelopeSchema.parse(parsedJson);
+          const parsedResponse = infocareEnvelopeSchema.parse(receivedPayload);
 
           if (parsedResponse.msg_status.toLowerCase() === "error") {
             lastError = new Error(parsedResponse.message ?? "Infocare returned an error response.");
