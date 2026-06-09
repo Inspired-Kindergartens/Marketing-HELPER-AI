@@ -55,6 +55,8 @@ model CentreReference {
   postmarkMessageEvents          PostmarkMessageEvent[]
   formstackForms                 FormstackForm[]
   formstackSubmissions           FormstackSubmission[]
+  projects                       Project[]
+  tasks                          Task[]
 
   @@index([ignored, openStatus, name])
 }
@@ -441,6 +443,15 @@ model PostmarkMessageEvent {
   @@index([tag, occurredAt(sort: Desc)])
 }
 
+// Persisted cursor for incremental pulls from external sources (e.g. the
+// Cloudflare Worker that buffers Postmark webhooks while this app is offline).
+// `lastId` is the highest source event id already ingested locally.
+model SyncCursor {
+  key       String   @id
+  lastId    BigInt   @default(0)
+  updatedAt DateTime @updatedAt
+}
+
 model MailchimpCampaign {
   id           Int                       @id @default(autoincrement())
   mailchimpId  String                    @unique
@@ -546,4 +557,125 @@ model FormstackSubmission {
   @@index([centreKey, submittedAt(sort: Desc)])
   @@index([submittedAt(sort: Desc)])
   @@index([pulledAt(sort: Desc)])
+}
+
+// User-maintained directory of people who can be assigned to tasks and added to
+// projects. Distinct from any login/auth concept — the app has no user accounts.
+model Member {
+  id             Int             @id @default(autoincrement())
+  name           String
+  email          String?         @unique
+  role           String?
+  active         Boolean         @default(true)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  projectMembers ProjectMember[]
+  assignedTasks  Task[]
+
+  @@index([active, name])
+}
+
+model Project {
+  id          Int              @id @default(autoincrement())
+  name        String
+  description String?
+  status      String           @default("active")
+  startDate   DateTime?
+  targetDate  DateTime?
+  centreKey   Int?
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  centre      CentreReference? @relation(fields: [centreKey], references: [centreKey], onDelete: SetNull, onUpdate: Cascade)
+  members     ProjectMember[]
+  taskGroups  TaskGroup[]
+  tasks       Task[]
+
+  @@index([status, targetDate])
+  @@index([centreKey])
+}
+
+model ProjectMember {
+  id          Int      @id @default(autoincrement())
+  projectId   Int
+  memberId    Int
+  projectRole String?
+  createdAt   DateTime @default(now())
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  member      Member   @relation(fields: [memberId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@unique([projectId, memberId])
+  @@index([memberId])
+}
+
+model TaskGroup {
+  id        Int      @id @default(autoincrement())
+  projectId Int
+  name      String
+  position  Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  tasks     Task[]
+
+  @@index([projectId, position])
+}
+
+model Task {
+  id              Int              @id @default(autoincrement())
+  title           String
+  description     String?
+  status          String           @default("todo")
+  dueDate         DateTime?
+  estimatedMinutes Int?
+  loggedMinutes   Int              @default(0)
+  timerStartedAt  DateTime?
+  projectId       Int?
+  taskGroupId     Int?
+  centreKey       Int?
+  assigneeId      Int?
+  position        Int              @default(0)
+  completedAt     DateTime?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  project         Project?         @relation(fields: [projectId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  group           TaskGroup?       @relation(fields: [taskGroupId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  centre          CentreReference? @relation(fields: [centreKey], references: [centreKey], onDelete: SetNull, onUpdate: Cascade)
+  assignee        Member?          @relation(fields: [assigneeId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  checklistItems  ChecklistItem[]
+  timeEntries     TimeEntry[]
+
+  @@index([status, dueDate])
+  @@index([projectId, position])
+  @@index([taskGroupId, position])
+  @@index([assigneeId])
+  @@index([centreKey])
+  @@index([dueDate])
+}
+
+model ChecklistItem {
+  id        Int      @id @default(autoincrement())
+  taskId    Int
+  label     String
+  done      Boolean  @default(false)
+  position  Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@index([taskId, position])
+}
+
+// Audit trail for time logged against a task. `Task.loggedMinutes` is the cached
+// sum, incremented when an entry is written (timer stop or manual log).
+model TimeEntry {
+  id        Int       @id @default(autoincrement())
+  taskId    Int
+  minutes   Int
+  note      String?
+  startedAt DateTime?
+  endedAt   DateTime?
+  createdAt DateTime  @default(now())
+  task      Task      @relation(fields: [taskId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@index([taskId, createdAt(sort: Desc)])
 }

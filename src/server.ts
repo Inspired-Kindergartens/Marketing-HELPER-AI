@@ -82,6 +82,7 @@ import {
 import { renderCommsAppShell, VALID_COMMS_PANEL_IDS } from "./ui/comms-app-shell.js";
 import { renderPostmarkMessageList } from "./ui/comms/postmark-panel.js";
 import { ingestPostmarkEvent, isPostmarkSourceIp, verifyBasicAuth } from "./postmark/webhook.js";
+import { readCloudflareSyncConfig, syncPostmarkEventsFromCloudflare } from "./postmark/cloudflare-sync.js";
 import { renderLandingPage } from "./ui/landing-page.js";
 import { renderReadmePage } from "./ui/readme-page.js";
 import { isDemoBody, isDemoRequest, resolveDemo } from "./demo/demo-flag.js";
@@ -138,6 +139,12 @@ const envSchema = z.object({
   AI_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120000).default(60000),
   POSTMARK_WEBHOOK_BASIC_AUTH: z.string().trim().default(""),
   POSTMARK_SERVER_TOKEN: z.string().trim().default(""),
+  CLOUDFLARE_SYNC_URL: z
+    .string()
+    .trim()
+    .default("https://postmark-webhook-events.marketing-884.workers.dev"),
+  // Accept either the underscored name or the original hyphenated env key.
+  CLOUDFLARE_SYNC_TOKEN: z.string().trim().default(""),
   MAILCHIMP_API_KEY: z.string().trim().default(""),
   MAILCHIMP_SERVER_PREFIX: z.string().trim().default(""),
   FORMSTACK_API_TOKEN: z.string().trim().default(""),
@@ -1961,6 +1968,54 @@ function logIntegrationConfigWarnings() {
   }
 }
 
+const CLOUDFLARE_SYNC_INTERVAL_MS = 60 * 60 * 1000;
+
+// Pulls Postmark webhook events the Cloudflare Worker buffered (including while
+// this app was offline) and ingests anything new into the local DB. Runs once
+// at startup and then hourly. Errors are logged, not thrown — a failed pull just
+// retries next hour, and the persisted cursor means no events are missed.
+async function syncCloudflarePostmarkEvents() {
+  const config = readCloudflareSyncConfig(process.env, env.POSTMARK_SERVER_TOKEN || "unknown");
+
+  if (!config) {
+    return;
+  }
+
+  try {
+    const result = await syncPostmarkEventsFromCloudflare(config);
+
+    if (result.eventsFetched > 0) {
+      app.log.info(
+        {
+          eventsFetched: result.eventsFetched,
+          eventsStored: result.eventsStored,
+          lastSeenId: result.lastSeenId.toString(),
+        },
+        "Cloudflare Postmark sync completed",
+      );
+    }
+  } catch (error) {
+    app.log.error({ error }, "Cloudflare Postmark sync failed");
+  }
+}
+
+function startCloudflarePostmarkSyncLoop() {
+  if (!readCloudflareSyncConfig(process.env, env.POSTMARK_SERVER_TOKEN || "unknown")) {
+    app.log.warn(
+      "Cloudflare Postmark sync is not configured — set CLOUDFLARE_SYNC_URL and CLOUDFLARE_SYNC_TOKEN to pull buffered webhook events",
+    );
+
+    return;
+  }
+
+  void syncCloudflarePostmarkEvents();
+  const timer = setInterval(() => {
+    void syncCloudflarePostmarkEvents();
+  }, CLOUDFLARE_SYNC_INTERVAL_MS);
+  // Don't keep the process alive solely for this timer.
+  timer.unref();
+}
+
 async function checkPostmarkWebhookOnStartup() {
   try {
     const result = await readPostmarkWebhookCheck();
@@ -1998,6 +2053,7 @@ async function start() {
 
   logIntegrationConfigWarnings();
   void checkPostmarkWebhookOnStartup();
+  startCloudflarePostmarkSyncLoop();
 
   if (mailchimpConfigStatus.isConfigured) {
     void ensureMailchimpSnapshotIfConfigured();

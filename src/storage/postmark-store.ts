@@ -241,6 +241,22 @@ export async function readPostmarkDashboardData(options: {
   const startIndex = (messagePage - 1) * POSTMARK_MESSAGES_PAGE_SIZE;
   const centreActivityByKey = new Map<number, PostmarkCentreActivityView>();
 
+  // Seed a zero row for every eligible centre so silent centres stay visible
+  // (e.g. a broken mail service shows as 0 rather than vanishing from the list).
+  for (const centre of centres) {
+    if (centreKeyFilter && !centreKeyFilter.has(centre.centreKey)) {
+      continue;
+    }
+    centreActivityByKey.set(centre.centreKey, {
+      centreKey: centre.centreKey,
+      centreName: centre.name,
+      delivered: 0,
+      opened: 0,
+      bounced: 0,
+      lastSentAt: null,
+    });
+  }
+
   for (const event of relevantEvents) {
     if (event.centreKey == null || event.centreName == null) {
       continue;

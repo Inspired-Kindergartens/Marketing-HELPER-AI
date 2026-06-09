@@ -133,6 +133,26 @@ Optional integrations:
 - `META_USER_ID`, `META_ACCESS_TOKEN`, `META_AD_ACCOUNT_ID`. Generate the token via Graph API Explorer (`developers.facebook.com/tools/explorer`, scopes `ads_read` and `business_management`), then extend it to 60 days in the Access Token Debugger.
 - `GOOGLE_ANALYTICS_PROPERTY_ID`.
 - `GOOGLE_ANALYTICS_OAUTH_PATH`, `GOOGLE_ANALYTICS_TOKEN_PATH`, or `GOOGLE_ANALYTICS_REFRESH_TOKEN`.
+- `POSTMARK_SERVER_TOKEN`, `POSTMARK_WEBHOOK_BASIC_AUTH` - Postmark email send token and the basic-auth password Postmark presents to the live webhook endpoint.
+- `CLOUDFLARE_SYNC_URL`, `CLOUDFLARE_SYNC_TOKEN` - Cloudflare Worker that buffers Postmark webhook events while the app is offline, and the `X-Sync-Token` used to read from it. See [Postmark Event Sync](#postmark-event-sync).
+
+## Postmark Event Sync
+
+Postmark delivery, open, click, and bounce events are captured two ways:
+
+- **Live webhook** - Postmark posts events to `/webhooks/postmark/events` whenever the app is running and reachable. These are authenticated by basic auth (`POSTMARK_WEBHOOK_BASIC_AUTH`) and a source-IP allowlist, then stored in the `PostmarkMessageEvent` table.
+- **Cloudflare Worker buffer** - a Cloudflare Worker receives the same webhooks and stores them in its own database continuously, including while this app is turned off. This guarantees no events are lost during downtime.
+
+When the app starts, and then **once every hour** while it runs, it pulls any new events from the Worker and ingests them into the local database. The flow is:
+
+1. Read the persisted cursor (`SyncCursor` table, key `postmark:cloudflare`) holding the highest Worker event id already ingested.
+2. `GET {CLOUDFLARE_SYNC_URL}/api/postmark/events?after_id={lastSeenId}` with header `X-Sync-Token: {CLOUDFLARE_SYNC_TOKEN}`.
+3. For each returned row, parse its `payload` (the raw Postmark webhook body) and ingest it through the same path the live webhook uses, so centre matching and de-duplication behave identically.
+4. Advance the cursor to the highest id seen.
+
+The sync is safe to run repeatedly: ingestion de-duplicates against the existing `PostmarkMessageEvent` rows, and the cursor only moves forward, so an overlapping pull stores nothing twice. A failed pull is logged and retried on the next hourly tick; the cursor means nothing is missed in the meantime. If `CLOUDFLARE_SYNC_URL` or `CLOUDFLARE_SYNC_TOKEN` is unset, the loop logs a warning and stays idle.
+
+A one-off CSV export from Postmark can also be imported via `importPostmarkActivityCsv` in `src/postmark/csv-import.ts`, which writes through the same de-duplicated storage path.
 
 ## Dashboard Panels
 
