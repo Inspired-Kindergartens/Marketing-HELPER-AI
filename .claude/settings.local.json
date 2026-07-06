@@ -6,7 +6,8 @@
       "Bash(curl *)",
       "Bash(netstat -ano)",
       "Bash(taskkill *)",
-      "WebFetch(domain:developer.metservice.com)"
+      "WebFetch(domain:developer.metservice.com)",
+      "Bash(npx tsc *)"
     ]
   }
 }

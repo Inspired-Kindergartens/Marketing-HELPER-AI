@@ -68,12 +68,27 @@ const NEWS_QUERY_TIERS = [
   `${ECE_TERMS} New Zealand`,
 ];
 
-const BRAND_QUERIES = [
-  '"Inspired Kindergartens"',
-  '"Ngā Kōhungahunga Manawanui"',
-  '("Inspired Kindergartens" OR "Ngā Kōhungahunga Manawanui")',
-  '("Peter Monteith" AND kindergarten)',
+const BRAND_QUERIES: { query: string; mustContain: string[] }[] = [
+  { query: '"Inspired Kindergartens"', mustContain: ["inspired"] },
+  { query: '"Ngā Kōhungahunga Manawanui"', mustContain: ["nga kohungahunga manawanui"] },
+  { query: '("Peter Monteith" AND kindergarten)', mustContain: ["peter monteith"] },
 ];
+
+const SECTOR_WATCH_QUERIES: { query: string; mustContain: string[] }[] = [
+  { query: '"Enviroschools"', mustContain: ["enviroschools"] },
+  { query: '"NZIE" (kindergarten OR ECE OR "early childhood")', mustContain: ["nzie"] },
+  { query: '"Kindergartens Aotearoa"', mustContain: ["kindergartens aotearoa"] },
+  { query: '("KA" AND kindergarten AND Aotearoa)', mustContain: ["kindergartens aotearoa"] },
+  { query: '"Krissy Thompson" kindergarten', mustContain: ["krissy thompson"] },
+];
+
+const ECE_RELEVANCE_PATTERN = /kindergarten|early childhood|\bece\b|preschool|pre-school|kōhanga|kohanga/i;
+
+function isGroundedMatch(item: RssItem, mustContain: string[]) {
+  const normalizedText = normalizeCentreContactName(`${item.title} ${item.description}`);
+
+  return mustContain.some((term) => normalizedText.includes(term));
+}
 
 const SECTOR_SCRAPE_SOURCES = [
   { name: "RNZ Education", url: "https://www.rnz.co.nz/news/education" },
@@ -307,7 +322,11 @@ async function fetchNewsItems() {
 
     const xml = await fetchText(rssUrl(query)).catch(() => "");
     const tierItems = parseRss(xml)
-      .filter((item) => !isStaleRssItem(item, now, GENERAL_NEWS_MAX_AGE_MS))
+      .filter(
+        (item) =>
+          !isStaleRssItem(item, now, GENERAL_NEWS_MAX_AGE_MS) &&
+          ECE_RELEVANCE_PATTERN.test(`${item.title} ${item.description}`),
+      )
       .sort((left, right) => (right.publishedAt ?? "").localeCompare(left.publishedAt ?? ""));
 
     for (const item of tierItems) {
@@ -328,18 +347,27 @@ const BRAND_NEWS_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
 async function fetchBrandMentionItems(): Promise<LandingIntelligenceItem[]> {
   const references = await readOwnedKindergartenReferences();
+  const brandQueryCount = BRAND_QUERIES.length + references.length;
   const queries = [
     ...BRAND_QUERIES,
-    ...references.map((reference) => `"${reference.name}" kindergarten`),
+    ...references.map((reference) => ({
+      query: `"${reference.name}" kindergarten`,
+      mustContain: [reference.normalizedName],
+    })),
+    ...SECTOR_WATCH_QUERIES,
   ];
   const now = Date.now();
-  const results = await Promise.allSettled(queries.map((query) => fetchText(rssUrl(query))));
+  const results = await Promise.allSettled(queries.map(({ query }) => fetchText(rssUrl(query))));
   const seen = new Set<string>();
   const items: LandingIntelligenceItem[] = [];
 
-  for (const result of results) {
+  results.forEach((result, index) => {
     const xml = result.status === "fulfilled" ? result.value : "";
-    const matches = parseRss(xml).filter((item) => !isStaleRssItem(item, now, BRAND_NEWS_MAX_AGE_MS));
+    const { mustContain } = queries[index];
+    const isBrandQuery = index < brandQueryCount;
+    const matches = parseRss(xml).filter(
+      (item) => !isStaleRssItem(item, now, BRAND_NEWS_MAX_AGE_MS) && isGroundedMatch(item, mustContain),
+    );
 
     for (const item of matches) {
       const key = `${item.title}-${item.link ?? ""}`;
@@ -348,14 +376,12 @@ async function fetchBrandMentionItems(): Promise<LandingIntelligenceItem[]> {
       seen.add(key);
 
       const feedItem = toNewsFeedItem(item, items.length, references, "news");
-      items.push({ ...feedItem, urgent: true });
+      items.push({ ...feedItem, urgent: isBrandQuery });
     }
-  }
+  });
 
   return items;
 }
-
-const ECE_RELEVANCE_PATTERN = /kindergarten|early childhood|\bece\b|preschool|pre-school|kōhanga|kohanga/i;
 
 function parseRnzEducationListing(html: string): RssItem[] {
   const blockPattern = /<h3 class="o-digest__headline"[^>]*><a[^>]*href="(\/news\/[^"]+)"[^>]*>((?:[^<])*)<\/a><\/h3>[\s\S]{0,400}?class="o-kicker__time kicker-item">([^<]+)</g;
