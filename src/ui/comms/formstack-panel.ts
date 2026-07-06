@@ -30,6 +30,13 @@ function renderCentreName(centreName: string | null) {
   return centreName ? `<span>${escapeHtml(centreName)}</span>` : "";
 }
 
+function renderFormName(form: { name: string; formUrl: string | null }) {
+  const label = escapeHtml(form.name);
+  return form.formUrl
+    ? `<a class="comms-campaign-link" href="${escapeHtml(form.formUrl)}" target="_blank" rel="noopener noreferrer">${label}</a>`
+    : `<strong>${label}</strong>`;
+}
+
 function renderConfigState(status: FormstackConfigStatus | null | undefined) {
   if (!status || status.isConfigured) return "";
 
@@ -62,14 +69,13 @@ export function renderFormstackPanel(options: FormstackPanelOptions = {}) {
         <header class="comms-section__header"><h3>Forms</h3><span>Latest activity first</span></header>
         <div class="comms-table-wrap">
           <table class="comms-table">
-            <thead><tr><th>Form / Centre</th><th>Folder</th><th class="comms-table__numeric">Submissions</th><th>Latest</th></tr></thead>
+            <thead><tr><th>Form / Centre</th><th class="comms-table__numeric">Submissions</th><th>Latest</th></tr></thead>
             <tbody>${
               data.forms.length === 0
-                ? `<tr><td class="comms-table__empty" colspan="4">No online forms have been imported from Formstack.</td></tr>`
+                ? `<tr><td class="comms-table__empty" colspan="3">No online forms have been imported from Formstack.</td></tr>`
                 : data.forms.map((form) => `
                   <tr>
-                    <td><strong>${escapeHtml(form.name)}</strong>${renderCentreName(form.centreName)}</td>
-                    <td>${escapeHtml(form.folder ?? "-")}</td>
+                    <td>${renderFormName(form)}${renderCentreName(form.centreName)}</td>
                     <td class="comms-table__numeric">${form.submissionCount}</td>
                     <td>${escapeHtml(formatDate(form.lastSubmissionAt))}</td>
                   </tr>

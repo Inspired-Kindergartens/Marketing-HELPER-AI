@@ -24,6 +24,18 @@ function folderName(form: FormstackFormApiRecord) {
       : String(form.folder);
 }
 
+function formUrl(form: FormstackFormApiRecord) {
+  return form.publicUrl ??
+    form.public_url ??
+    form.formUrl ??
+    form.form_url ??
+    form.viewUrl ??
+    form.view_url ??
+    form.url ??
+    form.link ??
+    null;
+}
+
 function submittedAt(record: FormstackSubmissionApiRecord, fallback: Date) {
   const raw = record.submittedAt ?? record.submitted_at ?? record.timestamp ?? record.date ?? record.created_at ?? record.created;
   const date = raw ? new Date(raw) : fallback;
@@ -57,6 +69,7 @@ export async function refreshFormstackData(config: FormstackConfig): Promise<For
     await upsertFormstackForm({
       formstackId,
       name: form.name ?? `Form ${formstackId}`,
+      formUrl: formUrl(form),
       folder,
       centreKey,
       submissionCount: numeric(form.submissionsCount ?? form.submission_count ?? form.submissions) ?? submissions.length,

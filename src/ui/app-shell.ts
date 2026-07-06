@@ -53,7 +53,7 @@ const PRIORITY_LEAVING_CAP = 10;
 const PRIORITY_ESTIMATED_OPEN_PLACES_CAP = 20;
 const PRIORITY_LOW_WAITLIST_CAP = 10;
 const META_CAMPAIGN_EMAIL_TEMPLATE = [
-  "Kia ora <head_teacher> and <administrator>,",
+  "Kia ora <greeting_names>,",
   "",
   "I will be running Facebook adverts for tamariki enrolments for <kindergarten_name> Kindergarten and I would like to open a korero of how this may look for your centre. This advert focuses on enrolling tamariki but it can't hurt if we also have a top-up of our waitlists for our services. If you want to participate and have an input then read on otherwise let me know and I will publish this as is.",
   "",
@@ -67,7 +67,7 @@ const META_CAMPAIGN_EMAIL_TEMPLATE = [
   "Welcome to <kindergarten_name>. <primary_text>",
 ].join("\n");
 const META_FOLLOW_UP_EMAIL_TEMPLATE = [
-  "Kia ora <head_teacher> and <administrator>,",
+  "Kia ora <greeting_names>,",
   "",
   "Just a reminder that I would like to run a Facebook advert for tamariki enrolments for you kindergarten and if I don't hear back from you by <add_three_business_days_from_today> I will begin running your advert. If at anytime you are not comfortable with the advert then let me know and I can stop your advert at anytime.",
   "",
@@ -4280,6 +4280,7 @@ function renderBreakoutScript() {
             const initiateButton = document.createElement("button");
             const campaignButton = document.createElement("button");
             const followUpButton = document.createElement("button");
+            const newButton = document.createElement("button");
             const cancelButton = document.createElement("button");
             let resolved = false;
 
@@ -4295,9 +4296,11 @@ function renderBreakoutScript() {
             campaignButton.textContent = "Campaign";
             followUpButton.type = "button";
             followUpButton.textContent = "Follow up";
+            newButton.type = "button";
+            newButton.textContent = "New";
             cancelButton.type = "button";
             cancelButton.textContent = "Cancel";
-            actions.append(initiateButton, campaignButton, followUpButton, cancelButton);
+            actions.append(initiateButton, campaignButton, followUpButton, newButton, cancelButton);
             dialog.append(message, actions);
             const blocker = mountBlockingDialog(dialog);
 
@@ -4314,6 +4317,7 @@ function renderBreakoutScript() {
             initiateButton.addEventListener("click", () => finish("initiate"));
             campaignButton.addEventListener("click", () => finish("campaign"));
             followUpButton.addEventListener("click", () => finish("follow-up"));
+            newButton.addEventListener("click", () => finish("new"));
             cancelButton.addEventListener("click", () => finish(null));
             dialog.addEventListener("keydown", (event) => {
               if (event.key === "Escape") {
@@ -4341,7 +4345,7 @@ function renderBreakoutScript() {
             dialog.setAttribute("role", "dialog");
             dialog.setAttribute("aria-modal", "true");
             dialog.setAttribute("aria-label", "Email advert text");
-            title.textContent = "Advert text for " + centreName + ".";
+            title.textContent = "Emailing " + centreName + ".";
             headingLabel.textContent = "Heading";
             headingInput.type = "text";
             headingInput.value = initialContent?.headingText || "";
@@ -4383,6 +4387,67 @@ function renderBreakoutScript() {
           });
         }
 
+        function askMetaEmailNew(centreName) {
+          return new Promise((resolve) => {
+            const dialog = document.createElement("div");
+            const title = document.createElement("p");
+            const subjectLabel = document.createElement("label");
+            const subjectInput = document.createElement("input");
+            const bodyLabel = document.createElement("label");
+            const bodyInput = document.createElement("textarea");
+            const actions = document.createElement("div");
+            const cancelButton = document.createElement("button");
+            const continueButton = document.createElement("button");
+            let resolved = false;
+
+            dialog.className = "email-confirm-dialog email-confirm-dialog--form";
+            dialog.setAttribute("role", "dialog");
+            dialog.setAttribute("aria-modal", "true");
+            dialog.setAttribute("aria-label", "New email");
+            title.textContent = "Emailing " + centreName + ".";
+            subjectLabel.textContent = "Subject";
+            subjectInput.type = "text";
+            subjectInput.value = "";
+            bodyLabel.textContent = "Body";
+            bodyInput.rows = 8;
+            // The "Kia ora <names>," greeting is prepended when the email is
+            // opened in the mail app, so the body field starts empty here.
+            bodyInput.value = "";
+            actions.className = "email-confirm-dialog__actions";
+            cancelButton.type = "button";
+            cancelButton.textContent = "Cancel";
+            continueButton.type = "button";
+            continueButton.textContent = "Continue";
+            actions.append(cancelButton, continueButton);
+            dialog.append(title, subjectLabel, subjectInput, bodyLabel, bodyInput, actions);
+            const blocker = mountBlockingDialog(dialog);
+
+            const finish = (value) => {
+              if (resolved) {
+                return;
+              }
+
+              resolved = true;
+              blocker.remove();
+              resolve(value);
+            };
+
+            continueButton.addEventListener("click", () => {
+              finish({
+                subject: subjectInput.value.trim(),
+                body: bodyInput.value,
+              });
+            });
+            cancelButton.addEventListener("click", () => finish(null));
+            dialog.addEventListener("keydown", (event) => {
+              if (event.key === "Escape") {
+                finish(null);
+              }
+            });
+            subjectInput.focus();
+          });
+        }
+
         function addBusinessDays(startDate, days) {
           const date = new Date(startDate);
           let added = 0;
@@ -4411,10 +4476,32 @@ function renderBreakoutScript() {
           return String(name || "").trim().split(/\\s+/)[0] || "";
         }
 
+        // Builds the greeting line from the contact names, e.g.
+        // "Paula and Colleen", "Paula", or "there" when none are available.
+        // De-duplicates so a shared name is not repeated.
+        function joinGreetingNames(names) {
+          const firstNames = [];
+          (names || []).forEach((name) => {
+            const first = firstNameOnly(name);
+            if (first && firstNames.indexOf(first) === -1) {
+              firstNames.push(first);
+            }
+          });
+
+          if (firstNames.length === 0) {
+            return "there";
+          }
+
+          if (firstNames.length === 1) {
+            return firstNames[0];
+          }
+
+          return firstNames.slice(0, -1).join(", ") + " and " + firstNames[firstNames.length - 1];
+        }
+
         function buildTemplatedEmailBody(template, context) {
           const replacements = {
-            "<head_teacher>": firstNameOnly(context.headTeacher) || "there",
-            "<administrator>": firstNameOnly(context.administrator),
+            "<greeting_names>": joinGreetingNames([context.headTeacher, context.administrator]),
             "<kindergarten_name>": context.kindergartenName || context.centreName,
             "<heading_text>": context.headingText,
             "<primary_text>": context.primaryText,
@@ -4482,15 +4569,43 @@ function renderBreakoutScript() {
               return;
             }
 
-            const sentNoteText =
+            let sentNoteText =
               selectedType === "campaign"
                 ? "Email sent for campaign"
                 : selectedType === "follow-up"
                   ? "Email sent for follow up"
-                  : "Email sent for initiating";
+                  : selectedType === "new"
+                    ? "New email sent"
+                    : "Email sent for initiating";
 
             if (selectedType === "initiate") {
               openEmailHref(emailConfirm.getAttribute("data-initiate-href") || emailConfirm.href);
+            } else if (selectedType === "new") {
+              const greetingNames = joinGreetingNames([
+                emailConfirm.getAttribute("data-head-teacher") || "",
+                emailConfirm.getAttribute("data-administrator") || "",
+              ]);
+              const newEmail = await askMetaEmailNew(centreName);
+
+              if (!newEmail) {
+                return;
+              }
+
+              // Prepend the "Kia ora <names>," greeting only when opening the
+              // email in the mail app, not in the dialog body field itself.
+              const body = "Kia ora " + greetingNames + ",\\n\\n" + newEmail.body;
+
+              // Record the subject and full body in the saved note so the
+              // history shows exactly what new email was sent to the centre.
+              sentNoteText = "New email sent"
+                + (newEmail.subject ? ": " + newEmail.subject : "")
+                + "\\n\\n" + body;
+
+              openEmailHref(buildMailtoHref(
+                emailConfirm.getAttribute("data-contact-email") || "",
+                newEmail.subject,
+                body,
+              ));
             } else {
               const existingContent = centreKey ? await readMetaEmailContent(centreKey) : { headingText: "", primaryText: "" };
               const content = await askMetaEmailText(centreName, existingContent);
@@ -4499,8 +4614,15 @@ function renderBreakoutScript() {
                 return;
               }
 
+              // Persist the typed heading/primary text so the next email for
+              // this centre reopens with it pre-filled. A failed save must not
+              // block the email from opening with what was just typed.
               if (centreKey) {
-                await saveMetaEmailContent(centreKey, content);
+                try {
+                  await saveMetaEmailContent(centreKey, content);
+                } catch (error) {
+                  // Non-fatal: continue with the in-memory content.
+                }
               }
 
               const context = {
@@ -5128,6 +5250,7 @@ export function renderAppShell(
     <aside class="nav-rail" aria-label="Primary navigation">
       <a class="nav-rail__item" href="/" aria-label="Back to landing" title="Landing"><i class="bi bi-house-door" aria-hidden="true"></i></a>
       <a class="nav-rail__item nav-rail__item--current" href="/app${options.demo ? "?demo=1" : ""}" aria-label="Online Marketing dashboard" title="Online Marketing" aria-current="page"><i class="bi bi-bar-chart-line" aria-hidden="true"></i></a>
+      <a class="nav-rail__item" href="/tasks" aria-label="Tasks" title="Tasks"><i class="bi bi-check2-square" aria-hidden="true"></i></a>
       <a class="nav-rail__item" href="/comms${options.demo ? "?demo=1" : ""}" aria-label="Online Communications dashboard" title="Online Communications"><i class="bi bi-envelope-paper" aria-hidden="true"></i></a>
       ${options.demo ? `<a class="nav-rail__item nav-rail__item--exit-demo" href="/app" aria-label="Exit demo mode" title="Exit demo"><i class="bi bi-eject" aria-hidden="true"></i></a>` : ""}
     </aside>

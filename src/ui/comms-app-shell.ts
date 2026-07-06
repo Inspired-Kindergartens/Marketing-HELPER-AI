@@ -175,7 +175,7 @@ function renderPanelContent(panelId: string, options: CommsAppShellOptions) {
   }
 
   if (panelId === "comms-funnel") {
-    return renderCommsFunnelPanel(options.formstackDashboardData, options.postmarkDashboardData);
+    return renderCommsFunnelPanel(options.postmarkDashboardData);
   }
 
   return renderCommsAiChatPanel();
@@ -269,7 +269,9 @@ function renderPostmarkRefreshScript() {
         var panel = document.querySelector('[data-panel-id="comms-postmark"]');
         if (!panel) return;
 
-        async function refreshMessages(page) {
+        var activeFilter = { centreKey: null, category: null, recipient: null };
+
+        async function refreshMessages(page, scrollAfter) {
           var list = panel.querySelector("[data-postmark-message-list]");
           if (!list) return;
 
@@ -278,15 +280,55 @@ function renderPostmarkRefreshScript() {
             var selectedWindow = params.get("window") || "3M";
             var selectedMetaAdsFilter = params.get("metaAdsFilter") || "";
             var metaAdsFilterQuery = selectedMetaAdsFilter ? "&metaAdsFilter=" + encodeURIComponent(selectedMetaAdsFilter) : "";
-            var response = await fetch("/api/comms/postmark/messages?page=" + encodeURIComponent(String(page || 1)) + "&window=" + encodeURIComponent(selectedWindow) + metaAdsFilterQuery, {
+            var filterQuery = "";
+            if (activeFilter.recipient != null) {
+              filterQuery = "&recipient=" + encodeURIComponent(activeFilter.recipient);
+            } else if (activeFilter.category != null) {
+              filterQuery = "&category=" + encodeURIComponent(activeFilter.category);
+            } else if (activeFilter.centreKey != null) {
+              filterQuery = "&centreKey=" + encodeURIComponent(String(activeFilter.centreKey));
+            }
+            var response = await fetch("/api/comms/postmark/messages?page=" + encodeURIComponent(String(page || 1)) + "&window=" + encodeURIComponent(selectedWindow) + metaAdsFilterQuery + filterQuery, {
               headers: { "accept": "application/json" }
             });
             if (!response.ok) throw new Error("Webmail refresh failed.");
             var payload = await response.json();
             list.innerHTML = String(payload.html || "");
+            // Scroll only after the new markup (which re-creates
+            // #comms-recent-messages) is in the DOM, so we land on the
+            // freshly filtered "Recent messages" section.
+            if (scrollAfter) {
+              var section = panel.querySelector("#comms-recent-messages");
+              if (section) section.scrollIntoView({ behavior: "smooth", block: "start" });
+            }
           } catch (error) {
             list.setAttribute("data-refresh-error", "1");
           }
+        }
+
+        // Reads a filter target (recipient / office-staff group / centre) from a
+        // clicked element and applies it. Returns true if a filter was set.
+        function applyFilterFrom(el) {
+          if (!el) return false;
+          var recipient = el.closest("[data-recipient]");
+          if (recipient) {
+            activeFilter = { centreKey: null, category: null, recipient: recipient.getAttribute("data-recipient") };
+            refreshMessages(1, true);
+            return true;
+          }
+          var officeStaff = el.closest('[data-category="office-staff"]');
+          if (officeStaff) {
+            activeFilter = { centreKey: null, category: "office-staff", recipient: null };
+            refreshMessages(1, true);
+            return true;
+          }
+          var centre = el.closest("[data-centre-key]");
+          if (centre) {
+            activeFilter = { centreKey: centre.getAttribute("data-centre-key"), category: null, recipient: null };
+            refreshMessages(1, true);
+            return true;
+          }
+          return false;
         }
 
         panel.addEventListener("click", function(event) {
@@ -294,6 +336,17 @@ function renderPostmarkRefreshScript() {
           var pageButton = target instanceof Element ? target.closest("[data-postmark-page]") : null;
           if (pageButton instanceof HTMLButtonElement) {
             refreshMessages(Number(pageButton.getAttribute("data-postmark-page") || "1"));
+            return;
+          }
+
+          var clearButton = target instanceof Element ? target.closest("[data-postmark-clear-filter]") : null;
+          if (clearButton) {
+            activeFilter = { centreKey: null, category: null, recipient: null };
+            refreshMessages(1);
+            return;
+          }
+
+          if (target instanceof Element && applyFilterFrom(target)) {
             return;
           }
 
@@ -306,6 +359,13 @@ function renderPostmarkRefreshScript() {
         panel.addEventListener("keydown", function(event) {
           if (event.key !== "Enter" && event.key !== " ") return;
           var target = event.target;
+
+          if (target instanceof Element && (target.hasAttribute("data-centre-key") || target.hasAttribute("data-recipient") || target.getAttribute("data-category") === "office-staff")) {
+            event.preventDefault();
+            applyFilterFrom(target);
+            return;
+          }
+
           var header = target instanceof Element ? target.closest(".panel__header") : null;
           if (header && panel.contains(header)) {
             refreshMessages(1);
@@ -387,6 +447,7 @@ export function renderCommsAppShell(options: CommsAppShellOptions = {}) {
     <aside class="nav-rail" aria-label="Primary navigation">
       <a class="nav-rail__item" href="/" aria-label="Back to landing" title="Landing"><i class="bi bi-house-door" aria-hidden="true"></i></a>
       <a class="nav-rail__item" href="/app${demo ? "?demo=1" : ""}" aria-label="Online Marketing dashboard" title="Online Marketing"><i class="bi bi-bar-chart-line" aria-hidden="true"></i></a>
+      <a class="nav-rail__item" href="/tasks" aria-label="Tasks" title="Tasks"><i class="bi bi-check2-square" aria-hidden="true"></i></a>
       <a class="nav-rail__item nav-rail__item--current" href="/comms${demo ? "?demo=1" : ""}" aria-label="Online Communications dashboard" title="Online Communications" aria-current="page"><i class="bi bi-envelope-paper" aria-hidden="true"></i></a>
       ${demo ? `<a class="nav-rail__item nav-rail__item--exit-demo" href="/comms" aria-label="Exit demo mode" title="Exit demo"><i class="bi bi-eject" aria-hidden="true"></i></a>` : ""}
     </aside>

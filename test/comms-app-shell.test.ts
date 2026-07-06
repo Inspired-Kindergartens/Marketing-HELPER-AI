@@ -189,6 +189,7 @@ test("comms shell renders Formstack data and aligned centre activity", () => {
       forms: [{
         formstackId: "form-1",
         name: "Papamoa Coast Tour Request",
+        formUrl: "https://www.formstack.com/forms/papamoa-coast-tour-request",
         folder: "Enquiries",
         centreKey: 4,
         centreName: "Papamoa Coast Kindergarten",
@@ -199,6 +200,7 @@ test("comms shell renders Formstack data and aligned centre activity", () => {
       }, {
         formstackId: "form-2",
         name: "General Enquiry",
+        formUrl: null,
         folder: "Enquiries",
         centreKey: null,
         centreName: null,
@@ -226,9 +228,12 @@ test("comms shell renders Formstack data and aligned centre activity", () => {
   });
 
   assert.match(html, /Papamoa Coast Tour Request/);
+  assert.match(html, /href="https:\/\/www\.formstack\.com\/forms\/papamoa-coast-tour-request" target="_blank" rel="noopener noreferrer">Papamoa Coast Tour Request<\/a>/);
   assert.match(html, /Papamoa Coast Kindergarten/);
   assert.match(html, /General Enquiry/);
   assert.doesNotMatch(html, /Unmatched/i);
+  assert.doesNotMatch(html, />Folder<\/th>/);
+  assert.doesNotMatch(html, />Enquiries<\/td>/);
   assert.match(html, /Payload preview/);
   assert.match(html, /href="\/actions\/refresh-formstack"/);
   assert.match(html, /Centre activity alignment/);
@@ -326,6 +331,58 @@ test("comms shell preserves the Webmail Meta advert filter beside the email wind
   assert.match(html, /href="\/comms\?window=6M&panel=comms-postmark">All emails<\/a>/);
   assert.match(html, /analytics-toolbar__window analytics-toolbar__window--active" href="\/comms\?window=6M&panel=comms-postmark&metaAdsFilter=active-recent">Meta active\/recent \(4\)<\/a>/);
   assert.match(html, /href="\/actions\/check-postmark\?window=6M&metaAdsFilter=active-recent"/);
+});
+
+test("centre activity alignment excludes Formstack submission counts", () => {
+  const html = renderCommsAppShell({
+    focusPanelId: "comms-funnel",
+    formstackDashboardData: {
+      forms: [{
+        formstackId: "form-1",
+        name: "Avenues enquiry",
+        formUrl: "https://www.formstack.com/forms/avenues-enquiry",
+        folder: "Avenues",
+        centreKey: 101,
+        centreName: "Avenues Kindergarten",
+        submissionCount: 99,
+        viewCount: null,
+        lastSubmissionAt: "2026-05-26T00:00:00.000Z",
+        pulledAt: "2026-05-26T00:00:00.000Z",
+      }],
+      latestSubmissions: [],
+      totalStoredSubmissions: 99,
+      latestPulledAt: "2026-05-26T00:00:00.000Z",
+    },
+    postmarkDashboardData: {
+      delivered: 3,
+      opened: 2,
+      clicked: 0,
+      bounced: 0,
+      latestReceivedAt: "2026-05-26T04:23:37.000Z",
+      recentMessages: [],
+      relevantMessageCount: 0,
+      centreMessageCount: 0,
+      officeStaffMessageCount: 0,
+      messagePage: 1,
+      messagePageSize: 10,
+      messagePageCount: 1,
+      centreActivity: [{
+        centreKey: 101,
+        centreName: "Avenues Kindergarten",
+        delivered: 3,
+        opened: 2,
+        bounced: 0,
+        lastSentAt: "2026-05-26T04:23:37.000Z",
+      }],
+    },
+  });
+
+  assert.match(html, /Centre activity alignment/);
+  assert.doesNotMatch(html, /Form submissions/);
+  assert.doesNotMatch(html, /Online Forms submissions/);
+  assert.match(html, /Webmail delivered/);
+  assert.match(html, /Avenues Kindergarten/);
+  assert.doesNotMatch(html, /<td class="comms-table__numeric">99<\/td>/);
 });
 
 test("comms shell nav rail links back to landing and across to Online Marketing", () => {

@@ -1,12 +1,16 @@
 import { config as loadDotenv } from "dotenv";
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { spawn } from "node:child_process";
+import { basename, extname, join } from "node:path";
 import Fastify from "fastify";
+import multipart from "@fastify/multipart";
 import { z } from "zod";
 
 import { buildAiChatMessages, buildDeterministicChatAnswer, type AiChatHistoryMessageInput } from "./ai/chat.js";
 import { runLocalChat, streamLocalChat, AiClientError } from "./ai/client.js";
 import { buildBuiltinCommsAnswer, buildCommsAiChatMessages, buildCommsAiDashboardContext } from "./ai/comms-context.js";
+import { buildBuiltinTasksAnswer, buildTasksAiChatMessages, buildTasksAiDashboardContext } from "./ai/tasks-context.js";
 import { buildAiDashboardContext, buildDashboardSystemPrompt } from "./ai/context.js";
 import { readAiConfig } from "./ai/config.js";
 import {
@@ -39,7 +43,19 @@ import {
   readCentreSnapshotHistory,
   readLatestAnalyticsSnapshotSet,
 } from "./storage/analytics-store.js";
-import { readCentreContactList } from "./storage/centre-contact-store.js";
+import { readCentreContactList, readCentreContactListStats } from "./storage/centre-contact-store.js";
+import {
+  addGeneralChatMessage,
+  buildGeneralChatMessages,
+  createGeneralChatConversation,
+  createGeneralChatGroup,
+  deleteGeneralChatConversation,
+  deleteGeneralChatGroup,
+  deleteGeneralChatMessage,
+  getGeneralChatPageData,
+  renameGeneralChatGroup,
+  updateGeneralChatConversation,
+} from "./storage/general-chat-store.js";
 import {
   aggregateGoogleAnalyticsSnapshots,
   readGoogleAnalyticsRangeSnapshot,
@@ -83,7 +99,53 @@ import { renderCommsAppShell, VALID_COMMS_PANEL_IDS } from "./ui/comms-app-shell
 import { renderPostmarkMessageList } from "./ui/comms/postmark-panel.js";
 import { ingestPostmarkEvent, isPostmarkSourceIp, verifyBasicAuth } from "./postmark/webhook.js";
 import { readCloudflareSyncConfig, syncPostmarkEventsFromCloudflare } from "./postmark/cloudflare-sync.js";
-import { renderLandingPage } from "./ui/landing-page.js";
+import { renderLandingIntelligenceFeed, renderLandingPage } from "./ui/landing-page.js";
+import {
+  getLandingIntelligenceFeed,
+  refreshLandingIntelligenceFeed,
+  startLandingIntelligenceFeedLoop,
+} from "./landing-intelligence.js";
+import { renderGeneralChatPage } from "./ui/general-chat-page.js";
+import {
+  getDueAndOverdueTasks,
+  listTasks,
+  getTask,
+  createTask,
+  updateTask,
+  setTaskStatus,
+  deleteTask,
+  startTaskTimer,
+  stopTaskTimer,
+  logTaskTime,
+  addChecklistItem,
+  toggleChecklistItem,
+  deleteChecklistItem,
+  attachTaskToProject,
+  saveTaskEmailDraft,
+  createTaskAttachment,
+  getTaskAttachment,
+  deleteTaskAttachment,
+} from "./storage/task-store.js";
+import {
+  listProjects,
+  getProjectRollup,
+  createProject,
+  updateProject,
+  deleteProject,
+  createTaskGroup,
+  deleteTaskGroup,
+  addProjectMember,
+  removeProjectMember,
+} from "./storage/project-store.js";
+import {
+  listMembers,
+  createMember,
+  updateMember,
+  setMemberActive,
+  deleteMember,
+  listEmailContactSuggestions,
+} from "./storage/member-store.js";
+import { renderTasksAppShell, resolveTasksFocusPanelId } from "./ui/tasks-app-shell.js";
 import { renderReadmePage } from "./ui/readme-page.js";
 import { isDemoBody, isDemoRequest, resolveDemo } from "./demo/demo-flag.js";
 import {
@@ -166,8 +228,178 @@ const app = Fastify({
   logger: env.NODE_ENV !== "test",
 });
 
+const TASK_ATTACHMENT_MAX_BYTES = 25 * 1024 * 1024;
+const TASK_ATTACHMENT_DIR = join("uploads", "task-attachments");
+
+await app.register(multipart, {
+  limits: {
+    files: 1,
+    fileSize: TASK_ATTACHMENT_MAX_BYTES,
+  },
+});
+
 const VALID_PANEL_IDS = new Set(["analytics", "waitlist", "meta-ads", "google-analytics", "chat"]);
 const META_ADS_AUTO_REFRESH_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const RECOMMENDED_AI_CHAT_MODEL = "qwen3:8b";
+let aiModelUpdateInProgress = false;
+
+async function setDotenvValue(key: string, value: string) {
+  const envPath = join(process.cwd(), ".env");
+  const escaped = `${key}=${value}`;
+  let content = "";
+
+  try {
+    content = await readFile(envPath, "utf8");
+  } catch {
+    await writeFile(envPath, `${escaped}\n`, "utf8");
+    return;
+  }
+
+  const pattern = new RegExp(`^${key}=.*$`, "m");
+  const next = pattern.test(content)
+    ? content.replace(pattern, escaped)
+    : `${content.trimEnd()}\n${escaped}\n`;
+
+  await writeFile(envPath, next, "utf8");
+}
+
+async function readDotenvValue(key: string) {
+  try {
+    const content = await readFile(join(process.cwd(), ".env"), "utf8");
+    const pattern = new RegExp(`^${key}=(.*)$`, "m");
+    const match = content.match(pattern);
+
+    return match?.[1]?.trim() || "";
+  } catch {
+    return "";
+  }
+}
+
+async function deleteDotenvValue(key: string) {
+  const envPath = join(process.cwd(), ".env");
+
+  try {
+    const content = await readFile(envPath, "utf8");
+    const pattern = new RegExp(`^${key}=.*\\r?\\n?`, "m");
+    await writeFile(envPath, content.replace(pattern, ""), "utf8");
+  } catch {
+    return;
+  }
+}
+
+async function updateRecommendedAiModel() {
+  if (aiModelUpdateInProgress) {
+    return { started: false, inProgress: true, model: RECOMMENDED_AI_CHAT_MODEL };
+  }
+
+  const currentModel = aiConfig.AI_CHAT_MODEL;
+  const fallbackModel = process.env.AI_CHAT_MODEL_FALLBACK || await readDotenvValue("AI_CHAT_MODEL_FALLBACK");
+
+  aiModelUpdateInProgress = true;
+  const child = spawn("ollama", ["pull", RECOMMENDED_AI_CHAT_MODEL], {
+    stdio: ["ignore", "pipe", "pipe"],
+    windowsHide: true,
+  });
+
+  child.stdout.on("data", (chunk) => {
+    app.log.info({ output: String(chunk).trim() }, "Ollama model update output");
+  });
+  child.stderr.on("data", (chunk) => {
+    app.log.warn({ output: String(chunk).trim() }, "Ollama model update output");
+  });
+  child.on("error", (error) => {
+    aiModelUpdateInProgress = false;
+    app.log.error({ error }, "Ollama model update failed to start");
+  });
+  child.on("exit", (code) => {
+    void (async () => {
+      try {
+        if (code === 0) {
+          if (fallbackModel && fallbackModel !== currentModel && fallbackModel !== RECOMMENDED_AI_CHAT_MODEL) {
+            await setDotenvValue("AI_CHAT_MODEL_SECONDARY_FALLBACK", fallbackModel);
+            process.env.AI_CHAT_MODEL_SECONDARY_FALLBACK = fallbackModel;
+          }
+          if (currentModel !== RECOMMENDED_AI_CHAT_MODEL) {
+            await setDotenvValue("AI_CHAT_MODEL_FALLBACK", currentModel);
+            process.env.AI_CHAT_MODEL_FALLBACK = currentModel;
+          }
+          await setDotenvValue("AI_CHAT_MODEL", RECOMMENDED_AI_CHAT_MODEL);
+          aiConfig.AI_CHAT_MODEL = RECOMMENDED_AI_CHAT_MODEL;
+          process.env.AI_CHAT_MODEL = RECOMMENDED_AI_CHAT_MODEL;
+          app.log.info({ model: RECOMMENDED_AI_CHAT_MODEL }, "AI chat model updated");
+          void refreshLandingIntelligenceFeed(aiConfig, app.log);
+        } else {
+          app.log.error({ code, model: RECOMMENDED_AI_CHAT_MODEL }, "Ollama model update failed");
+        }
+      } finally {
+        aiModelUpdateInProgress = false;
+      }
+    })();
+  });
+
+  return { started: true, inProgress: true, model: RECOMMENDED_AI_CHAT_MODEL };
+}
+
+async function rollbackAiModel() {
+  const fallbackModel = process.env.AI_CHAT_MODEL_FALLBACK || await readDotenvValue("AI_CHAT_MODEL_FALLBACK");
+
+  if (!fallbackModel) {
+    throw new Error("No AI model rollback fallback is configured.");
+  }
+
+  const currentModel = aiConfig.AI_CHAT_MODEL;
+
+  await setDotenvValue("AI_CHAT_MODEL", fallbackModel);
+  await setDotenvValue("AI_CHAT_MODEL_FALLBACK", currentModel);
+  aiConfig.AI_CHAT_MODEL = fallbackModel;
+  process.env.AI_CHAT_MODEL = fallbackModel;
+  process.env.AI_CHAT_MODEL_FALLBACK = currentModel;
+  void refreshLandingIntelligenceFeed(aiConfig, app.log);
+
+  return { model: fallbackModel, fallbackModel: currentModel };
+}
+
+async function deleteSecondaryFallbackModel() {
+  const secondaryFallbackModel =
+    process.env.AI_CHAT_MODEL_SECONDARY_FALLBACK || await readDotenvValue("AI_CHAT_MODEL_SECONDARY_FALLBACK");
+
+  if (!secondaryFallbackModel) {
+    throw new Error("No older secondary fallback model is configured for deletion.");
+  }
+
+  if (secondaryFallbackModel === aiConfig.AI_CHAT_MODEL || secondaryFallbackModel === process.env.AI_CHAT_MODEL_FALLBACK) {
+    throw new Error("Refusing to delete the active model or primary rollback fallback.");
+  }
+
+  const child = spawn("ollama", ["rm", secondaryFallbackModel], {
+    stdio: ["ignore", "pipe", "pipe"],
+    windowsHide: true,
+  });
+
+  child.stdout.on("data", (chunk) => {
+    app.log.info({ output: String(chunk).trim() }, "Ollama fallback deletion output");
+  });
+  child.stderr.on("data", (chunk) => {
+    app.log.warn({ output: String(chunk).trim() }, "Ollama fallback deletion output");
+  });
+  child.on("error", (error) => {
+    app.log.error({ error }, "Ollama fallback deletion failed to start");
+  });
+  child.on("exit", (code) => {
+    void (async () => {
+      if (code === 0) {
+        await deleteDotenvValue("AI_CHAT_MODEL_SECONDARY_FALLBACK");
+        delete process.env.AI_CHAT_MODEL_SECONDARY_FALLBACK;
+        app.log.info({ model: secondaryFallbackModel }, "Secondary AI fallback model deleted");
+        void refreshLandingIntelligenceFeed(aiConfig, app.log);
+      } else {
+        app.log.error({ code, model: secondaryFallbackModel }, "Secondary AI fallback model deletion failed");
+      }
+    })();
+  });
+
+  return { model: secondaryFallbackModel };
+}
 
 function isRecentMetaAdsSnapshot(latestPullAt: string | null | undefined, now = new Date()) {
   if (!latestPullAt) {
@@ -545,14 +777,341 @@ function parseMetaNotificationContext(input: {
   };
 }
 
+function escapeHtml(value: string) {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function renderContactUploadPage(input: {
+  status?: string;
+  contactCount?: string;
+  rowCount?: string;
+  error?: string;
+  currentContactCount: number;
+  currentRowCount: number;
+  updatedAt: string | null;
+}) {
+  const uploadedRowCount = input.rowCount ?? String(input.currentRowCount);
+  const uploadedContactCount = input.contactCount ?? String(input.currentContactCount);
+  const availabilityNote =
+    uploadedRowCount === uploadedContactCount ? "" : ` ${escapeHtml(uploadedContactCount)} usable contacts are available.`;
+  const status =
+    input.status === "uploaded"
+      ? `<p class="contact-upload__status">Contacts updated. ${escapeHtml(uploadedRowCount)} workbook rows uploaded.${availabilityNote}</p>`
+      : input.error
+        ? `<p class="contact-upload__error">${escapeHtml(input.error)}</p>`
+        : "";
+
+  return `<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Upload Contacts - Marketing Helper AI</title>
+    <link rel="icon" href="/favicon.ico" type="image/png" />
+    <link rel="stylesheet" href="/vendor/bootstrap-icons.css" />
+    <link rel="stylesheet" href="/app.css" />
+  </head>
+  <body class="landing-body">
+    <main class="contact-upload">
+      <a class="contact-upload__back" href="/">Back to landing</a>
+      <h1>Upload Contacts</h1>
+      <p>Replace the local centre contact workbook used for email actions and RSS ownership matching.</p>
+      ${status}
+      <dl class="contact-upload__meta">
+        <div><dt>Current rows</dt><dd>${input.currentRowCount}</dd></div>
+        <div><dt>Usable contacts</dt><dd>${input.currentContactCount}</dd></div>
+        <div><dt>Current file</dt><dd>${input.updatedAt ? escapeHtml(input.updatedAt) : "Not found"}</dd></div>
+      </dl>
+      <form class="contact-upload__form" action="/contacts/upload" method="post" enctype="multipart/form-data">
+        <label>
+          <span>Excel workbook</span>
+          <input type="file" name="contacts" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required />
+        </label>
+        <button type="submit"><i class="bi bi-upload" aria-hidden="true"></i><span>Upload contacts</span></button>
+      </form>
+    </main>
+  </body>
+</html>`;
+}
+
 app.get("/", async (_request, reply) => {
   void tickWeeklySnapshotRefresh(app.log);
-  return reply.type("text/html; charset=utf-8").send(renderLandingPage());
+  const reminders = await getDueAndOverdueTasks();
+  return reply
+    .type("text/html; charset=utf-8")
+    .send(renderLandingPage({ reminders, intelligenceFeed: getLandingIntelligenceFeed() }));
+});
+
+app.get("/api/landing-intelligence", async (_request, reply) => {
+  const cached = getLandingIntelligenceFeed();
+  const isStale = !cached.generatedAt || (cached.nextRefreshAt != null && new Date(cached.nextRefreshAt).getTime() <= Date.now());
+
+  if (cached.items.length > 0 && !isStale) {
+    return reply.type("text/html; charset=utf-8").send(renderLandingIntelligenceFeed(cached));
+  }
+
+  void refreshLandingIntelligenceFeed(aiConfig, app.log);
+
+  return reply.type("text/html; charset=utf-8").send(renderLandingIntelligenceFeed(cached));
 });
 
 app.get("/readme", async (_request, reply) => {
   return reply.type("text/html; charset=utf-8").send(await renderReadmePage());
 });
+
+app.get<{ Querystring: { status?: string; contactCount?: string; rowCount?: string; error?: string } }>("/contacts/upload", async (request, reply) => {
+  const [contactStats, stat] = await Promise.all([
+    readCentreContactListStats(),
+    import("node:fs/promises")
+      .then((fs) => fs.stat(join(process.cwd(), "centre-contact-list.xlsx")))
+      .catch(() => null),
+  ]);
+
+  return reply.type("text/html; charset=utf-8").send(
+    renderContactUploadPage({
+      status: request.query?.status,
+      contactCount: request.query?.contactCount,
+      rowCount: request.query?.rowCount,
+      error: request.query?.error,
+      currentContactCount: contactStats.contacts.length,
+      currentRowCount: contactStats.rowCount,
+      updatedAt: stat?.mtime ? stat.mtime.toLocaleString("en-NZ") : null,
+    }),
+  );
+});
+
+app.post("/contacts/upload", async (request, reply) => {
+  const file = await request.file();
+
+  if (!file) {
+    reply.code(303);
+    return reply.redirect("/contacts/upload?error=Choose%20a%20contacts%20workbook%20to%20upload.");
+  }
+
+  if (extname(file.filename).toLowerCase() !== ".xlsx") {
+    reply.code(303);
+    return reply.redirect("/contacts/upload?error=Upload%20an%20.xlsx%20contacts%20workbook.");
+  }
+
+  const buffer = await file.toBuffer();
+  const tempDir = join(process.cwd(), "uploads");
+  const tempPath = join(tempDir, `contact-list-${randomUUID()}.xlsx`);
+
+  await mkdir(tempDir, { recursive: true });
+  await writeFile(tempPath, buffer);
+
+  try {
+    const parsed = await readCentreContactListStats(tempPath);
+
+    if (parsed.contacts.length === 0) {
+      reply.code(303);
+      return reply.redirect(
+        "/contacts/upload?error=The%20workbook%20must%20include%20Kindergarten%2C%20Head%20Teacher%2C%20Administrator%2C%20and%20Email%20columns.",
+      );
+    }
+
+    await writeFile(join(process.cwd(), "centre-contact-list.xlsx"), buffer);
+    void refreshLandingIntelligenceFeed(aiConfig, app.log);
+    reply.code(303);
+    return reply.redirect(
+      `/contacts/upload?status=uploaded&rowCount=${parsed.rowCount}&contactCount=${parsed.contacts.length}`,
+    );
+  } finally {
+    await unlink(tempPath).catch(() => undefined);
+  }
+});
+
+app.get<{ Querystring: { conversation?: string; group?: string } }>("/chat", async (request, reply) => {
+  const conversationId = Number.parseInt(String(request.query?.conversation ?? ""), 10);
+  const groupId = Number.parseInt(String(request.query?.group ?? ""), 10);
+  const data = await getGeneralChatPageData({
+    selectedConversationId: Number.isInteger(conversationId) ? conversationId : null,
+    selectedGroupId: Number.isInteger(groupId) && groupId > 0 ? groupId : null,
+  });
+  return reply.type("text/html; charset=utf-8").send(renderGeneralChatPage(data));
+});
+
+app.post<{ Body: { name?: string } }>("/api/general-chat/groups", async (request, reply) => {
+  const name = String(request.body?.name ?? "").trim();
+  if (!name) {
+    reply.code(400);
+    return { error: "Group name is required." };
+  }
+
+  const id = await createGeneralChatGroup(name);
+  return { id };
+});
+
+app.patch<{ Params: { id: string }; Body: { name?: string } }>(
+  "/api/general-chat/groups/:id",
+  async (request, reply) => {
+    const id = Number.parseInt(request.params.id, 10);
+    const name = String(request.body?.name ?? "").trim();
+    if (!Number.isInteger(id) || id <= 0) {
+      reply.code(400);
+      return { error: "Valid group id is required." };
+    }
+    if (!name) {
+      reply.code(400);
+      return { error: "Group name is required." };
+    }
+
+    await renameGeneralChatGroup(id, name);
+    return { ok: true };
+  },
+);
+
+app.delete<{ Params: { id: string } }>("/api/general-chat/groups/:id", async (request, reply) => {
+  const id = Number.parseInt(request.params.id, 10);
+  if (!Number.isInteger(id) || id <= 0) {
+    reply.code(400);
+    return { error: "Valid group id is required." };
+  }
+
+  await deleteGeneralChatGroup(id);
+  return { ok: true };
+});
+
+app.post<{ Body: { title?: string; groupId?: number | string | null } }>(
+  "/api/general-chat/conversations",
+  async (request) => {
+    const groupId = Number.parseInt(String(request.body?.groupId ?? ""), 10);
+    const id = await createGeneralChatConversation({
+      title: request.body?.title,
+      groupId: Number.isInteger(groupId) && groupId > 0 ? groupId : null,
+    });
+    return { id };
+  },
+);
+
+app.patch<{ Params: { id: string }; Body: { title?: string; groupId?: number | string | null } }>(
+  "/api/general-chat/conversations/:id",
+  async (request, reply) => {
+    const id = Number.parseInt(request.params.id, 10);
+    if (!Number.isInteger(id) || id <= 0) {
+      reply.code(400);
+      return { error: "Valid conversation id is required." };
+    }
+
+    const groupId =
+      request.body?.groupId === null
+        ? null
+        : Number.parseInt(String(request.body?.groupId ?? ""), 10);
+    await updateGeneralChatConversation(id, {
+      title: request.body?.title,
+      groupId:
+        request.body?.groupId === undefined
+          ? undefined
+          : groupId === null
+            ? null
+            : Number.isInteger(groupId) && groupId > 0
+              ? groupId
+              : null,
+    });
+    return { ok: true };
+  },
+);
+
+app.delete<{ Params: { id: string } }>("/api/general-chat/conversations/:id", async (request, reply) => {
+  const id = Number.parseInt(request.params.id, 10);
+  if (!Number.isInteger(id) || id <= 0) {
+    reply.code(400);
+    return { error: "Valid conversation id is required." };
+  }
+
+  await deleteGeneralChatConversation(id);
+  return { ok: true };
+});
+
+app.delete<{ Params: { id: string } }>("/api/general-chat/messages/:id", async (request, reply) => {
+  const id = Number.parseInt(request.params.id, 10);
+  if (!Number.isInteger(id) || id <= 0) {
+    reply.code(400);
+    return { error: "Valid message id is required." };
+  }
+
+  const result = await deleteGeneralChatMessage(id);
+  if (!result) {
+    reply.code(404);
+    return { error: "Message not found." };
+  }
+
+  return result;
+});
+
+app.post<{ Params: { id: string }; Body: { prompt?: string } }>(
+  "/api/general-chat/conversations/:id/stream",
+  async (request, reply) => {
+    const conversationId = Number.parseInt(request.params.id, 10);
+    const prompt = String(request.body?.prompt ?? "").trim();
+
+    if (!Number.isInteger(conversationId) || conversationId <= 0) {
+      reply.code(400);
+      return { error: "Valid conversation id is required." };
+    }
+
+    if (!prompt) {
+      reply.code(400);
+      return { error: "Prompt is required." };
+    }
+
+    if (prompt.length > 6000) {
+      reply.code(400);
+      return { error: "Prompt is too long. Keep it under 6,000 characters." };
+    }
+
+    const userMessage = await addGeneralChatMessage(conversationId, "user", prompt);
+    const messages = await buildGeneralChatMessages(conversationId);
+
+    reply.raw.writeHead(200, {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+    });
+
+    const writeEvent = (event: string, data: unknown) => {
+      reply.raw.write(`event: ${event}\n`);
+      reply.raw.write(`data: ${JSON.stringify(data)}\n\n`);
+    };
+
+    let answer = "";
+    try {
+      writeEvent("saved", { role: "user", messageId: userMessage.id, messageCount: userMessage.messageCount });
+
+      for await (const chunk of streamLocalChat(aiConfig, messages)) {
+        answer += chunk;
+        writeEvent("chunk", { chunk });
+      }
+
+      let messageCount = userMessage.messageCount;
+      if (answer.trim()) {
+        const assistantMessage = await addGeneralChatMessage(conversationId, "assistant", answer);
+        messageCount = assistantMessage.messageCount;
+        writeEvent("saved", {
+          role: "assistant",
+          messageId: assistantMessage.id,
+          messageCount: assistantMessage.messageCount,
+        });
+      }
+
+      writeEvent("done", { messageCount });
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Local AI request failed.";
+      app.log.warn({ error }, "General chat stream failed");
+      writeEvent("error", { error: message });
+    } finally {
+      reply.raw.end();
+    }
+  },
+);
 
 app.get<{ Querystring: { centre?: string; window?: string; panel?: string; sort?: string; waitlistSection?: string; googleAnalyticsSection?: string; gaRange?: string; gaFrom?: string; gaTo?: string; gaFromMonth?: string; gaFromYear?: string; gaToMonth?: string; gaToYear?: string; metaRefreshed?: string; integrationError?: string; demo?: string } }>("/app", async (request, reply) => {
   if (!isDemoRequest(request.query)) {
@@ -860,22 +1419,520 @@ app.get<{ Querystring: { panel?: string; window?: string; metaAdsFilter?: string
     }));
 });
 
-app.get<{ Querystring: { page?: string; window?: string; metaAdsFilter?: string } }>("/api/comms/postmark/messages", async (request, reply) => {
+// --- Tasks & Projects ----------------------------------------------------
+
+function parsePositiveInt(value: unknown): number | null {
+  const n = Number.parseInt(String(value ?? ""), 10);
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
+
+function toNullableId(value: unknown): number | null {
+  return parsePositiveInt(value);
+}
+
+function sanitizeAttachmentName(value: string | undefined): string {
+  const name = basename(value || "attachment").replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_").trim();
+  return name.length > 0 ? name.slice(0, 240) : "attachment";
+}
+
+function attachmentDownloadHeader(filename: string): string {
+  const fallback = filename.replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "_");
+  return `attachment; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
+}
+
+function attachmentPath(storagePath: string): string {
+  return join(process.cwd(), storagePath);
+}
+
+app.get<{ Querystring: { panel?: string; project?: string; task?: string; demo?: string } }>(
+  "/tasks",
+  async (request, reply) => {
+    const demo = resolveDemo(request, reply, request.query);
+    const selectedTaskId = parsePositiveInt(request.query?.task);
+    const selectedProjectId = parsePositiveInt(request.query?.project);
+
+    // A ?task= link (e.g. from the landing reminders) implies the detail panel.
+    const focusPanelId =
+      resolveTasksFocusPanelId(request.query?.panel) ??
+      (selectedTaskId != null ? "task-detail" : selectedProjectId != null ? "projects" : null);
+
+    const [tasks, projects, members] = await Promise.all([
+      listTasks(),
+      listProjects(),
+      listMembers(),
+    ]);
+
+    const selectedTask = selectedTaskId != null ? await getTask(selectedTaskId) : null;
+    const selectedProject =
+      selectedProjectId != null ? await getProjectRollup(selectedProjectId) : null;
+    const selectedTaskProject =
+      selectedTask?.projectId != null ? await getProjectRollup(selectedTask.projectId) : null;
+
+    // The contact autocomplete is only needed when the email compose editor is
+    // on screen (a task is selected). Skip the XLSX/member read otherwise.
+    const contactSuggestions =
+      selectedTask != null && !demo ? await listEmailContactSuggestions() : [];
+
+    return reply.type("text/html; charset=utf-8").send(
+      renderTasksAppShell({
+        focusPanelId,
+        demo,
+        tasks,
+        projects,
+        members,
+        selectedTask,
+        selectedProject,
+        selectedTaskProject,
+        contactSuggestions,
+      }),
+    );
+  },
+);
+
+// All mutations are JSON POSTs (matching the existing notes/notifications
+// convention). They reply with { ok: true } and the client reloads /tasks so the
+// server re-renders the new state. Demo mode never reaches these (the client
+// short-circuits to a reload), but they stay safe behind the local-host guard.
+
+app.post<{ Body: { title?: string; dueDate?: string; estimatedMinutes?: string; projectId?: string; taskGroupId?: string; assigneeId?: string; centreKey?: string } }>(
+  "/api/tasks",
+  async (request, reply) => {
+    const title = String(request.body?.title ?? "").trim();
+    if (!title) {
+      reply.code(400);
+      return { error: "Task title is required." };
+    }
+    const id = await createTask({
+      title,
+      dueDate: request.body?.dueDate ?? null,
+      estimatedMinutes: request.body?.estimatedMinutes != null ? Number(request.body.estimatedMinutes) : null,
+      projectId: toNullableId(request.body?.projectId),
+      taskGroupId: toNullableId(request.body?.taskGroupId),
+      assigneeId: toNullableId(request.body?.assigneeId),
+      centreKey: toNullableId(request.body?.centreKey),
+    });
+    return reply.code(201).send({ ok: true, id });
+  },
+);
+
+app.post<{ Params: { id: string }; Body: { title?: string; description?: string; dueDate?: string; estimatedMinutes?: string; projectId?: string; taskGroupId?: string; assigneeId?: string; centreKey?: string } }>(
+  "/api/tasks/:id",
+  async (request, reply) => {
+    const id = parsePositiveInt(request.params.id);
+    if (id == null) {
+      reply.code(400);
+      return { error: "Valid task id is required." };
+    }
+    const title = String(request.body?.title ?? "").trim();
+    if (!title) {
+      reply.code(400);
+      return { error: "Task title is required." };
+    }
+    await updateTask(id, {
+      title,
+      description: request.body?.description ?? null,
+      dueDate: request.body?.dueDate ?? null,
+      estimatedMinutes: request.body?.estimatedMinutes != null ? Number(request.body.estimatedMinutes) : null,
+      projectId: toNullableId(request.body?.projectId),
+      taskGroupId: toNullableId(request.body?.taskGroupId),
+      assigneeId: toNullableId(request.body?.assigneeId),
+      centreKey: toNullableId(request.body?.centreKey),
+    });
+    return { ok: true };
+  },
+);
+
+app.post<{ Params: { id: string }; Body: { status?: string } }>("/api/tasks/:id/status", async (request, reply) => {
+  const id = parsePositiveInt(request.params.id);
+  if (id == null) {
+    reply.code(400);
+    return { error: "Valid task id is required." };
+  }
+  await setTaskStatus(id, String(request.body?.status ?? ""));
+  return { ok: true };
+});
+
+app.post<{ Params: { id: string } }>("/api/tasks/:id/timer/start", async (request, reply) => {
+  const id = parsePositiveInt(request.params.id);
+  if (id == null) {
+    reply.code(400);
+    return { error: "Valid task id is required." };
+  }
+  await startTaskTimer(id);
+  return { ok: true };
+});
+
+app.post<{ Params: { id: string } }>("/api/tasks/:id/timer/stop", async (request, reply) => {
+  const id = parsePositiveInt(request.params.id);
+  if (id == null) {
+    reply.code(400);
+    return { error: "Valid task id is required." };
+  }
+  await stopTaskTimer(id);
+  return { ok: true };
+});
+
+app.post<{ Params: { id: string }; Body: { minutes?: string | number; note?: string } }>(
+  "/api/tasks/:id/time",
+  async (request, reply) => {
+    const id = parsePositiveInt(request.params.id);
+    if (id == null) {
+      reply.code(400);
+      return { error: "Valid task id is required." };
+    }
+    const minutes = Number(request.body?.minutes ?? 0);
+    if (!Number.isFinite(minutes) || minutes <= 0) {
+      reply.code(400);
+      return { error: "Logged minutes must be a positive number." };
+    }
+    await logTaskTime(id, minutes, request.body?.note ?? null);
+    return { ok: true };
+  },
+);
+
+app.post<{ Params: { id: string } }>("/api/tasks/:id/delete", async (request, reply) => {
+  const id = parsePositiveInt(request.params.id);
+  if (id == null) {
+    reply.code(400);
+    return { error: "Valid task id is required." };
+  }
+  await deleteTask(id);
+  return { ok: true };
+});
+
+// Remembers the task's email draft (subject/body) and the recipient used, so the
+// compose editor pre-fills next time. The actual send is a client-side mailto:
+// handoff to Outlook — this only persists state.
+app.post<{ Params: { id: string }; Body: { to?: string; toName?: string; subject?: string; body?: string } }>(
+  "/api/tasks/:id/email",
+  async (request, reply) => {
+    const id = parsePositiveInt(request.params.id);
+    if (id == null) {
+      reply.code(400);
+      return { error: "Valid task id is required." };
+    }
+    await saveTaskEmailDraft(id, {
+      to: request.body?.to ?? null,
+      toName: request.body?.toName ?? null,
+      subject: request.body?.subject ?? null,
+      body: request.body?.body ?? null,
+    });
+    return { ok: true };
+  },
+);
+
+app.post<{ Params: { id: string } }>(
+  "/api/tasks/:id/attachments",
+  async (request, reply) => {
+    const id = parsePositiveInt(request.params.id);
+    if (id == null) {
+      reply.code(400);
+      return { error: "Valid task id is required." };
+    }
+    const task = await getTask(id);
+    if (!task) {
+      reply.code(404);
+      return { error: "Task not found." };
+    }
+
+    const upload = await request.file();
+    if (!upload) {
+      reply.code(400);
+      return { error: "Choose a file to attach." };
+    }
+
+    const originalName = sanitizeAttachmentName(upload.filename);
+    const extension = extname(originalName).slice(0, 32);
+    const storedName = `${randomUUID()}${extension}`;
+    const storagePath = join(TASK_ATTACHMENT_DIR, storedName);
+    const absolutePath = attachmentPath(storagePath);
+    const bytes = await upload.toBuffer();
+
+    await mkdir(join(process.cwd(), TASK_ATTACHMENT_DIR), { recursive: true });
+    await writeFile(absolutePath, bytes, { flag: "wx" });
+
+    try {
+      const attachmentId = await createTaskAttachment(id, {
+        originalName,
+        storedName,
+        storagePath,
+        mimeType: upload.mimetype,
+        sizeBytes: bytes.length,
+      });
+      return reply.code(201).send({ ok: true, id: attachmentId });
+    } catch (error) {
+      await unlink(absolutePath).catch(() => undefined);
+      throw error;
+    }
+  },
+);
+
+app.get<{ Params: { id: string; attachmentId: string } }>(
+  "/api/tasks/:id/attachments/:attachmentId/download",
+  async (request, reply) => {
+    const taskId = parsePositiveInt(request.params.id);
+    const attachmentId = parsePositiveInt(request.params.attachmentId);
+    if (taskId == null || attachmentId == null) {
+      reply.code(400);
+      return { error: "Valid task and attachment ids are required." };
+    }
+    const attachment = await getTaskAttachment(taskId, attachmentId);
+    if (!attachment) {
+      reply.code(404);
+      return { error: "Attachment not found." };
+    }
+
+    const file = await readFile(attachmentPath(attachment.storagePath));
+    return reply
+      .type(attachment.mimeType || "application/octet-stream")
+      .header("Content-Length", String(attachment.sizeBytes))
+      .header("Content-Disposition", attachmentDownloadHeader(attachment.originalName))
+      .send(file);
+  },
+);
+
+app.post<{ Params: { id: string; attachmentId: string } }>(
+  "/api/tasks/:id/attachments/:attachmentId/delete",
+  async (request, reply) => {
+    const taskId = parsePositiveInt(request.params.id);
+    const attachmentId = parsePositiveInt(request.params.attachmentId);
+    if (taskId == null || attachmentId == null) {
+      reply.code(400);
+      return { error: "Valid task and attachment ids are required." };
+    }
+    const attachment = await deleteTaskAttachment(taskId, attachmentId);
+    if (attachment) {
+      await unlink(attachmentPath(attachment.storagePath)).catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== "ENOENT") throw error;
+      });
+    }
+    return { ok: true };
+  },
+);
+
+app.post<{ Params: { id: string }; Body: { projectId?: string; taskGroupId?: string } }>(
+  "/api/tasks/:id/attach",
+  async (request, reply) => {
+    const id = parsePositiveInt(request.params.id);
+    if (id == null) {
+      reply.code(400);
+      return { error: "Valid task id is required." };
+    }
+    await attachTaskToProject(id, toNullableId(request.body?.projectId), toNullableId(request.body?.taskGroupId));
+    return { ok: true };
+  },
+);
+
+app.post<{ Params: { id: string }; Body: { label?: string } }>(
+  "/api/tasks/:id/checklist",
+  async (request, reply) => {
+    const id = parsePositiveInt(request.params.id);
+    const label = String(request.body?.label ?? "").trim();
+    if (id == null || !label) {
+      reply.code(400);
+      return { error: "Task id and checklist label are required." };
+    }
+    await addChecklistItem(id, label);
+    return reply.code(201).send({ ok: true });
+  },
+);
+
+app.post<{ Params: { id: string; itemId: string } }>(
+  "/api/tasks/:id/checklist/:itemId/toggle",
+  async (request, reply) => {
+    const itemId = parsePositiveInt(request.params.itemId);
+    if (itemId == null) {
+      reply.code(400);
+      return { error: "Valid checklist item id is required." };
+    }
+    await toggleChecklistItem(itemId);
+    return { ok: true };
+  },
+);
+
+app.post<{ Params: { id: string; itemId: string } }>(
+  "/api/tasks/:id/checklist/:itemId/delete",
+  async (request, reply) => {
+    const itemId = parsePositiveInt(request.params.itemId);
+    if (itemId == null) {
+      reply.code(400);
+      return { error: "Valid checklist item id is required." };
+    }
+    await deleteChecklistItem(itemId);
+    return { ok: true };
+  },
+);
+
+app.post<{ Body: { id?: string; name?: string; description?: string; status?: string; startDate?: string; targetDate?: string; centreKey?: string } }>(
+  "/api/projects",
+  async (request, reply) => {
+    const name = String(request.body?.name ?? "").trim();
+    if (!name) {
+      reply.code(400);
+      return { error: "Project name is required." };
+    }
+    const input = {
+      name,
+      description: request.body?.description ?? null,
+      status: request.body?.status,
+      startDate: request.body?.startDate ?? null,
+      targetDate: request.body?.targetDate ?? null,
+      centreKey: toNullableId(request.body?.centreKey),
+    };
+    const existingId = parsePositiveInt(request.body?.id);
+    if (existingId != null) {
+      await updateProject(existingId, input);
+      return { ok: true, id: existingId };
+    }
+    const id = await createProject(input);
+    return reply.code(201).send({ ok: true, id });
+  },
+);
+
+app.post<{ Params: { id: string }; Body: { name?: string } }>(
+  "/api/projects/:id/groups",
+  async (request, reply) => {
+    const projectId = parsePositiveInt(request.params.id);
+    const name = String(request.body?.name ?? "").trim();
+    if (projectId == null || !name) {
+      reply.code(400);
+      return { error: "Project id and group name are required." };
+    }
+    const id = await createTaskGroup(projectId, name);
+    return reply.code(201).send({ ok: true, id });
+  },
+);
+
+app.post<{ Params: { id: string }; Body: { groupId?: string } }>(
+  "/api/projects/:id/groups/delete",
+  async (request, reply) => {
+    const groupId = parsePositiveInt(request.body?.groupId);
+    if (groupId == null) {
+      reply.code(400);
+      return { error: "Valid group id is required." };
+    }
+    await deleteTaskGroup(groupId);
+    return { ok: true };
+  },
+);
+
+app.post<{ Params: { id: string }; Body: { memberId?: string | number; projectRole?: string; remove?: boolean } }>(
+  "/api/projects/:id/members",
+  async (request, reply) => {
+    const projectId = parsePositiveInt(request.params.id);
+    const memberId = parsePositiveInt(request.body?.memberId);
+    if (projectId == null || memberId == null) {
+      reply.code(400);
+      return { error: "Project id and member id are required." };
+    }
+    if (request.body?.remove === true) {
+      await removeProjectMember(projectId, memberId);
+    } else {
+      await addProjectMember(projectId, memberId, request.body?.projectRole ?? null);
+    }
+    return { ok: true };
+  },
+);
+
+app.post<{ Params: { id: string } }>("/api/projects/:id/delete", async (request, reply) => {
+  const id = parsePositiveInt(request.params.id);
+  if (id == null) {
+    reply.code(400);
+    return { error: "Valid project id is required." };
+  }
+  await deleteProject(id);
+  return { ok: true };
+});
+
+app.post<{ Body: { id?: string; name?: string; email?: string; role?: string; active?: boolean; toggleActive?: boolean } }>(
+  "/api/members",
+  async (request, reply) => {
+    const existingId = parsePositiveInt(request.body?.id);
+
+    // The active toggle reuses this endpoint with { id, active, toggleActive }.
+    if (existingId != null && request.body?.toggleActive === true) {
+      await setMemberActive(existingId, request.body?.active === true);
+      return { ok: true, id: existingId };
+    }
+
+    const name = String(request.body?.name ?? "").trim();
+    if (!name) {
+      reply.code(400);
+      return { error: "Member name is required." };
+    }
+    const input = {
+      name,
+      email: request.body?.email ?? null,
+      role: request.body?.role ?? null,
+      ...(request.body?.active === undefined ? {} : { active: request.body.active === true }),
+    };
+    if (existingId != null) {
+      await updateMember(existingId, input);
+      return { ok: true, id: existingId };
+    }
+    const id = await createMember(input);
+    return reply.code(201).send({ ok: true, id });
+  },
+);
+
+app.post<{ Params: { id: string }; Body: { active?: boolean; toggleActive?: boolean } }>(
+  "/api/members/:id",
+  async (request, reply) => {
+    const id = parsePositiveInt(request.params.id);
+    if (id == null) {
+      reply.code(400);
+      return { error: "Valid member id is required." };
+    }
+    if (request.body?.toggleActive === true) {
+      await setMemberActive(id, request.body?.active === true);
+      return { ok: true };
+    }
+    reply.code(400);
+    return { error: "Unsupported member update." };
+  },
+);
+
+app.post<{ Params: { id: string } }>("/api/members/:id/delete", async (request, reply) => {
+  const id = parsePositiveInt(request.params.id);
+  if (id == null) {
+    reply.code(400);
+    return { error: "Valid member id is required." };
+  }
+  await deleteMember(id);
+  return { ok: true };
+});
+
+app.get<{ Querystring: { page?: string; window?: string; metaAdsFilter?: string; centreKey?: string; category?: string; recipient?: string } }>("/api/comms/postmark/messages", async (request, reply) => {
   try {
     const selectedWindowKey = resolveWindowKey(request.query?.window);
     const windowStartDate = resolveWindowStartDate(new Date(), selectedWindowKey);
     const metaAdsFilter = resolveCommsMetaAdsFilter(request.query?.metaAdsFilter);
+    const rawCentreKey = Number(request.query?.centreKey);
+    const centreKeyFilter = Number.isSafeInteger(rawCentreKey) && rawCentreKey > 0 ? rawCentreKey : null;
+    const officeStaffFilter = request.query?.category === "office-staff";
+    const recipientFilter = (request.query?.recipient ?? "").trim().slice(0, 320) || null;
     const metaAdvertCentreKeys = metaAdsFilter === "active-recent"
       ? getCurrentOrRecentMetaAdvertCentreKeys(await readMetaAdsDashboardData({ fromDate: windowStartDate, toDate: new Date() }))
       : null;
     const dashboardData = await readPostmarkDashboardData({
       messagePage: Number(request.query?.page ?? 1),
       fromDate: windowStartDate,
-      centreKeys: metaAdvertCentreKeys,
+      centreKeys: centreKeyFilter != null ? [centreKeyFilter] : metaAdvertCentreKeys,
+      category: officeStaffFilter ? "office-staff" : null,
+      recipient: recipientFilter,
     });
+    const filterLabel = recipientFilter
+      ? recipientFilter
+      : officeStaffFilter
+        ? "Office staff"
+        : centreKeyFilter != null
+          ? dashboardData.recentMessages.find((message) => message.centreKey === centreKeyFilter)?.centreName
+            ?? dashboardData.centreActivity.find((centre) => centre.centreKey === centreKeyFilter)?.centreName
+            ?? "Selected centre"
+          : null;
 
     return reply.send({
-      html: renderPostmarkMessageList(dashboardData),
+      html: renderPostmarkMessageList(dashboardData, filterLabel ? { label: filterLabel } : null),
       page: dashboardData.messagePage,
       total: dashboardData.relevantMessageCount,
     });
@@ -1298,6 +2355,57 @@ app.post<{
   } catch (error) {
     app.log.warn({ error }, "Communications AI stream unavailable; using built-in summary fallback");
     writeEvent("chunk", { chunk: buildBuiltinCommsAnswer(context, prompt) });
+    writeEvent("done", {});
+  } finally {
+    reply.raw.end();
+  }
+});
+
+app.post<{
+  Body: {
+    prompt?: string;
+    messages?: AiChatHistoryMessageInput[];
+    demo?: string | boolean;
+  };
+}>("/api/tasks/ai/chat/stream", async (request, reply) => {
+  const prompt = String(request.body?.prompt ?? "").trim();
+
+  if (!prompt || prompt.length > 2000) {
+    reply.code(400);
+    return { error: !prompt ? "Prompt is required." : "Prompt is too long. Keep it under 2,000 characters." };
+  }
+
+  const [tasks, projects, members] = await Promise.all([
+    listTasks(),
+    listProjects(),
+    listMembers(),
+  ]);
+  const context = buildTasksAiDashboardContext({ tasks, projects, members });
+
+  reply.raw.writeHead(200, {
+    "Content-Type": "text/event-stream; charset=utf-8",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+  });
+
+  const writeEvent = (event: string, data: unknown) => {
+    reply.raw.write(`event: ${event}\n`);
+    reply.raw.write(`data: ${JSON.stringify(data)}\n\n`);
+  };
+
+  try {
+    if (aiConfig.AI_PROVIDER === "builtin") {
+      writeEvent("chunk", { chunk: buildBuiltinTasksAnswer(context, prompt) });
+    } else {
+      for await (const chunk of streamLocalChat(aiConfig, buildTasksAiChatMessages(context, prompt, request.body?.messages))) {
+        writeEvent("chunk", { chunk });
+      }
+    }
+
+    writeEvent("done", {});
+  } catch (error) {
+    app.log.warn({ error }, "Tasks AI stream unavailable; using built-in summary fallback");
+    writeEvent("chunk", { chunk: buildBuiltinTasksAnswer(context, prompt) });
     writeEvent("done", {});
   } finally {
     reply.raw.end();
@@ -1847,6 +2955,78 @@ app.get("/actions/snapshot-status", async (_request, reply) => {
   return reply.type("application/json; charset=utf-8").send(snapshotState);
 });
 
+// Restarts the whole app: exits the process so the supervisor (the
+// "Marketing Helper AI Server" scheduled task, or run-build-persistent) rebuilds
+// and respawns a fresh server. The supervisor only restarts on a NON-ZERO exit
+// code — a clean exit(0) would stop it — so we exit(1) after replying.
+app.post("/actions/restart", async (_request, reply) => {
+  reply
+    .type("application/json; charset=utf-8")
+    .send({ ok: true, restarting: true });
+
+  // Let the response flush before tearing the process down.
+  setTimeout(() => {
+    app.log.warn("Restart requested from landing page — exiting for supervisor respawn");
+    void app
+      .close()
+      .catch(() => undefined)
+      .finally(() => {
+        void prisma.$disconnect().catch(() => undefined);
+        process.exit(1);
+      });
+  }, 250);
+
+  return reply;
+});
+
+app.post("/actions/update-ai-model", async (_request, reply) => {
+  try {
+    const result = await updateRecommendedAiModel();
+
+    return reply.type("application/json; charset=utf-8").send({ ok: true, ...result });
+  } catch (error) {
+    app.log.error({ error }, "AI model update request failed");
+    reply.code(500);
+
+    return reply.type("application/json; charset=utf-8").send({
+      ok: false,
+      error: error instanceof Error ? error.message : "AI model update failed.",
+    });
+  }
+});
+
+app.post("/actions/rollback-ai-model", async (_request, reply) => {
+  try {
+    const result = await rollbackAiModel();
+
+    return reply.type("application/json; charset=utf-8").send({ ok: true, ...result });
+  } catch (error) {
+    app.log.error({ error }, "AI model rollback request failed");
+    reply.code(400);
+
+    return reply.type("application/json; charset=utf-8").send({
+      ok: false,
+      error: error instanceof Error ? error.message : "AI model rollback failed.",
+    });
+  }
+});
+
+app.post("/actions/delete-ai-rollback-model", async (_request, reply) => {
+  try {
+    const result = await deleteSecondaryFallbackModel();
+
+    return reply.type("application/json; charset=utf-8").send({ ok: true, started: true, ...result });
+  } catch (error) {
+    app.log.error({ error }, "AI secondary fallback deletion request failed");
+    reply.code(400);
+
+    return reply.type("application/json; charset=utf-8").send({
+      ok: false,
+      error: error instanceof Error ? error.message : "AI secondary fallback deletion failed.",
+    });
+  }
+});
+
 app.get("/app.css", async (_request, reply) => {
   const css = await readFile(join(process.cwd(), "src", "ui", "app.css"), "utf8");
 
@@ -2054,6 +3234,7 @@ async function start() {
   logIntegrationConfigWarnings();
   void checkPostmarkWebhookOnStartup();
   startCloudflarePostmarkSyncLoop();
+  void startLandingIntelligenceFeedLoop(aiConfig, app.log);
 
   if (mailchimpConfigStatus.isConfigured) {
     void ensureMailchimpSnapshotIfConfigured();

@@ -157,6 +157,8 @@ export async function readPostmarkDashboardData(options: {
   messagePage?: number;
   fromDate?: Date;
   centreKeys?: number[] | null;
+  category?: "office-staff" | null;
+  recipient?: string | null;
 } = {}): Promise<PostmarkDashboardData> {
   const eventWhere = options.fromDate ? { occurredAt: { gte: options.fromDate } } : undefined;
   const [events, centres, latestActivity, webhookCheck] = await Promise.all([
@@ -179,15 +181,16 @@ export async function readPostmarkDashboardData(options: {
   const centreKeyFilter = Array.isArray(options.centreKeys)
     ? new Set(options.centreKeys)
     : null;
+  const officeStaffFilter = options.category === "office-staff";
+  const recipientFilter = options.recipient?.trim().toLowerCase() || null;
   const relevantEvents = events.flatMap((event): RelevantEvent[] => {
     const centre = resolveCentre(event, centres);
 
+    // Classify the event. Anything that is neither a centre match nor an
+    // office-staff recipient is external test activity and is excluded.
+    let relevant: RelevantEvent;
     if (centre) {
-      if (centreKeyFilter && !centreKeyFilter.has(centre.centreKey)) {
-        return [];
-      }
-
-      return [{
+      relevant = {
         messageId: event.messageId,
         eventType: event.eventType,
         recipient: event.recipient,
@@ -196,21 +199,38 @@ export async function readPostmarkDashboardData(options: {
         centreKey: centre.centreKey,
         centreName: centre.centreName,
         category: "centre",
-      }];
+      };
+    } else if (isOfficeStaffRecipient(event.recipient)) {
+      relevant = {
+        messageId: event.messageId,
+        eventType: event.eventType,
+        recipient: event.recipient,
+        tag: event.tag,
+        occurredAt: event.occurredAt,
+        centreKey: null,
+        centreName: null,
+        category: "office-staff",
+      };
+    } else {
+      return [];
     }
 
-    return isOfficeStaffRecipient(event.recipient)
-      ? [{
-          messageId: event.messageId,
-          eventType: event.eventType,
-          recipient: event.recipient,
-          tag: event.tag,
-          occurredAt: event.occurredAt,
-          centreKey: null,
-          centreName: null,
-          category: "office-staff",
-        }]
-      : [];
+    // A centre filter narrows to that centre's emails only (office-staff excluded).
+    if (centreKeyFilter && (relevant.centreKey == null || !centreKeyFilter.has(relevant.centreKey))) {
+      return [];
+    }
+
+    // An office-staff filter shows the office-staff group only.
+    if (officeStaffFilter && relevant.category !== "office-staff") {
+      return [];
+    }
+
+    // A recipient filter narrows to a single email address.
+    if (recipientFilter && (relevant.recipient?.toLowerCase() ?? "") !== recipientFilter) {
+      return [];
+    }
+
+    return [relevant];
   });
   const recentMessages = new Map<string, PostmarkMessageView>();
 

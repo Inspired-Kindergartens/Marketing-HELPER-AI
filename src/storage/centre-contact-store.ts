@@ -9,6 +9,11 @@ export type CentreContact = {
   email: string;
 };
 
+export type CentreContactListStats = {
+  contacts: CentreContact[];
+  rowCount: number;
+};
+
 type ZipEntry = {
   name: string;
   method: number;
@@ -120,9 +125,9 @@ function parseSheetRows(xml: string, sharedStrings: string[]) {
   return [...xml.matchAll(/<row\b[^>]*>([\s\S]*?)<\/row>/g)].map((rowMatch) => {
     const row: string[] = [];
 
-    for (const cellMatch of rowMatch[1].matchAll(/<c\b([^>]*)>([\s\S]*?)<\/c>/g)) {
+    for (const cellMatch of rowMatch[1].matchAll(/<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)) {
       const attributes = cellMatch[1];
-      const cellBody = cellMatch[2];
+      const cellBody = cellMatch[2] ?? "";
       const index = columnIndex(readAttribute(attributes, "r"));
       const type = readAttribute(attributes, "t");
       const rawValue = cellBody.match(/<v>([\s\S]*?)<\/v>/)?.[1] ?? "";
@@ -180,6 +185,10 @@ export function matchCentreContact(serviceName: string, contacts: readonly Centr
 }
 
 export async function readCentreContactList(filePath = join(process.cwd(), "centre-contact-list.xlsx")) {
+  return (await readCentreContactListStats(filePath)).contacts;
+}
+
+export async function readCentreContactListStats(filePath = join(process.cwd(), "centre-contact-list.xlsx")) {
   try {
     const workbook = await readFile(filePath);
     const entries = readZipEntries(workbook);
@@ -192,11 +201,11 @@ export async function readCentreContactList(filePath = join(process.cwd(), "cent
     const emailIndex = headers.indexOf("Email");
 
     if (kindergartenIndex < 0 || headTeacherIndex < 0 || administratorIndex < 0 || emailIndex < 0) {
-      return [];
+      return { contacts: [], rowCount: 0 };
     }
 
-    return rows
-      .slice(1)
+    const dataRows = rows.slice(1).filter((row) => row.some((cell) => (cell ?? "").trim()));
+    const contacts = dataRows
       .map((row) => ({
         kindergarten: (row[kindergartenIndex] ?? "").trim(),
         headTeacher: (row[headTeacherIndex] ?? "").trim(),
@@ -204,7 +213,9 @@ export async function readCentreContactList(filePath = join(process.cwd(), "cent
         email: (row[emailIndex] ?? "").trim(),
       }))
       .filter((contact) => contact.kindergarten && contact.email);
+
+    return { contacts, rowCount: dataRows.length };
   } catch {
-    return [];
+    return { contacts: [], rowCount: 0 };
   }
 }

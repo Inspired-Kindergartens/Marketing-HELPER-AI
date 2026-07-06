@@ -43,6 +43,7 @@ export const DEMO_FORMSTACK_DASHBOARD: FormstackDashboardData = {
     {
       formstackId: "demo-form-1",
       name: "Brookfield Tour Request",
+      formUrl: "https://www.formstack.com/forms/demo-brookfield-tour-request",
       folder: "Enquiries",
       centreKey: 9001,
       centreName: "Brookfield Kindergarten",

@@ -120,6 +120,15 @@ npm test
 npm run typecheck
 ```
 
+## Main Pages
+
+The landing page links to the main local tools:
+
+- **Marketing** (`/app`) - Infocare analytics, waitlist quality, Meta Ads, Google Analytics, and the dashboard-specific AI panel.
+- **Tasks** (`/tasks`) - local task and project tracking.
+- **General Chat** (`/chat`) - a general-purpose local AI chat with retained conversations and groups.
+- **Communications** (`/comms`) - Postmark, Mailchimp, Formstack, and communications-focused AI help.
+
 ## Environment
 
 The app reads `.env` through `dotenv`. Required core values are:
@@ -162,7 +171,7 @@ The app is split into five panels:
 - **Waitlist Quality** - waitlist age, staleness, and age-profile checks.
 - **META Ads** - active and recent advertising coverage, delivery state, spend, and recommendations.
 - **Google Analytics** - website traffic totals and page-level interest.
-- **AI Chat** - currently a generated plain-language summary for the selected centre. The prompt box is present but disabled.
+- **AI Chat** - selected-centre guidance and follow-up questions grounded in the current dashboard context.
 
 ## Infocare Analytics
 
@@ -588,6 +597,28 @@ The panel shows a generated summary for the selected centre and includes an inte
 - latest stored Meta Ads notes for the selected centre.
 
 The composer posts to `/api/ai/chat`, sends the selected centre and selected window, and keeps a short in-browser history so follow-up questions have conversational context. Answers are grounded in a fresh dashboard context built on each request from Infocare analytics, Meta Ads, Google Analytics, and centre-level recommendation data.
+
+## General Chat Page
+
+`/chat` is a standalone general-help chat page for Beep Beep. It is not grounded in a selected centre or marketing dashboard context. Use it for general writing, planning, explanation, troubleshooting, and technical help.
+
+General Chat persists its data in Postgres:
+
+- `GeneralChatGroup` stores conversation groups.
+- `GeneralChatConversation` stores each saved conversation and its group assignment.
+- `GeneralChatMessage` stores user and assistant messages.
+
+The page supports:
+
+- creating conversations,
+- continuing existing conversations,
+- creating, renaming, filtering by, and deleting groups,
+- deleting individual messages,
+- live message-count updates while a streamed answer is saved.
+
+Deleting a group keeps its conversations and moves them out of that group. Deleting a message removes only that message from the retained conversation.
+
+The installed local model currently reports a `131,072` token context length for `llama3.1:8b`. The app stores full conversations, but it does not send every retained message forever. For long threads, it sends a conservative latest working window of about `24,000` characters plus the system prompt so the local model remains responsive and avoids context-limit failures.
 
 Local AI configuration is controlled through `.env`:
 

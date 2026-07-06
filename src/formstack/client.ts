@@ -15,6 +15,14 @@ export class FormstackApiError extends Error {
 export type FormstackFormApiRecord = {
   id: string | number;
   name?: string;
+  url?: string | null;
+  formUrl?: string | null;
+  form_url?: string | null;
+  publicUrl?: string | null;
+  public_url?: string | null;
+  viewUrl?: string | null;
+  view_url?: string | null;
+  link?: string | null;
   folder?: string | number | { name?: string } | null;
   submissions?: number | string;
   submissionsCount?: number | string;

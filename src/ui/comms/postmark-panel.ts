@@ -72,14 +72,24 @@ function messageCountLabel(data: PostmarkDashboardData) {
   return count === 0 ? "No relevant messages" : `Showing ${first}-${last} of ${count} relevant messages`;
 }
 
-export function renderPostmarkMessageList(data: PostmarkDashboardData) {
+export type ActiveMessageFilter = { label: string };
+
+export function renderPostmarkMessageList(data: PostmarkDashboardData, activeFilter?: ActiveMessageFilter | null) {
   const page = data.messagePage ?? 1;
   const pageCount = data.messagePageCount ?? 1;
   const hasTags = data.recentMessages.some((message) => message.tag != null && message.tag.trim().length > 0);
 
   return `
-      <section class="comms-section">
+      <section class="comms-section" id="comms-recent-messages">
         <header class="comms-section__header"><h3>Recent messages</h3><span>${messageCountLabel(data)}</span></header>
+        ${
+          activeFilter
+            ? `<div class="comms-active-filter">
+                <span>Filtered to <strong>${escapeHtml(activeFilter.label)}</strong></span>
+                <button type="button" data-postmark-clear-filter>Show all emails</button>
+              </div>`
+            : ""
+        }
         <p class="comms-panel__meta">Centre messages and internal office staff messages are shown. External test activity is excluded from this list.</p>
         <div class="comms-table-wrap">
           <table class="comms-table">
@@ -91,8 +101,18 @@ export function renderPostmarkMessageList(data: PostmarkDashboardData) {
                   <tr>
                     <td><div class="comms-status-badges">${statusBadge("Delivered", message.delivered, "delivered")}${statusBadge("Opened", message.opened, "opened")}${statusBadge("Clicked", message.clicked, "clicked")}${statusBadge("Bounced", message.bounced, "bounced")}</div></td>
                     <td>${categoryBadge(message.category)}</td>
-                    <td>${escapeHtml(message.recipient ?? "-")}</td>
-                    <td><strong>${escapeHtml(message.centreName ?? "Office staff")}</strong>${hasTags && message.tag ? `<span>${escapeHtml(message.tag)}</span>` : ""}</td>
+                    <td>${
+                      message.recipient
+                        ? `<button type="button" class="comms-filter-link" data-recipient="${escapeHtml(message.recipient)}" title="Show emails to ${escapeHtml(message.recipient)}">${escapeHtml(message.recipient)}</button>`
+                        : "-"
+                    }</td>
+                    <td>${
+                      message.category === "office-staff"
+                        ? `<button type="button" class="comms-filter-link" data-category="office-staff" title="Show all Office staff emails"><strong>Office staff</strong></button>`
+                        : message.centreKey != null
+                          ? `<button type="button" class="comms-filter-link" data-centre-key="${message.centreKey}" data-centre-name="${escapeHtml(message.centreName ?? "")}" title="Show emails for ${escapeHtml(message.centreName ?? "")}"><strong>${escapeHtml(message.centreName ?? "")}</strong></button>`
+                          : `<strong>${escapeHtml(message.centreName ?? "Office staff")}</strong>`
+                    }${hasTags && message.tag ? `<span>${escapeHtml(message.tag)}</span>` : ""}</td>
                     <td>${escapeHtml(formatDate(message.latestOccurredAt))}</td>
                   </tr>
                 `).join("")
@@ -175,7 +195,7 @@ export function renderPostmarkPanel(options: PostmarkPanelOptions = {}) {
               data.centreActivity.length === 0
                 ? `<tr><td class="comms-table__empty" colspan="5">No webhook events are matched to a centre tag yet.</td></tr>`
                 : sortedCentreActivity.map((centre) => `
-                  <tr>
+                  <tr class="comms-table__row--clickable" data-centre-key="${centre.centreKey}" data-centre-name="${escapeHtml(centre.centreName)}" tabindex="0" role="button" title="Show emails for ${escapeHtml(centre.centreName)}">
                     <td>${escapeHtml(centre.centreName)}</td>
                     <td class="comms-table__numeric">${centre.delivered}</td>
                     <td class="comms-table__numeric">${centre.opened}</td>

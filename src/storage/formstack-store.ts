@@ -6,6 +6,7 @@ const db = prisma as GeneratedPrismaClient;
 export type FormstackFormInput = {
   formstackId: string;
   name: string;
+  formUrl?: string | null;
   folder?: string | null;
   centreKey?: number | null;
   submissionCount?: number | null;
@@ -27,6 +28,7 @@ export type FormstackSubmissionInput = {
 export type FormstackFormView = {
   formstackId: string;
   name: string;
+  formUrl: string | null;
   folder: string | null;
   centreKey: number | null;
   centreName: string | null;
@@ -62,9 +64,21 @@ function toJson(value: unknown) {
   return JSON.parse(JSON.stringify(value ?? null)) as Prisma.InputJsonValue;
 }
 
+function optionalUrl(value: string | null | undefined) {
+  const trimmed = typeof value === "string" ? value.trim() : "";
+  if (!trimmed) return null;
+  try {
+    const url = new URL(trimmed);
+    return url.protocol === "http:" || url.protocol === "https:" ? url.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function upsertFormstackForm(input: FormstackFormInput) {
   const data = {
     name: input.name,
+    formUrl: optionalUrl(input.formUrl),
     folder: input.folder ?? null,
     centreKey: input.centreKey ?? null,
     submissionCount: input.submissionCount ?? 0,
@@ -119,6 +133,7 @@ export async function readFormstackDashboardData(): Promise<FormstackDashboardDa
     forms: forms.map((form) => ({
       formstackId: form.formstackId,
       name: form.name,
+      formUrl: form.formUrl,
       folder: form.folder,
       centreKey: form.centreKey,
       centreName: form.centre?.name ?? null,

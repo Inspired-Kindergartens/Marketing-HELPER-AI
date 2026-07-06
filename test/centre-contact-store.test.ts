@@ -5,6 +5,7 @@ import {
   matchCentreContact,
   normalizeCentreContactName,
   readCentreContactList,
+  readCentreContactListStats,
 } from "../src/storage/centre-contact-store.js";
 
 const contacts = [
@@ -57,4 +58,11 @@ test("centre contact reader parses the workbook contact columns when available",
   assert.equal(match?.headTeacher, "Catherine Geddes");
   assert.equal(match?.administrator, "Jenna Fenton");
   assert.equal(match?.email, "avenues@ikindergartens.nz");
+});
+
+test("centre contact reader reports workbook rows separately from usable contacts", async () => {
+  const stats = await readCentreContactListStats();
+
+  assert.equal(stats.rowCount, 26);
+  assert.equal(stats.contacts.length, 26);
 });
