@@ -20,6 +20,74 @@ export class AiClientError extends Error {
   }
 }
 
+// Thinking models (e.g. qwen3) emit <think>…</think> reasoning blocks in
+// message content; strip them so the UI only sees the actual reply.
+function stripThinkBlocks(content: string) {
+  return content.replace(/<think>[\s\S]*?(<\/think>|$)/g, "").trim();
+}
+
+// Stateful chunk filter for streaming: drops <think>…</think> spans that may
+// be split across chunks, holding back partial tags at chunk boundaries.
+function createThinkStreamFilter() {
+  const OPEN = "<think>";
+  const CLOSE = "</think>";
+  let inThink = false;
+  let pending = "";
+  let emittedAny = false;
+
+  function take(chunk: string) {
+    pending += chunk;
+    let out = "";
+
+    while (true) {
+      if (inThink) {
+        const end = pending.indexOf(CLOSE);
+
+        if (end === -1) {
+          pending = pending.slice(-(CLOSE.length - 1));
+          break;
+        }
+
+        pending = pending.slice(end + CLOSE.length);
+        inThink = false;
+      } else {
+        const start = pending.indexOf(OPEN);
+
+        if (start === -1) {
+          const holdback = OPEN.length - 1;
+
+          if (pending.length > holdback) {
+            out += pending.slice(0, pending.length - holdback);
+            pending = pending.slice(-holdback);
+          }
+
+          break;
+        }
+
+        out += pending.slice(0, start);
+        pending = pending.slice(start + OPEN.length);
+        inThink = true;
+      }
+    }
+
+    if (!emittedAny) {
+      out = out.replace(/^\s+/, "");
+      emittedAny = out.length > 0;
+    }
+
+    return out;
+  }
+
+  function flush() {
+    const rest = inThink ? "" : pending;
+    pending = "";
+
+    return emittedAny ? rest : rest.replace(/^\s+/, "");
+  }
+
+  return { take, flush };
+}
+
 export async function runLocalChat(config: AiConfig, messages: AiChatMessage[]) {
   if (config.AI_PROVIDER === "builtin") {
     return runBuiltinChat(messages);
@@ -58,7 +126,7 @@ export async function runLocalChat(config: AiConfig, messages: AiChatMessage[]) 
       );
     }
 
-    const content = payload.message?.content?.trim();
+    const content = stripThinkBlocks(payload.message?.content ?? "");
 
     if (!content) {
       throw new AiClientError("Local AI returned an empty response.");
@@ -129,6 +197,7 @@ export async function* streamLocalChat(config: AiConfig, messages: AiChatMessage
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
+    const thinkFilter = createThinkStreamFilter();
     let buffer = "";
 
     while (true) {
@@ -155,12 +224,18 @@ export async function* streamLocalChat(config: AiConfig, messages: AiChatMessage
           throw new AiClientError(payload.error);
         }
 
-        const content = payload.message?.content;
+        const content = payload.message?.content ? thinkFilter.take(payload.message.content) : "";
 
         if (content) {
           yield content;
         }
       }
+    }
+
+    const remainder = thinkFilter.flush();
+
+    if (remainder) {
+      yield remainder;
     }
   } catch (error) {
     if (error instanceof AiClientError) {

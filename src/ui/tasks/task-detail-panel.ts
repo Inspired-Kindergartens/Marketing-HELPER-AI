@@ -33,6 +33,18 @@ function formatBytes(total: number): string {
   return `${value >= 10 ? value.toFixed(0) : value.toFixed(1)} ${unit}`;
 }
 
+function formatTimestamp(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString("en-NZ", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
 function toDateInputValue(iso: string | null): string {
   if (!iso) return "";
   const date = new Date(iso);
@@ -48,7 +60,6 @@ export type TaskDetailPanelOptions = {
   projectRollup: ProjectRollup | null;
   // Member + centre contacts used to autocomplete a new "To" address.
   contactSuggestions: EmailContactSuggestion[];
-  demo: boolean;
 };
 
 function renderAttachmentSection(task: TaskView): string {
@@ -138,13 +149,13 @@ function renderEmailSection(task: TaskView, contactSuggestions: EmailContactSugg
 }
 
 export function renderTaskDetailPanel(options: TaskDetailPanelOptions): string {
-  const { task, projects, members, projectRollup, contactSuggestions, demo } = options;
+  const { task, projects, members, projectRollup, contactSuggestions } = options;
 
   if (!task) {
     return `
       <div class="task-detail task-detail--empty">
         <p class="task-detail__empty-text">Select a task from the board to see its details, checklist, and time log.</p>
-        <a class="task-detail__back" href="/tasks?panel=task-board${demo ? "&demo=1" : ""}"><i class="bi bi-arrow-left ui-icon" aria-hidden="true"></i><span>Back to board</span></a>
+        <a class="task-detail__back" href="/tasks"><i class="bi bi-arrow-left ui-icon" aria-hidden="true"></i><span>Back to board</span></a>
       </div>
     `;
   }
@@ -183,8 +194,11 @@ export function renderTaskDetailPanel(options: TaskDetailPanelOptions): string {
         <li class="task-checklist__item${item.done ? " task-checklist__item--done" : ""}" data-checklist-item="${item.id}">
           <label class="task-checklist__label">
             <input type="checkbox" data-task-action="checklist-toggle" data-item-id="${item.id}"${item.done ? " checked" : ""} />
-            <span>${escapeHtml(item.label)}</span>
           </label>
+          <form class="task-checklist__edit" data-checklist-edit data-item-id="${item.id}">
+            <input type="text" name="label" value="${escapeHtml(item.label)}" maxlength="200" aria-label="Edit checklist item" />
+          </form>
+          <span class="task-checklist__timestamp">${escapeHtml(formatTimestamp(item.createdAt))}</span>
           <button type="button" class="task-checklist__remove" data-task-action="checklist-delete" data-item-id="${item.id}" aria-label="Remove checklist item"><i class="bi bi-x-lg ui-icon" aria-hidden="true"></i></button>
         </li>
       `,
@@ -192,9 +206,9 @@ export function renderTaskDetailPanel(options: TaskDetailPanelOptions): string {
     .join("");
 
   return `
-    <div class="task-detail" data-task-detail data-task-id="${task.id}"${demo ? ` data-demo="1"` : ""}>
+    <div class="task-detail" data-task-detail data-task-id="${task.id}">
       <div class="task-detail__toolbar">
-        <a class="task-detail__back" href="/tasks?panel=task-board${demo ? "&demo=1" : ""}"><i class="bi bi-arrow-left ui-icon" aria-hidden="true"></i><span>Board</span></a>
+        <a class="task-detail__back" href="/tasks"><i class="bi bi-arrow-left ui-icon" aria-hidden="true"></i><span>Board</span></a>
         <button type="button" class="task-detail__delete" data-task-action="delete"><i class="bi bi-trash ui-icon" aria-hidden="true"></i><span>Delete</span></button>
       </div>
 
@@ -244,7 +258,6 @@ export function renderTaskDetailPanel(options: TaskDetailPanelOptions): string {
             </select>
           </label>
         </div>
-        <button type="submit" class="task-detail__save"><i class="bi bi-check-lg ui-icon" aria-hidden="true"></i><span>Save changes</span></button>
       </form>
 
       <section class="task-detail__section">

@@ -82,14 +82,13 @@ function renderFeedItem(item: LandingIntelligenceItem) {
     <span class="landing-feed-item__icon"><i class="bi ${icon}" aria-hidden="true"></i></span>
     <span class="landing-feed-item__content">
       <span class="landing-feed-item__title">${escapeHtml(item.title)}</span>
-      <span class="landing-feed-item__brief">${escapeHtml(item.brief)}</span>
       <span class="landing-feed-item__meta">${escapeHtml(item.source)}${item.publishedAt ? ` · ${escapeHtml(formatFeedTime(item.publishedAt))}` : ""}</span>
     </span>
   `;
 
   if (item.href) {
     return `
-      <a class="landing-feed-item${item.urgent ? " landing-feed-item--urgent" : ""}" href="${escapeHtml(item.href)}" target="_blank" rel="noopener noreferrer">
+      <a class="landing-feed-item${item.urgent ? " landing-feed-item--urgent" : ""}" href="${escapeHtml(item.href)}" target="_blank" rel="noopener noreferrer" data-feed-href="${escapeHtml(item.href)}">
         ${body}
       </a>
     `;
@@ -152,8 +151,6 @@ export function renderLandingPage(options: LandingPageOptions = {}) {
   ];
 
   const secondaryTiles = [
-    { label: "Marketing Demo", href: "/app?demo=1", external: false },
-    { label: "Comms Demo", href: "/comms?demo=1", external: false },
     { label: "Read Me", href: "/readme", external: false },
     { label: "Upload Contacts", href: "/contacts/upload", external: false },
     { label: "SharePoint", href: "https://ikindergartens.sharepoint.com/", external: true },
@@ -216,10 +213,10 @@ export function renderLandingPage(options: LandingPageOptions = {}) {
           <i class="bi bi-arrow-clockwise" aria-hidden="true"></i>
           <span class="landing__restart-label">Restart server</span>
         </button>
-        <button type="button" class="landing__restart" data-update-ai-model aria-label="Update the local AI model">
+        ${(options.intelligenceFeed?.aiModel?.isUpgrade ?? true) ? `<button type="button" class="landing__restart" data-update-ai-model aria-label="Update the local AI model">
           <i class="bi bi-cpu" aria-hidden="true"></i>
           <span class="landing__update-ai-label">Update AI model</span>
-        </button>
+        </button>` : ""}
         <button type="button" class="landing__restart" data-rollback-ai-model aria-label="Rollback the local AI model"${options.intelligenceFeed?.aiModel?.fallbackModel ? "" : " disabled"}>
           <i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i>
           <span class="landing__rollback-ai-label">Rollback AI model</span>
@@ -306,14 +303,6 @@ export function renderLandingPage(options: LandingPageOptions = {}) {
           });
         }
         bindAction(
-          "[data-update-ai-model]",
-          ".landing__update-ai-label",
-          "Pull the recommended Ollama model and set it for AI Chat? The current model will be kept as rollback fallback.",
-          "/actions/update-ai-model",
-          "Updating...",
-          "Update started"
-        );
-        bindAction(
           "[data-rollback-ai-model]",
           ".landing__rollback-ai-label",
           "Rollback AI Chat to the fallback model?",
@@ -331,8 +320,126 @@ export function renderLandingPage(options: LandingPageOptions = {}) {
         );
       })();
       (function () {
+        var btn = document.querySelector("[data-update-ai-model]");
+        if (!btn) return;
+        var label = btn.querySelector(".landing__update-ai-label");
+        var defaultText = "Update AI model";
+        function setLabel(text) {
+          if (label) label.textContent = text;
+        }
+        function reset(message) {
+          setLabel(message);
+          setTimeout(function () {
+            setLabel(defaultText);
+            btn.disabled = false;
+          }, 4000);
+        }
+        function pollStatus(deadline) {
+          fetch("/actions/update-ai-model/status", { cache: "no-store" })
+            .then(function (res) { return res.json(); })
+            .then(function (status) {
+              if (status.state === "success") {
+                setLabel("Model updated — reloading…");
+                setTimeout(function () { window.location.reload(); }, 2000);
+                return;
+              }
+              if (status.state === "error") {
+                reset("Update failed");
+                return;
+              }
+              if (status.state === "downloading") {
+                var progress = typeof status.progress === "number" ? " " + status.progress + "%" : "";
+                var detail = status.detail ? " (" + status.detail + ")" : "";
+                setLabel("Downloading…" + progress + detail);
+              }
+              if (Date.now() > deadline) {
+                reset("Still running — check again later");
+                return;
+              }
+              setTimeout(function () { pollStatus(deadline); }, 2000);
+            })
+            .catch(function () {
+              if (Date.now() > deadline) {
+                reset("Still running — check again later");
+                return;
+              }
+              setTimeout(function () { pollStatus(deadline); }, 2000);
+            });
+        }
+        // If a download is already running (e.g. the page was reloaded mid-update),
+        // pick the progress display back up instead of showing the idle button.
+        fetch("/actions/update-ai-model/status", { cache: "no-store" })
+          .then(function (res) { return res.json(); })
+          .then(function (status) {
+            if (status.state === "downloading") {
+              btn.disabled = true;
+              setLabel("Downloading…");
+              pollStatus(Date.now() + 45 * 60 * 1000);
+            }
+          })
+          .catch(function () {});
+        btn.addEventListener("click", function () {
+          if (btn.disabled) return;
+          if (!window.confirm("Pull the recommended Ollama model and set it for AI Chat? The current model will be kept as rollback fallback.")) {
+            return;
+          }
+          btn.disabled = true;
+          setLabel("Starting…");
+          fetch("/actions/update-ai-model", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: "{}",
+          })
+            .then(function (res) { return res.json(); })
+            .then(function (payload) {
+              if (!payload.ok) {
+                reset("Update failed");
+                return;
+              }
+              // Poll for up to 45 minutes — qwen3:8b is a ~5 GB download.
+              pollStatus(Date.now() + 45 * 60 * 1000);
+            })
+            .catch(function () {
+              reset("Update failed");
+            });
+        });
+      })();
+      (function () {
         var feed = document.querySelector("[data-landing-feed]");
         if (!feed) return;
+        var OPENED_KEY = "landingFeedOpenedLinks";
+        function getOpened() {
+          try {
+            return JSON.parse(window.localStorage.getItem(OPENED_KEY) || "[]");
+          } catch (err) {
+            return [];
+          }
+        }
+        function markOpened(href) {
+          var opened = getOpened();
+          if (opened.indexOf(href) === -1) {
+            opened.push(href);
+            try {
+              window.localStorage.setItem(OPENED_KEY, JSON.stringify(opened));
+            } catch (err) {
+              // Ignore storage failures (e.g. private browsing quota).
+            }
+          }
+        }
+        function applyOpenedState(root) {
+          var opened = getOpened();
+          root.querySelectorAll("[data-feed-href]").forEach(function (link) {
+            var href = link.getAttribute("data-feed-href");
+            link.classList.toggle("landing-feed-item--opened", opened.indexOf(href) !== -1);
+          });
+        }
+        feed.addEventListener("click", function (event) {
+          var link = event.target.closest("[data-feed-href]");
+          if (!link) return;
+          markOpened(link.getAttribute("data-feed-href"));
+          link.classList.add("landing-feed-item--opened");
+        });
+        applyOpenedState(feed);
         function refreshFeed() {
           fetch("/api/landing-intelligence", { cache: "no-store" })
             .then(function (res) { return res.text(); })
@@ -342,7 +449,11 @@ export function renderLandingPage(options: LandingPageOptions = {}) {
               wrapper.innerHTML = html;
               var next = wrapper.querySelector("[data-landing-feed]");
               var current = document.querySelector("[data-landing-feed]");
-              if (next && current) current.replaceWith(next);
+              if (next && current) {
+                current.replaceWith(next);
+                feed = next;
+                applyOpenedState(feed);
+              }
             })
             .catch(function () {});
         }

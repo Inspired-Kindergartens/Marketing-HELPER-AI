@@ -7,7 +7,8 @@
       "Bash(netstat -ano)",
       "Bash(taskkill *)",
       "WebFetch(domain:developer.metservice.com)",
-      "Bash(npx tsc *)"
+      "Bash(npx tsc *)",
+      "PowerShell(ollama list *)"
     ]
   }
 }

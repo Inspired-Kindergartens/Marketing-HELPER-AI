@@ -13,7 +13,6 @@ The landing page already reserves five "Coming soon" tiles below the primary but
 - Top-right nav rail icon → routes to a dedicated path (e.g. `/comms`, `/local-seo`, `/assets`)
 - Same panel layout (`renderLayout`) with a focus-panel pattern
 - AI chat panel wired in via `/api/ai/chat` and `/api/ai/chat/stream`, grounded on a context object built per app
-- Demo-mode parity (`?demo=1`) using a fixture set under `src/demo/fixtures/`
 
 Planned breakout apps:
 
@@ -22,7 +21,9 @@ Planned breakout apps:
 3. **Local Presence** — Google Business Profile + Google Search Console + Meta Page insights (organic).
 4. **Workspace & Calendar** — Microsoft 365 Graph (Outlook, Bookings, SharePoint, Teams).
 5. **Creative & Assets** — Adobe Creative Cloud / Express asset library.
-6. **Job Tracking** — internal job/work tracker for signage, adverts, and other marketing jobs per centre, with relationship metadata on the people involved.
+6. **Job Tracking** — internal job/work tracker for signage, adverts, and other marketing jobs per centre, with relationship metadata on the people involved. Not to be confused with the shipped **Tasks & Projects** section below — Job Tracking is scoped around per-person relationship/sensitivity notes for external jobs (signage, adverts), which Tasks & Projects does not cover.
+
+**Shipped, not one of the six breakout apps above:** **Tasks & Projects** (`/tasks`) — general-purpose task/project tracking with time tracking, checklists, due-date reminders on the landing page, a Members directory, and a Gantt-style project timeline. See `PLAN.md` for the build checklist (complete) and the README's "Tasks & Projects" section for behaviour.
 
 ---
 
@@ -180,7 +181,7 @@ Internal tracker for marketing jobs (signage, adverts, and other categories) att
 
 ### Privacy / handling
 
-- Difficulty and sensitivity notes are subjective and sensitive. Restrict read access to authenticated users; never expose via demo mode. Log every edit (who/when) and surface the audit trail on the profile.
+- Difficulty and sensitivity notes are subjective and sensitive. Restrict read access to authenticated users. Log every edit (who/when) and surface the audit trail on the profile.
 - No export endpoint by default — these notes shouldn't leave the app.
 
 ---
@@ -193,7 +194,6 @@ These apply to every new integration:
 - **Centre matching:** every external record gets matched to a `centreKey` using the same `matchMetaNameToCentre`-style fuzzy matcher already used for Meta. Store the match alongside the raw payload.
 - **Snapshot model:** prefer the snapshot pattern already used for GA4 and Meta (`storage/<service>-store.ts` → daily/periodic snapshot rows) over live API calls on every page load.
 - **AI context:** each breakout's `buildAiDashboardContext` produces a JSON object the chat panel uses as ground truth. Keep the object compact (≤ ~2 KB) and named-field oriented.
-- **Demo mode:** every integration ships with a `src/demo/fixtures/<service>.ts` fixture set so the demo landing tile keeps working.
 - **OAuth tokens:** stored encrypted at rest in Postgres; refresh via the same scheduled-task pattern as Meta/GA.
 
 ---

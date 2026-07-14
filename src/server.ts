@@ -118,6 +118,7 @@ import {
   stopTaskTimer,
   logTaskTime,
   addChecklistItem,
+  updateChecklistItem,
   toggleChecklistItem,
   deleteChecklistItem,
   attachTaskToProject,
@@ -147,28 +148,6 @@ import {
 } from "./storage/member-store.js";
 import { renderTasksAppShell, resolveTasksFocusPanelId } from "./ui/tasks-app-shell.js";
 import { renderReadmePage } from "./ui/readme-page.js";
-import { isDemoBody, isDemoRequest, resolveDemo } from "./demo/demo-flag.js";
-import {
-  countActiveDemoNotifications,
-  createDemoNote,
-  dismissDemoNotification,
-  latestDemoNotesForCentre,
-  listDemoNotes,
-  listDemoNotifications,
-  readDemoNotificationHistoryPage,
-  restoreDemoNote,
-  softDeleteDemoNote,
-} from "./demo/demo-notes-store.js";
-import {
-  DEMO_GA_SNAPSHOT,
-  DEMO_FORMSTACK_DASHBOARD,
-  DEMO_LATEST_SNAPSHOT_SET,
-  DEMO_MAILCHIMP_DASHBOARD,
-  DEMO_META_DASHBOARD,
-  DEMO_WAITLIST_REPORT,
-  buildDemoCentreHistory,
-  loadDemoContacts,
-} from "./demo/fixtures/index.js";
 
 loadDotenv({ override: true });
 
@@ -242,6 +221,31 @@ const VALID_PANEL_IDS = new Set(["analytics", "waitlist", "meta-ads", "google-an
 const META_ADS_AUTO_REFRESH_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const RECOMMENDED_AI_CHAT_MODEL = "qwen3:8b";
 let aiModelUpdateInProgress = false;
+let aiModelUpdateStatus: {
+  state: "idle" | "downloading" | "success" | "error";
+  model: string;
+  progress: number | null;
+  detail: string | null;
+} = { state: "idle", model: RECOMMENDED_AI_CHAT_MODEL, progress: null, detail: null };
+
+function trackAiModelPullProgress(chunk: unknown) {
+  const text = String(chunk);
+  const percentMatches = text.match(/(\d{1,3})%/g);
+
+  if (percentMatches?.length) {
+    const percent = Number.parseInt(percentMatches[percentMatches.length - 1], 10);
+
+    if (percent >= 0 && percent <= 100) {
+      aiModelUpdateStatus = { ...aiModelUpdateStatus, progress: percent };
+    }
+  }
+
+  const sizeMatches = text.match(/(\d+(?:\.\d+)?\s*[KMG]B)\s*\/\s*(\d+(?:\.\d+)?\s*[KMG]B)/g);
+
+  if (sizeMatches?.length) {
+    aiModelUpdateStatus = { ...aiModelUpdateStatus, detail: sizeMatches[sizeMatches.length - 1] };
+  }
+}
 
 async function setDotenvValue(key: string, value: string) {
   const envPath = join(process.cwd(), ".env");
@@ -296,19 +300,28 @@ async function updateRecommendedAiModel() {
   const fallbackModel = process.env.AI_CHAT_MODEL_FALLBACK || await readDotenvValue("AI_CHAT_MODEL_FALLBACK");
 
   aiModelUpdateInProgress = true;
+  aiModelUpdateStatus = { state: "downloading", model: RECOMMENDED_AI_CHAT_MODEL, progress: null, detail: null };
   const child = spawn("ollama", ["pull", RECOMMENDED_AI_CHAT_MODEL], {
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
   });
 
   child.stdout.on("data", (chunk) => {
+    trackAiModelPullProgress(chunk);
     app.log.info({ output: String(chunk).trim() }, "Ollama model update output");
   });
   child.stderr.on("data", (chunk) => {
+    trackAiModelPullProgress(chunk);
     app.log.warn({ output: String(chunk).trim() }, "Ollama model update output");
   });
   child.on("error", (error) => {
     aiModelUpdateInProgress = false;
+    aiModelUpdateStatus = {
+      state: "error",
+      model: RECOMMENDED_AI_CHAT_MODEL,
+      progress: null,
+      detail: error instanceof Error ? error.message : "Ollama could not be started.",
+    };
     app.log.error({ error }, "Ollama model update failed to start");
   });
   child.on("exit", (code) => {
@@ -327,10 +340,39 @@ async function updateRecommendedAiModel() {
           aiConfig.AI_CHAT_MODEL = RECOMMENDED_AI_CHAT_MODEL;
           process.env.AI_CHAT_MODEL = RECOMMENDED_AI_CHAT_MODEL;
           app.log.info({ model: RECOMMENDED_AI_CHAT_MODEL }, "AI chat model updated");
-          void refreshLandingIntelligenceFeed(aiConfig, app.log);
+          // Load the new model into Ollama's memory now so the first chat message
+          // doesn't pay the cold-start cost.
+          aiModelUpdateStatus = { state: "downloading", model: RECOMMENDED_AI_CHAT_MODEL, progress: 100, detail: "loading model" };
+          await fetch(`${aiConfig.AI_BASE_URL}/api/generate`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ model: RECOMMENDED_AI_CHAT_MODEL, prompt: "", stream: false }),
+            signal: AbortSignal.timeout(120000),
+          }).catch((error) => {
+            app.log.warn({ error }, "New AI model warm-up failed; it will load on first chat instead");
+          });
+          // Refresh the feed before reporting success so the reloaded landing page
+          // no longer shows the upgrade card or the update button.
+          aiModelUpdateStatus = { state: "downloading", model: RECOMMENDED_AI_CHAT_MODEL, progress: 100, detail: "finalising" };
+          await refreshLandingIntelligenceFeed(aiConfig, app.log).catch(() => undefined);
+          aiModelUpdateStatus = { state: "success", model: RECOMMENDED_AI_CHAT_MODEL, progress: 100, detail: null };
         } else {
+          aiModelUpdateStatus = {
+            state: "error",
+            model: RECOMMENDED_AI_CHAT_MODEL,
+            progress: null,
+            detail: `Ollama pull exited with code ${code}.`,
+          };
           app.log.error({ code, model: RECOMMENDED_AI_CHAT_MODEL }, "Ollama model update failed");
         }
+      } catch (error) {
+        aiModelUpdateStatus = {
+          state: "error",
+          model: RECOMMENDED_AI_CHAT_MODEL,
+          progress: null,
+          detail: error instanceof Error ? error.message : "AI model update failed.",
+        };
+        app.log.error({ error, model: RECOMMENDED_AI_CHAT_MODEL }, "Ollama model update failed");
       } finally {
         aiModelUpdateInProgress = false;
       }
@@ -1113,60 +1155,8 @@ app.post<{ Params: { id: string }; Body: { prompt?: string } }>(
   },
 );
 
-app.get<{ Querystring: { centre?: string; window?: string; panel?: string; sort?: string; waitlistSection?: string; googleAnalyticsSection?: string; gaRange?: string; gaFrom?: string; gaTo?: string; gaFromMonth?: string; gaFromYear?: string; gaToMonth?: string; gaToYear?: string; metaRefreshed?: string; integrationError?: string; demo?: string } }>("/app", async (request, reply) => {
-  if (!isDemoRequest(request.query)) {
-    void tickWeeklySnapshotRefresh(app.log);
-  }
-  const demo = resolveDemo(request, reply, request.query);
-  if (demo) {
-    const centre = Number.parseInt(String(request.query?.centre ?? ""), 10);
-    const selectedWindowKey = resolveWindowKey(request.query?.window);
-    const serviceSort = request.query?.sort ?? null;
-    const selectedCentreKey = Number.isNaN(centre) ? null : centre;
-    const focusPanelId =
-      VALID_PANEL_IDS.has(request.query?.panel ?? "") ? request.query?.panel ?? null : null;
-    const snapshotSet = DEMO_LATEST_SNAPSHOT_SET;
-    const resolvedSelectedCentreKey =
-      selectedCentreKey ??
-      resolveDefaultAnalyticsCentreKey(snapshotSet, selectedWindowKey, serviceSort);
-    const centreHistory =
-      resolvedSelectedCentreKey == null ? [] : buildDemoCentreHistory(resolvedSelectedCentreKey, 90);
-    const annualHistory =
-      resolvedSelectedCentreKey == null ? [] : buildDemoCentreHistory(resolvedSelectedCentreKey, 365);
-
-    return reply
-      .type("text/html; charset=utf-8")
-      .send(
-        renderAppShell(snapshotSet, {
-          selectedCentreKey: resolvedSelectedCentreKey,
-          selectedWindowKey,
-          serviceSort,
-          focusPanelId,
-          centreHistory,
-          annualHistory,
-          waitlistSnapshotSet: snapshotSet,
-          waitlistReport: DEMO_WAITLIST_REPORT,
-          waitlistSection: request.query?.waitlistSection ?? null,
-          googleAnalyticsSection: request.query?.googleAnalyticsSection ?? null,
-          metaConfigStatus,
-          metaAdsDashboardData: DEMO_META_DASHBOARD,
-          googleAnalyticsConfigStatus,
-          googleAnalyticsSnapshot: DEMO_GA_SNAPSHOT,
-          googleAnalyticsRangeMode: "days",
-          googleAnalyticsFromMonth: "1",
-          googleAnalyticsFromYear: "2026",
-          googleAnalyticsToMonth: "5",
-          googleAnalyticsToYear: "2026",
-          metaRecommendationNotifications: listDemoNotifications(),
-          metaRecommendationNotificationCount: countActiveDemoNotifications(),
-          metaRecommendationNotes: listDemoNotes(),
-          latestMetaRecommendationNotesForCentre:
-            resolvedSelectedCentreKey == null ? [] : latestDemoNotesForCentre(resolvedSelectedCentreKey),
-          centreContacts: loadDemoContacts(),
-          demo: true,
-        }),
-      );
-  }
+app.get<{ Querystring: { centre?: string; window?: string; panel?: string; sort?: string; waitlistSection?: string; googleAnalyticsSection?: string; gaRange?: string; gaFrom?: string; gaTo?: string; gaFromMonth?: string; gaFromYear?: string; gaToMonth?: string; gaToYear?: string; metaRefreshed?: string; integrationError?: string } }>("/app", async (request, reply) => {
+  void tickWeeklySnapshotRefresh(app.log);
 
   const latestSnapshotSet = await readLatestAnalyticsSnapshotSet();
   const centre = Number.parseInt(String(request.query?.centre ?? ""), 10);
@@ -1347,8 +1337,7 @@ app.get<{ Querystring: { centre?: string; window?: string; panel?: string; sort?
     );
 });
 
-app.get<{ Querystring: { panel?: string; window?: string; metaAdsFilter?: string; demo?: string; integrationError?: string; integrationSource?: string; webmailPage?: string } }>("/comms", async (request, reply) => {
-  const demo = resolveDemo(request, reply, request.query);
+app.get<{ Querystring: { panel?: string; window?: string; metaAdsFilter?: string; integrationError?: string; integrationSource?: string; webmailPage?: string } }>("/comms", async (request, reply) => {
   const panel = String(request.query?.panel ?? "");
   const focusPanelId = VALID_COMMS_PANEL_IDS.has(panel) ? panel : null;
   const selectedWindowKey = resolveWindowKey(request.query?.window);
@@ -1360,52 +1349,47 @@ app.get<{ Querystring: { panel?: string; window?: string; metaAdsFilter?: string
     : request.query?.integrationSource === "postmark"
       ? "postmark"
       : "mailchimp";
-  let mailchimpDashboardData = demo ? DEMO_MAILCHIMP_DASHBOARD : null;
-  let formstackDashboardData = demo ? DEMO_FORMSTACK_DASHBOARD : null;
+  let mailchimpDashboardData = null;
+  let formstackDashboardData = null;
   let postmarkDashboardData = null;
   const metaAdsDashboardForFilter = metaAdsFilter === "active-recent"
-    ? demo
-      ? DEMO_META_DASHBOARD
-      : await readMetaAdsDashboardData({ fromDate: windowStartDate, toDate: new Date() })
+    ? await readMetaAdsDashboardData({ fromDate: windowStartDate, toDate: new Date() })
     : null;
   const metaAdvertCentreKeys = metaAdsFilter === "active-recent"
     ? getCurrentOrRecentMetaAdvertCentreKeys(metaAdsDashboardForFilter)
     : null;
 
-  if (!demo) {
-    try {
-      postmarkDashboardData = await readPostmarkDashboardData({
-        messagePage: Number(request.query?.webmailPage ?? 1),
-        fromDate: windowStartDate,
-        centreKeys: metaAdvertCentreKeys,
-      });
-    } catch (error) {
-      app.log.error({ error }, "Postmark dashboard read failed");
-      integrationError ??= "Webmail dashboard storage is unavailable until database migrations have been applied.";
-    }
+  try {
+    postmarkDashboardData = await readPostmarkDashboardData({
+      messagePage: Number(request.query?.webmailPage ?? 1),
+      fromDate: windowStartDate,
+      centreKeys: metaAdvertCentreKeys,
+    });
+  } catch (error) {
+    app.log.error({ error }, "Postmark dashboard read failed");
+    integrationError ??= "Webmail dashboard storage is unavailable until database migrations have been applied.";
+  }
 
-    try {
-      mailchimpDashboardData = await readMailchimpDashboardData({
-        serverPrefix: mailchimpConfigStatus.serverPrefix ?? undefined,
-      });
-    } catch (error) {
-      app.log.error({ error }, "Mailchimp dashboard read failed");
-      integrationError ??= "Mailchimp dashboard storage is unavailable until database migrations have been applied.";
-    }
+  try {
+    mailchimpDashboardData = await readMailchimpDashboardData({
+      serverPrefix: mailchimpConfigStatus.serverPrefix ?? undefined,
+    });
+  } catch (error) {
+    app.log.error({ error }, "Mailchimp dashboard read failed");
+    integrationError ??= "Mailchimp dashboard storage is unavailable until database migrations have been applied.";
+  }
 
-    try {
-      formstackDashboardData = await readFormstackDashboardData();
-    } catch (error) {
-      app.log.error({ error }, "Formstack dashboard read failed");
-      integrationError ??= "Formstack dashboard storage is unavailable until database migrations have been applied.";
-    }
+  try {
+    formstackDashboardData = await readFormstackDashboardData();
+  } catch (error) {
+    app.log.error({ error }, "Formstack dashboard read failed");
+    integrationError ??= "Formstack dashboard storage is unavailable until database migrations have been applied.";
   }
 
   return reply
     .type("text/html; charset=utf-8")
     .send(renderCommsAppShell({
       focusPanelId,
-      demo,
       mailchimpDashboardData,
       mailchimpConfigStatus,
       formstackDashboardData,
@@ -1444,10 +1428,9 @@ function attachmentPath(storagePath: string): string {
   return join(process.cwd(), storagePath);
 }
 
-app.get<{ Querystring: { panel?: string; project?: string; task?: string; demo?: string } }>(
+app.get<{ Querystring: { panel?: string; project?: string; task?: string } }>(
   "/tasks",
   async (request, reply) => {
-    const demo = resolveDemo(request, reply, request.query);
     const selectedTaskId = parsePositiveInt(request.query?.task);
     const selectedProjectId = parsePositiveInt(request.query?.project);
 
@@ -1470,13 +1453,11 @@ app.get<{ Querystring: { panel?: string; project?: string; task?: string; demo?:
 
     // The contact autocomplete is only needed when the email compose editor is
     // on screen (a task is selected). Skip the XLSX/member read otherwise.
-    const contactSuggestions =
-      selectedTask != null && !demo ? await listEmailContactSuggestions() : [];
+    const contactSuggestions = selectedTask != null ? await listEmailContactSuggestions() : [];
 
     return reply.type("text/html; charset=utf-8").send(
       renderTasksAppShell({
         focusPanelId,
-        demo,
         tasks,
         projects,
         members,
@@ -1491,8 +1472,7 @@ app.get<{ Querystring: { panel?: string; project?: string; task?: string; demo?:
 
 // All mutations are JSON POSTs (matching the existing notes/notifications
 // convention). They reply with { ok: true } and the client reloads /tasks so the
-// server re-renders the new state. Demo mode never reaches these (the client
-// short-circuits to a reload), but they stay safe behind the local-host guard.
+// server re-renders the new state.
 
 app.post<{ Body: { title?: string; dueDate?: string; estimatedMinutes?: string; projectId?: string; taskGroupId?: string; assigneeId?: string; centreKey?: string } }>(
   "/api/tasks",
@@ -1734,6 +1714,20 @@ app.post<{ Params: { id: string }; Body: { label?: string } }>(
     }
     await addChecklistItem(id, label);
     return reply.code(201).send({ ok: true });
+  },
+);
+
+app.post<{ Params: { id: string; itemId: string }; Body: { label?: string } }>(
+  "/api/tasks/:id/checklist/:itemId",
+  async (request, reply) => {
+    const itemId = parsePositiveInt(request.params.itemId);
+    const label = String(request.body?.label ?? "").trim();
+    if (itemId == null || !label) {
+      reply.code(400);
+      return { error: "Valid checklist item id and label are required." };
+    }
+    await updateChecklistItem(itemId, label);
+    return { ok: true };
   },
 );
 
@@ -1984,12 +1978,7 @@ app.get<{ Querystring: {
   },
 );
 
-app.get<{ Querystring: { centre?: string; window?: string; sort?: string; gaRange?: string; gaFrom?: string; gaTo?: string; gaFromMonth?: string; gaFromYear?: string; gaToMonth?: string; gaToYear?: string; demo?: string } }>("/actions/refresh-google-analytics", async (request, reply) => {
-  if (isDemoRequest(request.query)) {
-    reply.code(303);
-    return reply.redirect(`/app?demo=1&panel=google-analytics`);
-  }
-
+app.get<{ Querystring: { centre?: string; window?: string; sort?: string; gaRange?: string; gaFrom?: string; gaTo?: string; gaFromMonth?: string; gaFromYear?: string; gaToMonth?: string; gaToYear?: string } }>("/actions/refresh-google-analytics", async (request, reply) => {
   const buildRedirectParams = (extra?: Record<string, string>) => {
     const params = new URLSearchParams();
 
@@ -2080,24 +2069,17 @@ app.get<{ Querystring: { centre?: string; window?: string; sort?: string; gaRang
   return reply.redirect(`/app?${params.toString()}`);
 });
 
-app.get<{ Querystring: { page?: string; pageSize?: string; centre?: string; kind?: string; demo?: string } }>("/api/meta-recommendation-notifications/history", async (request) => {
+app.get<{ Querystring: { page?: string; pageSize?: string; centre?: string; kind?: string } }>("/api/meta-recommendation-notifications/history", async (request) => {
   const page = Number.parseInt(String(request.query?.page ?? "1"), 10);
   const pageSize = Number.parseInt(String(request.query?.pageSize ?? "25"), 10);
   const centreKey = Number.parseInt(String(request.query?.centre ?? ""), 10);
   const kind = request.query?.kind === "Notification" || request.query?.kind === "Note" ? request.query.kind : null;
-  const pageData = isDemoRequest(request.query)
-    ? readDemoNotificationHistoryPage({
-        page: Number.isNaN(page) ? 1 : page,
-        pageSize: Number.isNaN(pageSize) ? 25 : pageSize,
-        centreKey: Number.isNaN(centreKey) ? null : centreKey,
-        kind,
-      })
-    : await readMetaNotificationHistoryPage({
-        page: Number.isNaN(page) ? 1 : page,
-        pageSize: Number.isNaN(pageSize) ? 25 : pageSize,
-        centreKey: Number.isNaN(centreKey) ? null : centreKey,
-        kind,
-      });
+  const pageData = await readMetaNotificationHistoryPage({
+    page: Number.isNaN(page) ? 1 : page,
+    pageSize: Number.isNaN(pageSize) ? 25 : pageSize,
+    centreKey: Number.isNaN(centreKey) ? null : centreKey,
+    kind,
+  });
 
   return {
     rowsHtml: renderMetaNotificationHistoryRows(pageData.rows),
@@ -2110,7 +2092,7 @@ app.get<{ Querystring: { page?: string; pageSize?: string; centre?: string; kind
   };
 });
 
-app.get<{ Querystring: { centre?: string; limit?: string; demo?: string } }>("/api/meta-recommendation-notes/latest", async (request, reply) => {
+app.get<{ Querystring: { centre?: string; limit?: string } }>("/api/meta-recommendation-notes/latest", async (request, reply) => {
   const centreKey = Number.parseInt(String(request.query?.centre ?? ""), 10);
   const limit = Number.parseInt(String(request.query?.limit ?? "3"), 10);
 
@@ -2120,12 +2102,10 @@ app.get<{ Querystring: { centre?: string; limit?: string; demo?: string } }>("/a
     return { error: "Valid centre is required." };
   }
 
-  const rows = isDemoRequest(request.query)
-    ? latestDemoNotesForCentre(centreKey, Number.isInteger(limit) ? limit : 3)
-    : await readLatestMetaRecommendationNotesForCentre(
-        centreKey,
-        Number.isInteger(limit) ? limit : 3,
-      );
+  const rows = await readLatestMetaRecommendationNotesForCentre(
+    centreKey,
+    Number.isInteger(limit) ? limit : 3,
+  );
 
   return {
     notes: rows.map((row) => ({
@@ -2138,7 +2118,7 @@ app.get<{ Querystring: { centre?: string; limit?: string; demo?: string } }>("/a
   };
 });
 
-app.post<{ Body: { notificationId?: string; demo?: string | boolean } }>("/api/meta-recommendation-notifications/dismiss", async (request, reply) => {
+app.post<{ Body: { notificationId?: string } }>("/api/meta-recommendation-notifications/dismiss", async (request, reply) => {
   const notificationId = String(request.body?.notificationId ?? "").trim();
 
   if (!notificationId) {
@@ -2147,16 +2127,12 @@ app.post<{ Body: { notificationId?: string; demo?: string | boolean } }>("/api/m
     return { error: "notificationId is required." };
   }
 
-  if (isDemoBody(request.body)) {
-    return { notification: dismissDemoNotification(notificationId) };
-  }
-
   const notification = await dismissMetaRecommendationNotification(notificationId);
 
   return { notification };
 });
 
-app.post<{ Body: { notificationId?: string; text?: string; notification?: Partial<MetaRecommendationNotificationInput> | null; demo?: string | boolean } }>("/api/meta-recommendation-notes", async (request, reply) => {
+app.post<{ Body: { notificationId?: string; text?: string; notification?: Partial<MetaRecommendationNotificationInput> | null } }>("/api/meta-recommendation-notes", async (request, reply) => {
   const notificationId = String(request.body?.notificationId ?? "").trim();
   const text = String(request.body?.text ?? "").trim();
 
@@ -2164,11 +2140,6 @@ app.post<{ Body: { notificationId?: string; text?: string; notification?: Partia
     reply.code(400);
 
     return { error: "notificationId and text are required." };
-  }
-
-  if (isDemoBody(request.body)) {
-    const note = createDemoNote({ notificationId, text });
-    return reply.code(201).send({ note });
   }
 
   const notification = request.body?.notification
@@ -2231,17 +2202,13 @@ app.post<{ Params: { centreKey: string }; Body: { headingText?: string; primaryT
   return reply.code(201).send({ content });
 });
 
-app.post<{ Params: { id: string }; Body: { demo?: string | boolean } }>("/api/meta-recommendation-notes/:id/delete", async (request, reply) => {
+app.post<{ Params: { id: string } }>("/api/meta-recommendation-notes/:id/delete", async (request, reply) => {
   const id = Number.parseInt(request.params.id, 10);
 
   if (!Number.isInteger(id) || id <= 0) {
     reply.code(400);
 
     return { error: "Valid note id is required." };
-  }
-
-  if (isDemoBody(request.body)) {
-    return { note: softDeleteDemoNote(id) };
   }
 
   const note = await softDeleteMetaRecommendationNote(id);
@@ -2249,17 +2216,13 @@ app.post<{ Params: { id: string }; Body: { demo?: string | boolean } }>("/api/me
   return { note };
 });
 
-app.post<{ Params: { id: string }; Body: { demo?: string | boolean } }>("/api/meta-recommendation-notes/:id/restore", async (request, reply) => {
+app.post<{ Params: { id: string } }>("/api/meta-recommendation-notes/:id/restore", async (request, reply) => {
   const id = Number.parseInt(request.params.id, 10);
 
   if (!Number.isInteger(id) || id <= 0) {
     reply.code(400);
 
     return { error: "Valid note id is required." };
-  }
-
-  if (isDemoBody(request.body)) {
-    return { note: restoreDemoNote(id) };
   }
 
   const note = await restoreMetaRecommendationNote(id);
@@ -2271,7 +2234,6 @@ app.post<{
   Body: {
     prompt?: string;
     messages?: AiChatHistoryMessageInput[];
-    demo?: string | boolean;
   };
 }>("/api/comms/ai/chat", async (request, reply) => {
   const prompt = String(request.body?.prompt ?? "").trim();
@@ -2286,13 +2248,10 @@ app.post<{
     return { error: "Prompt is too long. Keep it under 2,000 characters." };
   }
 
-  const demo = isDemoBody(request.body);
   const context = buildCommsAiDashboardContext({
-    postmark: demo ? null : await readPostmarkDashboardData(),
-    mailchimp: demo
-      ? DEMO_MAILCHIMP_DASHBOARD
-      : await readMailchimpDashboardData({ serverPrefix: mailchimpConfigStatus.serverPrefix ?? undefined }),
-    formstack: demo ? DEMO_FORMSTACK_DASHBOARD : await readFormstackDashboardData(),
+    postmark: await readPostmarkDashboardData(),
+    mailchimp: await readMailchimpDashboardData({ serverPrefix: mailchimpConfigStatus.serverPrefix ?? undefined }),
+    formstack: await readFormstackDashboardData(),
   });
 
   if (aiConfig.AI_PROVIDER === "builtin") {
@@ -2312,7 +2271,6 @@ app.post<{
   Body: {
     prompt?: string;
     messages?: AiChatHistoryMessageInput[];
-    demo?: string | boolean;
   };
 }>("/api/comms/ai/chat/stream", async (request, reply) => {
   const prompt = String(request.body?.prompt ?? "").trim();
@@ -2322,13 +2280,10 @@ app.post<{
     return { error: !prompt ? "Prompt is required." : "Prompt is too long. Keep it under 2,000 characters." };
   }
 
-  const demo = isDemoBody(request.body);
   const context = buildCommsAiDashboardContext({
-    postmark: demo ? null : await readPostmarkDashboardData(),
-    mailchimp: demo
-      ? DEMO_MAILCHIMP_DASHBOARD
-      : await readMailchimpDashboardData({ serverPrefix: mailchimpConfigStatus.serverPrefix ?? undefined }),
-    formstack: demo ? DEMO_FORMSTACK_DASHBOARD : await readFormstackDashboardData(),
+    postmark: await readPostmarkDashboardData(),
+    mailchimp: await readMailchimpDashboardData({ serverPrefix: mailchimpConfigStatus.serverPrefix ?? undefined }),
+    formstack: await readFormstackDashboardData(),
   });
 
   reply.raw.writeHead(200, {
@@ -2365,7 +2320,6 @@ app.post<{
   Body: {
     prompt?: string;
     messages?: AiChatHistoryMessageInput[];
-    demo?: string | boolean;
   };
 }>("/api/tasks/ai/chat/stream", async (request, reply) => {
   const prompt = String(request.body?.prompt ?? "").trim();
@@ -2418,14 +2372,12 @@ app.post<{
     centreKey?: number | string | null;
     windowKey?: string | null;
     messages?: AiChatHistoryMessageInput[];
-    demo?: string | boolean;
   };
 }>("/api/ai/chat", async (request, reply) => {
   const prompt = String(request.body?.prompt ?? "").trim();
   const centreKey = Number.parseInt(String(request.body?.centreKey ?? ""), 10);
   const selectedCentreKey = Number.isInteger(centreKey) && centreKey > 0 ? centreKey : null;
   const selectedWindowKey = resolveWindowKey(request.body?.windowKey);
-  const demo = isDemoBody(request.body);
 
   if (!prompt) {
     reply.code(400);
@@ -2439,22 +2391,16 @@ app.post<{
     return { error: "Prompt is too long. Keep it under 2,000 characters." };
   }
 
-  const latestSnapshotSet = demo
-    ? DEMO_LATEST_SNAPSHOT_SET
-    : await readLatestAnalyticsSnapshotSet();
+  const latestSnapshotSet = await readLatestAnalyticsSnapshotSet();
   const latestRunDate = latestSnapshotSet ? new Date(latestSnapshotSet.runDate) : new Date();
   const windowStartDate = resolveWindowStartDate(latestRunDate, selectedWindowKey);
-  const metaAdsDashboardData = demo
-    ? DEMO_META_DASHBOARD
-    : await readMetaAdsDashboardData({
-        fromDate: windowStartDate,
-        toDate: latestRunDate,
-      });
-  const googleAnalyticsSnapshot = demo
-    ? DEMO_GA_SNAPSHOT
-    : await readLatestGoogleAnalyticsDailySnapshot(env.GOOGLE_ANALYTICS_PROPERTY_ID);
+  const metaAdsDashboardData = await readMetaAdsDashboardData({
+    fromDate: windowStartDate,
+    toDate: latestRunDate,
+  });
+  const googleAnalyticsSnapshot = await readLatestGoogleAnalyticsDailySnapshot(env.GOOGLE_ANALYTICS_PROPERTY_ID);
   const selectedCentreNotes =
-    selectedCentreKey == null || demo
+    selectedCentreKey == null
       ? []
       : await readLatestMetaRecommendationNotesForCentre(selectedCentreKey, 10);
   const context = buildAiDashboardContext({
@@ -2531,14 +2477,12 @@ app.post<{
     centreKey?: number | string | null;
     windowKey?: string | null;
     messages?: AiChatHistoryMessageInput[];
-    demo?: string | boolean;
   };
 }>("/api/ai/chat/stream", async (request, reply) => {
   const prompt = String(request.body?.prompt ?? "").trim();
   const centreKey = Number.parseInt(String(request.body?.centreKey ?? ""), 10);
   const selectedCentreKey = Number.isInteger(centreKey) && centreKey > 0 ? centreKey : null;
   const selectedWindowKey = resolveWindowKey(request.body?.windowKey);
-  const demo = isDemoBody(request.body);
 
   if (!prompt) {
     reply.code(400);
@@ -2552,22 +2496,16 @@ app.post<{
     return { error: "Prompt is too long. Keep it under 2,000 characters." };
   }
 
-  const latestSnapshotSet = demo
-    ? DEMO_LATEST_SNAPSHOT_SET
-    : await readLatestAnalyticsSnapshotSet();
+  const latestSnapshotSet = await readLatestAnalyticsSnapshotSet();
   const latestRunDate = latestSnapshotSet ? new Date(latestSnapshotSet.runDate) : new Date();
   const windowStartDate = resolveWindowStartDate(latestRunDate, selectedWindowKey);
-  const metaAdsDashboardData = demo
-    ? DEMO_META_DASHBOARD
-    : await readMetaAdsDashboardData({
-        fromDate: windowStartDate,
-        toDate: latestRunDate,
-      });
-  const googleAnalyticsSnapshot = demo
-    ? DEMO_GA_SNAPSHOT
-    : await readLatestGoogleAnalyticsDailySnapshot(env.GOOGLE_ANALYTICS_PROPERTY_ID);
+  const metaAdsDashboardData = await readMetaAdsDashboardData({
+    fromDate: windowStartDate,
+    toDate: latestRunDate,
+  });
+  const googleAnalyticsSnapshot = await readLatestGoogleAnalyticsDailySnapshot(env.GOOGLE_ANALYTICS_PROPERTY_ID);
   const selectedCentreNotes =
-    selectedCentreKey == null || demo
+    selectedCentreKey == null
       ? []
       : await readLatestMetaRecommendationNotesForCentre(selectedCentreKey, 10);
   const context = buildAiDashboardContext({
@@ -2642,12 +2580,7 @@ app.post<{
   }
 });
 
-app.get<{ Querystring: { centre?: string; window?: string; sort?: string; demo?: string } }>("/actions/refresh-meta-ads", async (request, reply) => {
-  if (isDemoRequest(request.query)) {
-    reply.code(303);
-    return reply.redirect(`/app?demo=1&panel=meta-ads`);
-  }
-
+app.get<{ Querystring: { centre?: string; window?: string; sort?: string } }>("/actions/refresh-meta-ads", async (request, reply) => {
   const buildRedirectParams = (extra?: Record<string, string>) => {
     const params = new URLSearchParams();
 
@@ -2721,14 +2654,10 @@ app.get<{ Querystring: { centre?: string; window?: string; sort?: string; demo?:
   return reply.redirect(`/app?${params.toString()}`);
 });
 
-app.get<{ Querystring: { demo?: string; window?: string; metaAdsFilter?: string } }>("/actions/check-postmark", async (request, reply) => {
+app.get<{ Querystring: { window?: string; metaAdsFilter?: string } }>("/actions/check-postmark", async (request, reply) => {
   const selectedWindowKey = resolveWindowKey(request.query?.window);
   const metaAdsFilter = resolveCommsMetaAdsFilter(request.query?.metaAdsFilter);
   const filterParam = metaAdsFilter === "active-recent" ? "&metaAdsFilter=active-recent" : "";
-  if (isDemoRequest(request.query)) {
-    reply.code(303);
-    return reply.redirect(`/comms?demo=1&panel=comms-postmark&window=${selectedWindowKey}${filterParam}`);
-  }
 
   try {
     const result = await readPostmarkWebhookCheck();
@@ -2759,12 +2688,7 @@ app.get<{ Querystring: { demo?: string; window?: string; metaAdsFilter?: string 
   return reply.redirect(`/comms?panel=comms-postmark&window=${selectedWindowKey}${filterParam}`);
 });
 
-app.get<{ Querystring: { demo?: string } }>("/actions/refresh-mailchimp", async (request, reply) => {
-  if (isDemoRequest(request.query)) {
-    reply.code(303);
-    return reply.redirect(`/comms?demo=1&panel=comms-mailchimp`);
-  }
-
+app.get("/actions/refresh-mailchimp", async (request, reply) => {
   let mailchimpConfig;
 
   try {
@@ -2801,12 +2725,7 @@ app.get<{ Querystring: { demo?: string } }>("/actions/refresh-mailchimp", async 
   return reply.redirect(`/comms?panel=comms-mailchimp`);
 });
 
-app.get<{ Querystring: { demo?: string } }>("/actions/refresh-formstack", async (request, reply) => {
-  if (isDemoRequest(request.query)) {
-    reply.code(303);
-    return reply.redirect(`/comms?demo=1&panel=comms-formstack`);
-  }
-
+app.get("/actions/refresh-formstack", async (request, reply) => {
   let formstackConfig;
 
   try {
@@ -2840,11 +2759,7 @@ app.get<{ Querystring: { demo?: string } }>("/actions/refresh-formstack", async 
   return reply.redirect(`/comms?panel=comms-formstack`);
 });
 
-app.get<{ Querystring: { centre?: string; window?: string; sort?: string; demo?: string } }>("/actions/refresh-centres", async (request, reply) => {
-  if (isDemoRequest(request.query)) {
-    reply.code(303);
-    return reply.redirect(`/app?demo=1`);
-  }
+app.get<{ Querystring: { centre?: string; window?: string; sort?: string } }>("/actions/refresh-centres", async (request, reply) => {
   await syncStoredCentreReferences({ force: true });
   const centre = request.query?.centre;
   const windowKey = resolveWindowKey(request.query?.window);
@@ -2867,12 +2782,7 @@ app.get<{ Querystring: { centre?: string; window?: string; sort?: string; demo?:
   return reply.redirect(redirectTarget);
 });
 
-app.get<{ Querystring: { centre?: string; window?: string; sort?: string; demo?: string } }>("/actions/refresh-snapshot", async (request, reply) => {
-  if (isDemoRequest(request.query)) {
-    reply.code(303);
-    return reply.redirect(`/app?demo=1`);
-  }
-
+app.get<{ Querystring: { centre?: string; window?: string; sort?: string } }>("/actions/refresh-snapshot", async (request, reply) => {
   const currentStatus = getSnapshotRefreshState().status;
   const centre = request.query?.centre;
   const params = new URLSearchParams();
@@ -2941,10 +2851,8 @@ app.get<{ Querystring: { centre?: string; window?: string; sort?: string; demo?:
   return reply.redirect(redirectTarget);
 });
 
-app.get<{ Querystring: { demo?: string } }>("/actions/dismiss-snapshot-outcome", async (request, reply) => {
-  if (!isDemoRequest(request.query)) {
-    clearSnapshotRefreshOutcome();
-  }
+app.get("/actions/dismiss-snapshot-outcome", async (_request, reply) => {
+  clearSnapshotRefreshOutcome();
   reply.code(303);
   return reply.redirect("/app");
 });
@@ -2993,6 +2901,10 @@ app.post("/actions/update-ai-model", async (_request, reply) => {
       error: error instanceof Error ? error.message : "AI model update failed.",
     });
   }
+});
+
+app.get("/actions/update-ai-model/status", async (_request, reply) => {
+  return reply.type("application/json; charset=utf-8").send({ ok: true, ...aiModelUpdateStatus });
 });
 
 app.post("/actions/rollback-ai-model", async (_request, reply) => {

@@ -22,7 +22,6 @@ const VALID_COMMS_PANEL_IDS = new Set<string>(PANEL_DEFINITIONS.map((panel) => p
 
 export type CommsAppShellOptions = {
   focusPanelId?: string | null;
-  demo?: boolean;
   mailchimpDashboardData?: MailchimpDashboardData | null;
   mailchimpConfigStatus?: MailchimpConfigStatus | null;
   formstackDashboardData?: FormstackDashboardData | null;
@@ -65,13 +64,12 @@ function latestTimestamp(values: (string | null | undefined)[]) {
 
 function buildCommsQueryString(
   selectedWindowKey: WindowKey,
-  options: { panel?: string; demo?: boolean; metaAdsFilter?: string | null } = {},
+  options: { panel?: string; metaAdsFilter?: string | null } = {},
 ) {
   const params = new URLSearchParams();
   params.set("window", selectedWindowKey);
   if (options.panel) params.set("panel", options.panel);
   if (options.metaAdsFilter === "active-recent") params.set("metaAdsFilter", "active-recent");
-  if (options.demo) params.set("demo", "1");
   return params.toString();
 }
 
@@ -81,14 +79,13 @@ function resolveCommsMetaAdsFilter(input?: string | null) {
 
 function renderWebmailWindowActions(
   selectedWindowKey: WindowKey,
-  demo: boolean,
   metaAdsFilter: string,
   metaAdvertCentreCount: number | null | undefined,
 ) {
-  const resetHref = `/comms?${buildCommsQueryString("3M", { panel: "comms-postmark", demo, metaAdsFilter })}`;
-  const checkHref = `/actions/check-postmark?${buildCommsQueryString(selectedWindowKey, { demo, metaAdsFilter })}`;
-  const allHref = `/comms?${buildCommsQueryString(selectedWindowKey, { panel: "comms-postmark", demo })}`;
-  const activeRecentHref = `/comms?${buildCommsQueryString(selectedWindowKey, { panel: "comms-postmark", demo, metaAdsFilter: "active-recent" })}`;
+  const resetHref = `/comms?${buildCommsQueryString("3M", { panel: "comms-postmark", metaAdsFilter })}`;
+  const checkHref = `/actions/check-postmark?${buildCommsQueryString(selectedWindowKey, { metaAdsFilter })}`;
+  const allHref = `/comms?${buildCommsQueryString(selectedWindowKey, { panel: "comms-postmark" })}`;
+  const activeRecentHref = `/comms?${buildCommsQueryString(selectedWindowKey, { panel: "comms-postmark", metaAdsFilter: "active-recent" })}`;
   const activeRecentLabel = metaAdsFilter === "active-recent" && metaAdvertCentreCount != null
     ? `Meta active/recent (${metaAdvertCentreCount})`
     : "Meta active/recent";
@@ -107,7 +104,7 @@ function renderWebmailWindowActions(
             ? "analytics-toolbar__window analytics-toolbar__window--active"
             : "analytics-toolbar__window";
 
-        return `<a class="${className}" href="/comms?${buildCommsQueryString(option.key, { panel: "comms-postmark", demo, metaAdsFilter })}">${option.label}</a>`;
+        return `<a class="${className}" href="/comms?${buildCommsQueryString(option.key, { panel: "comms-postmark", metaAdsFilter })}">${option.label}</a>`;
       }).join("")}
       <a class="analytics-toolbar__window${metaAdsFilter === "all" ? " analytics-toolbar__window--active" : ""}" href="${allHref}">All emails</a>
       <a class="analytics-toolbar__window${metaAdsFilter === "active-recent" ? " analytics-toolbar__window--active" : ""}" href="${activeRecentHref}">${activeRecentLabel}</a>
@@ -217,7 +214,7 @@ function renderCommsChatScript() {
             var response = await fetch(shell.dataset.aiChatEndpoint, {
               method: "POST",
               headers: { "content-type": "application/json" },
-              body: JSON.stringify(window.mhDemoBody({ prompt: prompt, messages: history })),
+              body: JSON.stringify({ prompt: prompt, messages: history }),
             });
             if (!response.ok || !response.body) throw new Error("Chat request failed.");
             var reader = response.body.getReader();
@@ -403,7 +400,6 @@ function renderPostmarkRefreshScript() {
 
 export function renderCommsAppShell(options: CommsAppShellOptions = {}) {
   const focusPanelId = resolveCommsFocusPanelId(options.focusPanelId);
-  const demo = options.demo === true;
   const selectedWindowKey = resolveWindowKey(options.selectedWindowKey);
   const metaAdsFilter = resolveCommsMetaAdsFilter(options.metaAdsFilter);
   const mailchimpPulledAt = formatTimestamp(options.mailchimpDashboardData?.latestPulledAt);
@@ -420,14 +416,14 @@ export function renderCommsAppShell(options: CommsAppShellOptions = {}) {
     meta: panel.id === "comms-postmark"
       ? `<span class="comms-panel-source">Source: Postmark webhook + stored export | Latest activity: ${escapeHtml(postmarkReceivedAt)}</span>`
       : panel.id === "comms-mailchimp"
-      ? `<span class="comms-panel-source">Source: Mailchimp | Last pulled: ${escapeHtml(mailchimpPulledAt)}</span><a class="panel-action-button" href="/actions/refresh-mailchimp${demo ? "?demo=1" : ""}" aria-label="Download latest Panui data from Mailchimp" title="Download latest Panui data from Mailchimp"><i class="bi bi-download ui-icon" aria-hidden="true"></i></a>`
+      ? `<span class="comms-panel-source">Source: Mailchimp | Last pulled: ${escapeHtml(mailchimpPulledAt)}</span><a class="panel-action-button" href="/actions/refresh-mailchimp" aria-label="Download latest Panui data from Mailchimp" title="Download latest Panui data from Mailchimp"><i class="bi bi-download ui-icon" aria-hidden="true"></i></a>`
       : panel.id === "comms-formstack"
-        ? `<span class="comms-panel-source">Source: Formstack | Last pulled: ${escapeHtml(formstackPulledAt)}</span><a class="panel-action-button" href="/actions/refresh-formstack${demo ? "?demo=1" : ""}" aria-label="Download latest Online Forms data from Formstack" title="Download latest Online Forms data from Formstack"><i class="bi bi-download ui-icon" aria-hidden="true"></i></a>`
+        ? `<span class="comms-panel-source">Source: Formstack | Last pulled: ${escapeHtml(formstackPulledAt)}</span><a class="panel-action-button" href="/actions/refresh-formstack" aria-label="Download latest Online Forms data from Formstack" title="Download latest Online Forms data from Formstack"><i class="bi bi-download ui-icon" aria-hidden="true"></i></a>`
         : panel.id === "comms-funnel"
           ? `<span class="comms-panel-source">Sources: Postmark + Formstack | Latest activity: ${escapeHtml(combinedPulledAt)}</span>`
           : undefined,
     actions: panel.id === "comms-postmark"
-      ? renderWebmailWindowActions(selectedWindowKey, demo, metaAdsFilter, options.metaAdvertCentreCount)
+      ? renderWebmailWindowActions(selectedWindowKey, metaAdsFilter, options.metaAdvertCentreCount)
       : undefined,
     children: renderPanelContent(panel.id, options),
   }));
@@ -443,26 +439,15 @@ export function renderCommsAppShell(options: CommsAppShellOptions = {}) {
     <link rel="stylesheet" href="/vendor/bootstrap-icons.css" />
     <link rel="stylesheet" href="/app.css" />
   </head>
-  <body class="app-shell-body"${demo ? ` data-demo="1"` : ""}>
+  <body class="app-shell-body">
     <aside class="nav-rail" aria-label="Primary navigation">
       <a class="nav-rail__item" href="/" aria-label="Back to landing" title="Landing"><i class="bi bi-house-door" aria-hidden="true"></i></a>
-      <a class="nav-rail__item" href="/app${demo ? "?demo=1" : ""}" aria-label="Online Marketing dashboard" title="Online Marketing"><i class="bi bi-bar-chart-line" aria-hidden="true"></i></a>
+      <a class="nav-rail__item" href="/app" aria-label="Online Marketing dashboard" title="Online Marketing"><i class="bi bi-bar-chart-line" aria-hidden="true"></i></a>
       <a class="nav-rail__item" href="/tasks" aria-label="Tasks" title="Tasks"><i class="bi bi-check2-square" aria-hidden="true"></i></a>
-      <a class="nav-rail__item nav-rail__item--current" href="/comms${demo ? "?demo=1" : ""}" aria-label="Online Communications dashboard" title="Online Communications" aria-current="page"><i class="bi bi-envelope-paper" aria-hidden="true"></i></a>
-      ${demo ? `<a class="nav-rail__item nav-rail__item--exit-demo" href="/comms" aria-label="Exit demo mode" title="Exit demo"><i class="bi bi-eject" aria-hidden="true"></i></a>` : ""}
+      <a class="nav-rail__item nav-rail__item--current" href="/comms" aria-label="Online Communications dashboard" title="Online Communications" aria-current="page"><i class="bi bi-envelope-paper" aria-hidden="true"></i></a>
     </aside>
     ${renderRefreshOutcome(options)}
     ${layout}
-    <script>
-      (function() {
-        var demo = document.body.dataset.demo === "1";
-        window.MH_DEMO = demo;
-        window.mhDemoBody = function(obj) {
-          if (!demo) return obj || {};
-          return Object.assign({}, obj || {}, { demo: "1" });
-        };
-      })();
-    </script>
     ${renderPostmarkRefreshScript()}
     ${renderCommsChatScript()}
   </body>

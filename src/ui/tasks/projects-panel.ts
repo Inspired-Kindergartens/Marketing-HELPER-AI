@@ -26,9 +26,9 @@ function formatDate(iso: string | null): string | null {
   return date.toLocaleDateString("en-NZ", { day: "numeric", month: "short", year: "numeric" });
 }
 
-function renderProjectListItem(project: ProjectListItem, selectedId: number | null, demo: boolean): string {
+function renderProjectListItem(project: ProjectListItem, selectedId: number | null): string {
   const target = formatDate(project.targetDate);
-  const href = `/tasks?panel=projects&project=${project.id}${demo ? "&demo=1" : ""}`;
+  const href = `/tasks?panel=projects&project=${project.id}`;
   return `
     <a class="project-list__item${project.id === selectedId ? " project-list__item--active" : ""}" href="${href}">
       <span class="project-list__name">${escapeHtml(project.name)}</span>
@@ -128,12 +128,12 @@ function renderStatusBreakdown(groups: ProjectGroupView[]): string {
   `;
 }
 
-function renderGroup(group: ProjectGroupView, demo: boolean): string {
+function renderGroup(group: ProjectGroupView): string {
   const tasks = group.tasks
     .map(
       (task) => `
         <li class="project-group__task project-group__task--${escapeHtml(task.status)}">
-          <a href="/tasks?panel=task-detail&task=${task.id}${demo ? "&demo=1" : ""}">${escapeHtml(task.title)}</a>
+          <a href="/tasks?panel=task-detail&task=${task.id}">${escapeHtml(task.title)}</a>
           <span class="project-group__task-status">${escapeHtml(TASK_STATUS_LABELS[task.status])}</span>
         </li>
       `,
@@ -147,7 +147,7 @@ function renderGroup(group: ProjectGroupView, demo: boolean): string {
   `;
 }
 
-function renderProjectDetail(rollup: ProjectRollup, members: MemberView[], demo: boolean): string {
+function renderProjectDetail(rollup: ProjectRollup, members: MemberView[]): string {
   const assignableMembers = members.filter(
     (member) => member.active && !rollup.members.some((pm) => pm.memberId === member.id),
   );
@@ -177,7 +177,7 @@ function renderProjectDetail(rollup: ProjectRollup, members: MemberView[], demo:
   ];
 
   return `
-    <div class="project-detail" data-project-detail data-project-id="${rollup.id}"${demo ? ` data-demo="1"` : ""}>
+    <div class="project-detail" data-project-detail data-project-id="${rollup.id}">
       <header class="project-detail__header">
         <h3 class="project-detail__name">${escapeHtml(rollup.name)}</h3>
         <span class="project-detail__status project-list__status--${escapeHtml(rollup.status)}">${escapeHtml(PROJECT_STATUS_LABELS[rollup.status] ?? rollup.status)}</span>
@@ -209,7 +209,7 @@ function renderProjectDetail(rollup: ProjectRollup, members: MemberView[], demo:
 
       <section class="project-detail__section">
         <h4 class="project-detail__section-title">Groups &amp; tasks</h4>
-        <div class="project-groups">${groups.map((group) => renderGroup(group, demo)).join("")}</div>
+        <div class="project-groups">${groups.map((group) => renderGroup(group)).join("")}</div>
         <form class="project-detail__add-group" data-project-add-group>
           <input type="text" name="name" placeholder="New group name…" maxlength="100" />
           <button type="submit"><i class="bi bi-plus-lg ui-icon" aria-hidden="true"></i><span>Add group</span></button>
@@ -223,15 +223,14 @@ export type ProjectsPanelOptions = {
   projects: ProjectListItem[];
   selectedProject: ProjectRollup | null;
   members: MemberView[];
-  demo: boolean;
 };
 
 export function renderProjectsPanel(options: ProjectsPanelOptions): string {
-  const { projects, selectedProject, members, demo } = options;
+  const { projects, selectedProject, members } = options;
   const selectedId = selectedProject?.id ?? null;
 
   return `
-    <div class="projects-panel" data-projects-panel${demo ? ` data-demo="1"` : ""}>
+    <div class="projects-panel" data-projects-panel>
       <div class="projects-panel__layout">
         <aside class="projects-panel__list">
           <form class="project-create" data-project-create>
@@ -240,13 +239,13 @@ export function renderProjectsPanel(options: ProjectsPanelOptions): string {
           </form>
           <div class="project-list">
             ${projects.length
-              ? projects.map((project) => renderProjectListItem(project, selectedId, demo)).join("")
+              ? projects.map((project) => renderProjectListItem(project, selectedId)).join("")
               : `<p class="project-list__empty">No projects yet.</p>`}
           </div>
         </aside>
         <div class="projects-panel__detail">
           ${selectedProject
-            ? renderProjectDetail(selectedProject, members, demo)
+            ? renderProjectDetail(selectedProject, members)
             : `<p class="projects-panel__placeholder">Select a project to see its consolidated tasks, members, and timeline.</p>`}
         </div>
       </div>

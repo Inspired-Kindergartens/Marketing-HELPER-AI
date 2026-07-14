@@ -1,220 +1,325 @@
-# PLAN: Tasks & Projects
+# PLAN: Job Descriptions (JD)
 
-A new top-level section of Marketing Helper AI for tracking work: **Tasks** (time
-tracking, progress status, checklists, due/overdue reminders) that can be grouped
-and expanded into **Projects** (with assignable **Members**, task consolidation by
-group, and a Gantt-style graphical view). Reminders for due/overdue tasks surface
-on the landing page, and a new primary button opens the section.
+An AI-driven top-level section for creating Job Descriptions unique to each
+kindergarten. Two outputs per JD:
 
-This plan follows the existing architecture: Prisma models in `prisma/schema.prisma`,
-persistence + view models in `src/storage/*`, page rendering in a dedicated
-`src/ui/*-app-shell.ts` shell composed of `src/ui/<section>/*-panel.ts` panels via
-`renderLayout`, Fastify routes in `src/server.ts`, and styles in `src/ui/app.css`.
-The section mirrors how **Communications** (`/comms`) was added.
+1. **Website blurb** — AI-generated rich text (WYSIWYG-editable) based on
+   previous blurbs for that service, influenced by an Inspired Kindergartens
+   generic base text; **copy to clipboard** (HTML + plain text).
+2. **PDF download** — matches the current template
+   (`PD Teacher PAENGAROA July 2026.pdf`): header logo, field table
+   (Job Title / Job Category / Location / Collective Agreement / Position Type /
+   Date advertised / Level-Salary Range / Closing Date / Senior Teacher /
+   Start Date), "Applications only accepted by" + Qualifications block,
+   Job Description intro paragraph, ROLE AND RESPONSIBILITIES bullet sections,
+   footer table (Reviewed By / Approved By / Last Updated By with Date/Time).
 
----
-
-## Goals
-
-1. **Tasks** with: title/description, **status** (progress state), **time tracking**
-   (estimated + logged time, optional running timer), a **checklist** of subitems,
-   a **due date**, and optional links to a centre and/or a project.
-2. **Reminders** on the landing page for tasks that are **due soon** or **overdue**.
-3. A new **primary button** on the landing page (`Tasks`) opening `/tasks`.
-4. **Projects**: a task can be promoted into / attached to a project. Projects have
-   **members** drawn from a user-maintained **Members** database, **consolidate
-   tasks by group**, and render **graphically** (Gantt or comparable timeline).
+Architecture follows existing conventions: Prisma models in
+`prisma/schema.prisma`, persistence in `src/storage/jd-store.ts`, AI context in
+`src/ai/jd-context.ts` (using `runLocalChat` from `src/ai/client.ts`), page in
+`src/ui/jd-app-shell.ts` composed of `src/ui/jd/*-panel.ts` panels, routes in
+`src/server.ts`, styles in `src/ui/app.css`. Mirrors how Tasks/Comms were built.
 
 ---
 
-## Data model (`prisma/schema.prisma`)
+## Field-driving rules (extracted from current + archive JDs)
 
-New models, following existing conventions (`Int @id @default(autoincrement())`,
-`createdAt`/`updatedAt`, `@@index` on lookup/sort columns, optional `centreKey`
-relation to `CentreReference` with `onDelete: SetNull`).
+- **Job Title** dropdown (this order): Teacher; Head Teacher; Administrator;
+  Part-time Teacher. (Senior Teacher dropped from scope — the "Senior
+  Teacher" *field* per centre remains, as it names the centre's senior
+  teacher on every JD.) Title drives Job Category, Level/Salary Range,
+  Qualifications, Role & Responsibilities, Position Type default, and the
+  **PDF layout variant**:
+  - *Standard KTCA layout* (Teacher, Head Teacher, Part-time Teacher): full
+    field table as in `PD Teacher PAENGAROA July 2026.pdf`.
+  - *Administrator layout* (per `Job Description Administrator template.pdf`):
+    short field table — Job Title / Job Category `Administration` / Location /
+    **Position Hours** (text, e.g. `12 Hours (as per Employment Agreement)`);
+    no salary, collective agreement, senior teacher or advert dates; sections
+    are ROLE AND RESPONSIBILITIES (intro sentence + **Core duties** +
+    **Other duties**, bold lead-in bullets), REQUIRED SKILLS, and
+    **REPORTS TO: Head Teacher**; same footer review table.
+  - *Professional/contract roles* (e.g. Speech Language Therapist, from the
+    `SLT` examples): currently free-form docs that **should conform to the
+    standard tabular layout** — field mapping: Job Category `Professional`,
+    Agreement `Contract for Services`, Remuneration text (e.g. `Competitive
+    (to be negotiated)`) instead of a pay scale, **Contract Manager** in place
+    of Senior Teacher, plus an email **Subject Line** in the applications
+    block. (Pending confirmation whether this becomes a fifth dropdown title —
+    see Open inputs.)
+- **Location** dropdown: open, non-ignored `CentreReference` names in CAPS
+  ending "Kindergarten" (e.g. `PAENGAROA Kindergarten`). Location drives the
+  Job Description intro paragraph (operating hours + max roll), Senior Teacher
+  name, and Reviewed By (senior teacher acronym).
+- **Position Type**: Full Time (default); Part-time. Part-time takes an FTE
+  (e.g. 0.6) and pro-rates the salary range (archive example: 0.6 FTE shown as
+  `$36,797.40 to $61,851.60`).
+- **Job Category / Level-Salary Range**: K1 = Teacher / Part-time Teacher,
+  K2 = Head Teacher. Salary Range shows the **actual dollar range** currently
+  in effect (see scales below). K3/K4 (Senior Teacher) rates are documented
+  below for reference but not seeded — the Senior Teacher job title is out of
+  scope.
+- **Date advertised**: date input, default today. **Closing Date**: date +
+  time, rendered `28/07/2026 at 4pm` (default time 4pm). **Start Date**: text
+  field, default `To be negotiated`.
+- **Collective Agreement**: fixed `Kindergarten Teachers Collective Agreement`.
+- **Applications block**: fixed — E-mail / Appointments Secretary /
+  `office@ikindergartens.nz`.
+- **Footer**: Reviewed By = senior teacher acronym (e.g. VVR, HD);
+  Approved By = PM; Last Updated By = user acronym + date/time.
 
-### `Member`
-User-maintained directory of people who can be assigned to projects.
-- `id`, `name`, `email String? @unique`, `role String?`, `active Boolean @default(true)`
-- `createdAt`, `updatedAt`
-- relations: `projectMembers ProjectMember[]`, `assignedTasks Task[]`
-- index: `@@index([active, name])`
+## KTCA 2026–2028 pay scales (seed data; agreement expires 28 Dec 2028)
 
-### `Project`
-- `id`, `name`, `description String?`
-- `status String @default("active")` (e.g. active / on_hold / completed / archived)
-- `startDate DateTime?`, `targetDate DateTime?`
-- `centreKey Int?` (optional link to a centre)
-- `createdAt`, `updatedAt`
-- relations: `centre CentreReference?`, `members ProjectMember[]`,
-  `taskGroups TaskGroup[]`, `tasks Task[]`
-- index: `@@index([status, targetDate])`, `@@index([centreKey])`
+| Scale | Effective 2 Apr 2026 | 29 Jun 2026 | 28 Jan 2027 | 29 Jun 2027 |
+|-------|---------------------|-------------|-------------|-------------|
+| K1 steps 1–10 | $62,862 – $105,686 | (same) | $64,119 – $107,886 | (same) |
+| K2 Head Teacher | $110,356 | $113,356 | $115,736 | $116,736 |
+| K2R Relieving HT | $108,356 | $111,356 | $113,736 | $114,736 |
+| K3 Senior Teacher | $116,148 | $119,148 | $121,650 | $122,650 |
+| K4 Senior Teacher (manages ST team) | $125,638 | $128,638 | $131,340 | $132,340 |
 
-### `ProjectMember` (join: project ↔ member)
-- `id`, `projectId Int`, `memberId Int`, `projectRole String?`, `createdAt`
-- relations: `project`, `member` (both `onDelete: Cascade`)
-- `@@unique([projectId, memberId])`, `@@index([memberId])`
-
-### `TaskGroup` (consolidates tasks by group within a project)
-- `id`, `projectId Int`, `name`, `position Int @default(0)`, `createdAt`, `updatedAt`
-- relations: `project` (`onDelete: Cascade`), `tasks Task[]`
-- `@@index([projectId, position])`
-
-### `Task`
-- `id`, `title`, `description String?`
-- `status String @default("todo")` — progress states: `todo` / `in_progress` /
-  `blocked` / `done` (validated by a shared constant set, see below)
-- `dueDate DateTime?`
-- **Time tracking**: `estimatedMinutes Int?`, `loggedMinutes Int @default(0)`,
-  `timerStartedAt DateTime?` (non-null ⇒ a timer is currently running; on stop,
-  elapsed is folded into `loggedMinutes` and this is cleared)
-- `projectId Int?`, `taskGroupId Int?`, `centreKey Int?`, `assigneeId Int?`
-- `position Int @default(0)` (ordering within group/board)
-- `completedAt DateTime?`, `createdAt`, `updatedAt`
-- relations: `project Project?` (`SetNull`), `group TaskGroup?` (`SetNull`),
-  `centre CentreReference?` (`SetNull`), `assignee Member?` (`SetNull`),
-  `checklistItems ChecklistItem[]`, `timeEntries TimeEntry[]`
-- indexes: `@@index([status, dueDate])` (drives reminders),
-  `@@index([projectId, position])`, `@@index([taskGroupId, position])`,
-  `@@index([assigneeId])`, `@@index([centreKey])`, `@@index([dueDate])`
-
-### `ChecklistItem`
-- `id`, `taskId Int`, `label`, `done Boolean @default(false)`,
-  `position Int @default(0)`, `createdAt`, `updatedAt`
-- relation: `task` (`onDelete: Cascade`)
-- `@@index([taskId, position])`
-
-### `TimeEntry` (audit trail for logged time; `loggedMinutes` is the cached sum)
-- `id`, `taskId Int`, `minutes Int`, `note String?`, `startedAt DateTime?`,
-  `endedAt DateTime?`, `createdAt`
-- relation: `task` (`onDelete: Cascade`)
-- `@@index([taskId, createdAt(sort: Desc)])`
-
-Add the back-relations (`tasks`, `projects`, `taskGroups`, `formstack`-style) to
-`CentreReference`.
-
-**Migration**: `prisma/migrations/<timestamp>_add_tasks_projects/` created via
-`npm run prisma:migrate`, then `npm run prisma:generate`.
+K1 full step table (2 Apr 2026 → 28 Jan 2027): 1: 62,862→64,119;
+2: 65,685→66,999; 3: 68,251→69,616; 4: 72,548→73,999; 5: 77,224→78,768;
+6: 82,230→83,874; 7: 88,276→90,042; 8: 93,234→95,099; 9: 100,368→102,475;
+10: 105,686→107,886.
 
 ---
 
-## Storage layer (`src/storage/`)
+## 1. Data model (`prisma/schema.prisma`)
+- [ ] `JdPayScale` — scaleKey (K1/K2/K2R), step (nullable for flat scales),
+      effectiveFrom, annualRate, sourceDocument, importedAt. Seeded from the
+      table above (K1 + K2 + K2R only); selectable-by-date so ranges roll
+      over automatically on 28 Jan 2027 / 29 Jun 2027.
+- [ ] `JdAgreement` — one row per imported KTCA document: name, fileName,
+      effectiveFrom, expiresOn (28/12/2028), importedAt. Drives the yearly
+      startup check.
+- [ ] `JdTitleProfile` — jobTitle (unique), sortOrder, jobCategory,
+      payScaleKey?, layoutVariant (`standard` | `administrator` |
+      `professional`), defaultPositionType, agreementText,
+      qualificationsText, roleSections (JSON: `[{heading, intro?, bullets[]}]`
+      — bullets support a bold lead-in for the Administrator style),
+      extras JSON (positionHours, reportsTo, remunerationText,
+      contractManagerName, subjectLine — used by non-standard variants).
+      Seeds: Teacher + Head Teacher from current PDFs; **Part-time Teacher
+      reuses the Teacher qualifications/roles** (K1, Position Type defaults to
+      Part-time with FTE); **Administrator** from
+      `Job Description Administrator template.pdf` (category Administration,
+      Position Hours field, core/other duties, required skills, reports to
+      Head Teacher, no pay scale).
+- [ ] `JdCentreProfile` — extends the existing centre list: centreKey
+      (unique, FK `CentreReference`), locationDisplay (CAPS +
+      "Kindergarten"), introParagraph (operating hours + max roll),
+      seniorTeacherName, seniorTeacherAcronym. Back-relation on
+      `CentreReference`; seeded with a row per open, non-ignored centre
+      (known values filled: PAENGAROA, OPEYS, Maungatapu; the rest edited in
+      the settings panel).
+- [ ] `JobDescription` — jobTitle, centreKey, positionType, fte,
+      jobCategory, salaryRangeText (frozen at generation), dateAdvertised,
+      closingAt, startDateText, qualificationsText, introParagraph,
+      roleSections JSON, blurbHtml, reviewedByAcronym, approvedByAcronym
+      (default PM), lastUpdatedByAcronym, createdAt/updatedAt. Field values
+      copied from profiles at creation so each JD is editable independently.
+- [ ] `JdBlurb` — blurb history: centreKey, jobDescriptionId?, contentHtml,
+      savedAt. **A new row on every save** (user may hand-edit; all versions
+      kept as future AI reference corpus).
+- [ ] `JdKnowledgeDoc` — blurb information base: kind (`generic` |
+      `service`), centreKey?, label (`current` | `old` | doc name),
+      contentHtml, updatedAt. **Seed from the two supplied documents**:
+      `D:\iK\Documents\JD\Current Kindergarten Website Blurbs.pdf` (all 26
+      open services — full coverage verified against `CentreReference`) and
+      `D:\iK\Documents\JD\OLD Kindergarten Website Blurbs.pdf` (22 services;
+      lacks Katikati, Brookfield, Matua, Thames Coast — expected, they're
+      newer additions). One `service`+`current` and (where present) one
+      `service`+`old` row per centre, preserving headings/bold/bullets/links
+      as HTML. Note: blurb docs spell "Maraawaewae"; DB has "Maarawaewae" —
+      match by centreKey, not name. The `generic` doc seeds with the
+      **immovable boilerplate** (below) captured from the live vacancy pages;
+      editable in the settings panel but locked in the blurb editor.
+- [ ] Migration `add_job_descriptions` + seed script
+      (`prisma/seed-jd.ts` or inline in migration) for pay scales, Teacher/
+      Head Teacher title profiles, and known centre profiles (PAENGAROA,
+      OPEYS from current PDFs).
 
-New modules, each Prisma-backed and exporting a typed view-model shape (matching the
-`*DashboardData` pattern used by `postmark-store.ts` / `formstack-store.ts`):
+## 2. Pay-scale startup check (yearly KTCA update)
+- [ ] On server start (same pattern as other background refreshes in
+      `src/server.ts`): resolve currently-effective rates by date, refresh any
+      stored display ranges, and log the active scale window.
+- [ ] Warn when the newest `JdAgreement.expiresOn` is past or within 90 days:
+      banner on the JD page (+ landing reminder strip entry) prompting an
+      updated KTCA import.
+- [ ] KTCA import flow: upload new KTCA PDF → extract text → AI-assisted
+      extraction of K1 steps / K2 / K2R rate tables + effective dates →
+      review screen showing parsed rates → confirm to insert new
+      `JdPayScale` rows + `JdAgreement`. (Manual-edit fallback if parsing
+      fails.)
 
-- `task-store.ts` — CRUD for tasks; checklist add/toggle/remove; status change
-  (sets/clears `completedAt`); **timer start/stop** (start sets `timerStartedAt`;
-  stop creates a `TimeEntry`, increments `loggedMinutes`, clears `timerStartedAt`);
-  manual time logging; `listTasks(filter)` for board/list views; and
-  `getDueAndOverdueTasks(now, horizonDays)` returning the reminder feed
-  (status ≠ done, ordered by `dueDate`, split into `overdue` vs `dueSoon`).
-- `project-store.ts` — CRUD for projects; group CRUD/reorder; attach/detach a task
-  to a project + group; project roll-up (tasks consolidated by `TaskGroup`, plus
-  per-group/per-status counts and date range for the timeline).
-- `member-store.ts` — CRUD for the members directory; add/remove project members.
+## 3. Storage layer (`src/storage/jd-store.ts`)
+- [ ] Pay-scale helpers: `getEffectiveRates(date)`,
+      `formatSalaryRange(scaleKey, date, fte?)` → e.g.
+      `K1: $62,862 to $105,686`, flat scales `K2: $113,356`, part-time
+      pro-rated (`fte × rate`, 2 dp, "to" range for stepped scales).
+- [ ] Title/centre profile CRUD (`listTitleProfiles`, `upsertCentreProfile`,
+      `listCentreProfiles` joined to `CentreReference`).
+- [ ] `JobDescription` CRUD; `createJobDescription` composes defaults from
+      title profile + centre profile + effective pay scale.
+- [ ] Blurb helpers: `saveBlurb` (writes `JobDescription.blurbHtml` **and**
+      appends a `JdBlurb` history row), `listBlurbsForCentre` (AI corpus).
+- [ ] Knowledge-doc CRUD (scaffold).
+- [ ] Server-side HTML sanitiser for WYSIWYG input (allow: h1–h3, p, strong,
+      em, ul/ol/li, a[href], br; strip everything else).
 
-Shared validation: a `TASK_STATUSES` constant + `resolveTaskStatus()` guard
-(mirroring `resolveWindowKey` / `VALID_COMMS_PANEL_IDS`) so the UI and API agree on
-the allowed status set. A `taskTimeMinutes(task)` helper returns
-`loggedMinutes + (timerStartedAt ? now - timerStartedAt : 0)` so a running timer is
-reflected without writing on every read.
+## 4. AI blurb generation (`src/ai/jd-context.ts`)
+- [ ] Context builder: IK generic base text (`JdKnowledgeDoc` kind=generic) +
+      the centre's `current` (primary) and `old` (secondary) website blurbs
+      (kind=service for centreKey) + most recent N previously generated/saved
+      blurbs for that centre (`JdBlurb`) + the JD's fields (title, position
+      type, centre intro). Subtle variation on the centre's own voice — keep
+      its established taglines, pou/values, whakataukī and factual claims
+      (hours, free-hours offer, Enviroschools status) verbatim unless the JD
+      fields contradict them.
+- [ ] Blurb template = **variable editorial section + immovable boilerplate**
+      (structure verified on the live vacancy pages for Tai o Fenua + OPEYS,
+      `inspiredkindergartens.nz/employment-and-careers/vacancies/...`):
+      1. *Variable (AI-generated)*: headline (e.g. "Kindergarten Teacher
+         Wanted"), service-specific body in the centre's own voice — setting,
+         values, who we're looking for / you-will bullets. Style precedents:
+         the live pages + the "Advertisement Copy" section in
+         `SLT/Job Description+SLT+8.12.2025.pdf`.
+      2. *Immovable (appended verbatim, never sent through the AI)*:
+         - "The terms and conditions of the Kindergarten Teachers Collective
+           Agreement will apply. Inspired Kindergartens offers excellent
+           employment conditions, supportive colleagues and a wide range of
+           professional learning opportunities."
+         - Link: "Job Description - Full time - Teacher / Kaiako
+           <SERVICE>" → the generated JD PDF (site hosts under
+           `/assets/Job-Descriptions/…`)
+         - Link: "Please apply online here" →
+           `/employment-and-careers/how-to-apply/how-to-apply-kindergarten`
+         - "Start Date: <JD startDateText>"
+         - "Closing Date: <JD closingAt formatted>"
+         - "Be at the cutting edge – come work for Inspired Kindergartens"
+      Prompt instructs the AI **not** to repeat the boilerplate sentences in
+      the editorial section (the live pages currently duplicate the KTCA
+      sentence — avoid that), and never to invent facts about the centre.
+- [ ] `POST /api/jd/:id/blurb/generate` uses `runLocalChat`
+      (`src/ai/client.ts`), sanitises the returned HTML, saves via
+      `saveBlurb`, returns HTML for the editor.
+- [ ] Regenerate keeps prior versions in `JdBlurb` (nothing overwritten).
 
----
+## 5. JD section UI (`src/ui/jd-app-shell.ts`, `src/ui/jd/`)
+- [ ] `jd-app-shell.ts` — `PANEL_DEFINITIONS`, `VALID_JD_PANEL_IDS`,
+      `renderJdAppShell` via `renderLayout` (same as tasks/comms shells).
+- [ ] `jd-list-panel.ts` — existing JDs (title, location, dates advertised/
+      closing), open/duplicate/delete; "New Job Description" form with the
+      driving dropdowns (Job Title in the specified order; Location from
+      centre profiles).
+- [ ] `jd-editor-panel.ts` — full field editor: dropdowns/date/date-time/text
+      inputs per the field rules; auto-fill on title/location change (with
+      "edited" fields preserved); Role & Responsibilities section editor
+      (headings + bullet lists); Qualifications text; footer acronyms.
+      Buttons: **Download PDF**, **Save**.
+- [ ] `jd-blurb-panel.ts` — WYSIWYG editor (custom `contenteditable`
+      component, no new heavy deps): toolbar for headings (H1/H2/H3),
+      normal paragraph, **bold**, *italic*, bullets, hyperlinks;
+      **Generate with AI** button; **Copy to clipboard** writing both
+      `text/html` and `text/plain` via `ClipboardItem`; blurb version history
+      list (restore a previous version). The immovable boilerplate renders as
+      a locked (non-editable) block below the editable section, with Start/
+      Closing Date auto-filled from the JD fields; copy-to-clipboard includes
+      both parts.
+- [ ] `jd-settings-panel.ts` — centre profiles table (intro paragraph, senior
+      teacher name + acronym per kindergarten), title profiles
+      (qualifications + role sections per job title), knowledge docs
+      (generic text + per-service docs), pay-scale table with agreement
+      status + "Import new KTCA" upload.
 
-## UI layer (`src/ui/`)
+## 6. PDF generation
+- [ ] Add `pdfmake` (declarative tables — fits this table-heavy template;
+      pure JS, works server-side in Fastify).
+- [ ] Extract the Inspired Kindergartens logo from an existing JD PDF (or the
+      brand asset if the user supplies one) into `src/assets/ik-logo.png`,
+      embedded as base64.
+- [ ] `src/ui/jd/jd-pdf.ts` — builds the document definition matching the
+      current template: logo top-right; bordered 4-column field table; grey
+      "Applications only accepted by" band with E-mail block +
+      QUALIFICATIONS AND EDUCATION REQUIREMENTS side by side; grey "Job
+      Description" band; intro paragraph; ROLE AND RESPONSIBILITIES sections
+      with bullet lists (section continues on page 2 with repeated heading);
+      footer review table (Reviewed By / Approved By / Last Updated By with
+      Date and Date/Time).
+- [ ] Layout variants driven by `JdTitleProfile.layoutVariant`: Administrator
+      (short field table with Position Hours, bold lead-in duty bullets,
+      REQUIRED SKILLS, REPORTS TO, "Private and Confidential" page
+      header/footer) and Professional/contract (standard table with
+      Agreement/Remuneration/Contract Manager/Subject Line substitutions) —
+      the SLT docs get regenerated into this conforming layout.
+- [ ] `GET /api/jd/:id/pdf` → `application/pdf` download, filename
+      `PD <Job Title> <LOCATION> <Month Year>.pdf` (matches current naming).
+- [ ] Visual check against `PD Teacher PAENGAROA July 2026.pdf` side by side.
 
-### Landing page (`src/ui/landing-page.ts`)
-- Add a **primary button** `Tasks` → `/tasks` to the `tiles` array
-  (`{ label: "Tasks", description: "Tasks, projects & reminders", href: "/tasks", primary: true }`).
-- Add a **reminders strip** above/beside `landing__buttons`: a server-rendered
-  `landing__reminders` section listing overdue (emphasised) and due-soon tasks, each
-  linking to `/tasks?task=<id>`. Empty state hides the section. `renderLandingPage`
-  becomes a function of the reminder feed: `renderLandingPage({ reminders })`, and
-  the `/` route passes `getDueAndOverdueTasks(...)`.
+## 7. Routes (`src/server.ts`)
+- [ ] `GET /jd` (+ `?focus=` panel param, same pattern as `/tasks`).
+- [ ] JD API: create / update / delete / duplicate.
+- [ ] Blurb API: generate (AI), save (records history), list versions,
+      restore version.
+- [ ] Settings API: centre profile upsert, title profile update, knowledge
+      doc CRUD, KTCA import (multipart upload → parse → confirm).
+- [ ] `GET /api/jd/:id/pdf` download.
 
-### Tasks section shell (`src/ui/tasks-app-shell.ts`)
-Mirror `comms-app-shell.ts`: a `PANEL_DEFINITIONS` list, a `VALID_TASKS_PANEL_IDS`
-set, `renderTasksAppShell(options)` composing panels via `renderLayout`, and a
-`buildTasksQueryString` helper. Panels under `src/ui/tasks/`:
-- `task-board-panel.ts` — the task list/board grouped by **status** (todo /
-  in_progress / blocked / done). Each card shows due/overdue badge, time
-  (logged / estimated), checklist progress (`3/5`), assignee, and timer start/stop.
-- `task-detail-panel.ts` — single task: description, status control, due date,
-  checklist editor, time log + running timer, project/group/assignee/centre links.
-- `projects-panel.ts` — project list and a selected project's **consolidated view**:
-  tasks grouped by `TaskGroup`, member list (add from Members directory), and the
-  **Gantt/timeline graph**.
-- `members-panel.ts` — the Members directory (add/edit/deactivate).
+## 8. Landing page
+- [ ] `Job Descriptions` tile → `/jd` (same tile component/behaviour as
+      existing tiles — no bespoke styling).
+- [ ] KTCA-expiry warning surfaces in the existing reminders strip when due.
 
-### Gantt / graphical view
-Render server-side as an inline SVG/CSS timeline (no new heavy client deps; keep the
-existing vanilla approach). Each task is a horizontal bar positioned by
-`startDate`/`dueDate` across the project's date range, grouped by `TaskGroup` rows,
-coloured by status. If a task has no dates it falls into an "unscheduled" lane.
-A Gantt is the default; a simple grouped bar/status breakdown is the fallback when
-the project has no usable dates.
+## 9. Styles (`src/ui/app.css`)
+- [ ] `.jd-*` classes reusing existing panel/card/form patterns; WYSIWYG
+      toolbar + editor styles; blurb version list.
 
-### Styles (`src/ui/app.css`)
-Add `.landing-reminders*`, `.task-card*`, `.task-board*`, `.gantt*`,
-`.project-*`, and `.member-*` classes, reusing existing tokens/spacing.
+## 10. Tests
+- [ ] `test/jd-store.test.ts` — real unit tests for pure helpers:
+      `formatSalaryRange` (K1 range, K2 flat, effective-date rollover on
+      28 Jan 2027, part-time FTE pro-rating), HTML sanitiser, PDF filename
+      formatting; source-pattern assertions for Prisma-backed store functions
+      (repo convention — no test DB).
+- [ ] `test/jd-app-shell.test.ts` — panel selection guard, field-driving
+      rules rendered (title order in dropdown, defaults), blurb toolbar +
+      copy button present.
+- [ ] **Wire both into `test/run-tests.ts`** (don't repeat the tasks-shell
+      omission).
+- [ ] Landing tile test added to `test/landing-page.test.ts`.
 
----
+## 11. Docs
+- [ ] `README.md` — `## Job Descriptions` section (blurb + PDF workflow,
+      settings, KTCA import).
+- [ ] `ROADMAP.md` — note the JD feature and its relationship to existing
+      apps.
 
-## Routes (`src/server.ts`)
-
-Page routes (mirroring `/app` and `/comms`):
-- `GET /` — extend to fetch and pass the reminder feed to `renderLandingPage`.
-- `GET /tasks` — querystring `{ panel?, project?, task?, demo? }`; renders
-  `renderTasksAppShell` with the relevant store data (and a demo path like the
-  others when `demo=1`).
-
-JSON/form API routes (follow the existing redirect-on-mutation convention used by
-the Postmark/Mailchimp/Formstack handlers; return to `/tasks?...` with the right
-panel/selection after a mutation):
-- Tasks: `POST /api/tasks` (create), `POST /api/tasks/:id` (update),
-  `POST /api/tasks/:id/status`, `POST /api/tasks/:id/timer/start`,
-  `POST /api/tasks/:id/timer/stop`, `POST /api/tasks/:id/time` (manual log),
-  `POST /api/tasks/:id/delete`.
-- Checklist: `POST /api/tasks/:id/checklist` (add),
-  `POST /api/tasks/:id/checklist/:itemId/toggle`,
-  `POST /api/tasks/:id/checklist/:itemId/delete`.
-- Projects: `POST /api/projects` (create/update), `POST /api/projects/:id/groups`,
-  `POST /api/projects/:id/members` (add/remove from directory),
-  `POST /api/tasks/:id/attach` (set project + group), `POST /api/projects/:id/delete`.
-- Members: `POST /api/members` (create/update), `POST /api/members/:id/delete`.
-
-Keep all routes behind the existing local-host safety in `src/server.ts`.
-
----
-
-## Demo fixtures (`src/demo/`)
-
-Add a tasks/projects fixture set (a couple of projects, groups, members, and tasks
-with mixed due dates, statuses, checklists, and logged time) so `/tasks?demo=1` and
-the landing-page reminders demonstrate the feature without real data — matching how
-the Marketing/Comms demos work.
-
----
-
-## Tests (`test/`)
-
-- `task-store.test.ts` — status transitions set/clear `completedAt`; timer
-  start→stop folds elapsed into `loggedMinutes` and writes a `TimeEntry`;
-  `getDueAndOverdueTasks` correctly partitions overdue vs due-soon and excludes done.
-- `tasks-app-shell.test.ts` — panel selection guard, reminder rendering, Gantt bar
-  positioning for scheduled vs unscheduled tasks (mirrors `comms-app-shell.test.ts`).
-- Landing page test: reminders section renders for due/overdue and hides when empty.
-
----
-
-## Build order
-
-1. Schema + migration + `prisma:generate`.
-2. Stores (`member-store`, `task-store`, `project-store`) + shared status/time helpers.
-3. Landing page button + reminders feed (smallest visible slice).
-4. Tasks shell + task board + task detail (time tracking, checklists, status).
-5. Projects (groups, members directory, attach tasks, consolidated view).
-6. Gantt/graph rendering.
-7. Demo fixtures + tests + CSS polish.
-8. Update `README.md` (new section + dashboard panel docs) and `ROADMAP.md`.
+## 12. Open inputs needed from user
+- [x] Qualifications: Part-time Teacher reuses the Teacher text.
+- [x] Administrator: profile taken from
+      `Job Description Administrator template.pdf` (own layout variant, no
+      pay scale).
+- [x] Senior Teacher job title: **dropped from scope** (the per-centre
+      Senior Teacher name/acronym fields remain).
+- [x] Centre fields: extend the existing centre list (`CentreReference`) via
+      the new `JdCentreProfile` schema; values maintained in the settings
+      panel.
+- [ ] **SLT clarification**: the `D:\iK\Documents\JD\SLT` PDFs are **Speech
+      Language Therapist** JDs (Professional / Contract for Services).
+      Confirm whether "Speech Language Therapist" (or a generic
+      "Professional/Contract" title) joins the dropdown as a fifth title, or
+      whether the professional layout variant is deferred.
+- [ ] Administrator PDF page header/footer says
+      `Tauranga Region Kindergartens 'Private and Confidential'` — keep
+      legacy wording or update to Inspired Kindergartens?
+- [ ] Senior teacher name + acronym and intro paragraph (hours, max roll) for
+      the remaining centres — editable in settings; known: PAENGAROA +
+      Maungatapu → Vilna Van Rensburg (VVR), OPEYS → Haylee Dumbar (HD).
+- [x] **Blurb source documents received**: Current (26/26 open services —
+      complete) + OLD (22 services) Kindergarten Website Blurbs PDFs; seeded
+      per centre in `JdKnowledgeDoc`. No service is missing.
+- [x] IK **generic/immovable text**: captured from the live vacancy pages
+      (Tai o Fenua + OPEYS) — KTCA terms sentence, JD PDF link, "apply online"
+      link, Start/Closing Date lines, "Be at the cutting edge" tagline
+      (see §4 for the exact wording).
+- [ ] Logo asset (else extracted from existing PDF).

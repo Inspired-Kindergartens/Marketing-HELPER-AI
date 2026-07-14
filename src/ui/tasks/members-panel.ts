@@ -28,14 +28,13 @@ function renderMemberRow(member: MemberView): string {
 
 export type MembersPanelOptions = {
   directory: MemberDirectoryData;
-  demo: boolean;
 };
 
 export function renderMembersPanel(options: MembersPanelOptions): string {
-  const { directory, demo } = options;
+  const { directory } = options;
 
   return `
-    <div class="members-panel" data-members-panel${demo ? ` data-demo="1"` : ""}>
+    <div class="members-panel" data-members-panel>
       <form class="member-create" data-member-create>
         <input type="text" name="name" placeholder="Name" maxlength="120" required />
         <input type="email" name="email" placeholder="Email (optional)" maxlength="200" />

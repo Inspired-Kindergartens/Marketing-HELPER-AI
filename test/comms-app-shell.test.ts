@@ -393,15 +393,6 @@ test("comms shell nav rail links back to landing and across to Online Marketing"
   assert.match(html, /href="\/comms"[^>]*aria-current="page"/);
 });
 
-test("comms shell preserves the demo flag in nav links", () => {
-  const html = renderCommsAppShell({ demo: true });
-
-  assert.match(html, /<body class="app-shell-body" data-demo="1">/);
-  assert.match(html, /href="\/app\?demo=1"[^>]*aria-label="Online Marketing dashboard"/);
-  assert.match(html, /href="\/comms\?demo=1"[^>]*aria-current="page"/);
-  assert.match(html, /href="\/comms"[^>]*aria-label="Exit demo mode"/);
-});
-
 test("comms shell falls back to the full layout for an unknown focus panel id", () => {
   const html = renderCommsAppShell({ focusPanelId: "not-a-panel" });
 

@@ -106,7 +106,6 @@ type AppShellOptions = {
   metaRecommendationNotes?: MetaRecommendationNoteView[];
   latestMetaRecommendationNotesForCentre?: MetaNotificationHistoryRow[];
   centreContacts?: CentreContact[];
-  demo?: boolean;
   snapshotRefreshStatus?: "idle" | "in-progress" | "ready" | "error";
   snapshotRefreshOutcome?: {
     centresAttempted: number | null;
@@ -1586,8 +1585,6 @@ export function resolveDefaultAnalyticsCentreKey(
   return sortedRows[0]?.centreKey ?? null;
 }
 
-let CURRENT_RENDER_IS_DEMO = false;
-
 function buildQueryString(
   selectedCentreKey: number | null | undefined,
   selectedWindowKey: WindowKey,
@@ -1619,10 +1616,6 @@ function buildQueryString(
       params.set("gaToMonth", String(googleAnalyticsRange.toMonth));
       params.set("gaToYear", String(googleAnalyticsRange.toYear));
     }
-  }
-
-  if (CURRENT_RENDER_IS_DEMO) {
-    params.set("demo", "1");
   }
 
   return params.toString();
@@ -2273,12 +2266,12 @@ function renderAiChatScript() {
               headers: {
                 "Content-Type": "application/json",
               },
-              body: JSON.stringify(window.mhDemoBody({
+              body: JSON.stringify({
                 prompt,
                 messages: chatHistory,
                 centreKey: shell.dataset.centreKey || null,
                 windowKey: shell.dataset.windowKey || null,
-              })),
+              }),
             });
 
             if (!response.ok) {
@@ -2792,7 +2785,7 @@ export function renderMetaRecommendationNotePopup(input: {
             headers: {
               "Content-Type": "application/json",
             },
-            body: JSON.stringify(window.mhDemoBody({ notificationId: context.notificationId, text, notification: context.notification })),
+            body: JSON.stringify({ notificationId: context.notificationId, text, notification: context.notification }),
           });
 
           if (!response.ok) {
@@ -3384,9 +3377,8 @@ function renderGoogleAnalyticsPanel(
 
 function renderIntegrationErrorBanner(
   integrationError: AppShellOptions["integrationError"],
-  demo: boolean,
 ) {
-  if (demo || !integrationError) {
+  if (!integrationError) {
     return "";
   }
 
@@ -3422,9 +3414,8 @@ function renderIntegrationErrorBanner(
 
 function renderSnapshotOutcomeBanner(
   outcome: AppShellOptions["snapshotRefreshOutcome"],
-  demo: boolean,
 ) {
-  if (demo || !outcome) {
+  if (!outcome) {
     return "";
   }
 
@@ -3763,7 +3754,7 @@ function renderBreakoutScript() {
           elements.body.innerHTML = '<tr><td colspan="9" class="meta-ads-table__empty">Loading notification history...</td></tr>';
 
           try {
-            const response = await fetch(window.mhDemoUrl("/api/meta-recommendation-notifications/history?" + params.toString()), {
+            const response = await fetch("/api/meta-recommendation-notifications/history?" + params.toString(), {
               headers: {
                 "Accept": "application/json",
               },
@@ -3934,7 +3925,7 @@ function renderBreakoutScript() {
             headers: {
               "Content-Type": "application/json",
             },
-            body: JSON.stringify(window.mhDemoBody({ notificationId: id, text })),
+            body: JSON.stringify({ notificationId: id, text }),
           });
 
           if (!response.ok) {
@@ -4038,7 +4029,7 @@ function renderBreakoutScript() {
 
           renderLatestNoteList(notesList, []);
 
-          const response = await fetch(window.mhDemoUrl("/api/meta-recommendation-notes/latest?centre=" + encodeURIComponent(String(context.centreKey)) + "&limit=3"));
+          const response = await fetch("/api/meta-recommendation-notes/latest?centre=" + encodeURIComponent(String(context.centreKey)) + "&limit=3");
 
           if (!response.ok) {
             return;
@@ -4655,7 +4646,7 @@ function renderBreakoutScript() {
                 headers: {
                   "Content-Type": "application/json",
                 },
-                body: JSON.stringify(window.mhDemoBody({ notificationId, text: sentNoteText })),
+                body: JSON.stringify({ notificationId, text: sentNoteText }),
               });
 
               if (!response.ok) {
@@ -4711,7 +4702,7 @@ function renderBreakoutScript() {
               const response = await fetch("/api/meta-recommendation-notes/" + encodeURIComponent(id) + "/delete", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(window.mhDemoBody({})),
+                body: JSON.stringify({}),
               });
 
               if (response.ok) {
@@ -4733,7 +4724,7 @@ function renderBreakoutScript() {
               const response = await fetch("/api/meta-recommendation-notes/" + encodeURIComponent(id) + "/restore", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(window.mhDemoBody({})),
+                body: JSON.stringify({}),
               });
 
               if (response.ok) {
@@ -4757,7 +4748,7 @@ function renderBreakoutScript() {
                 headers: {
                   "Content-Type": "application/json",
                 },
-                body: JSON.stringify(window.mhDemoBody({ notificationId })),
+                body: JSON.stringify({ notificationId }),
               });
 
               if (response.ok) {
@@ -5144,7 +5135,6 @@ export function renderAppShell(
   snapshotSet: LatestSnapshotSet | null,
   options: AppShellOptions = {},
 ) {
-  CURRENT_RENDER_IS_DEMO = options.demo === true;
   const selectedWindowKey = resolveWindowKey(options.selectedWindowKey);
   const serviceSort = resolveServiceSort(options.serviceSort);
   const selectedCentreKey = options.selectedCentreKey ?? null;
@@ -5246,32 +5236,16 @@ export function renderAppShell(
     <link rel="stylesheet" href="/vendor/bootstrap-icons.css" />
     <link rel="stylesheet" href="/app.css" />
   </head>
-  <body class="app-shell-body"${options.demo ? ` data-demo="1"` : ""}>
+  <body class="app-shell-body">
     <aside class="nav-rail" aria-label="Primary navigation">
       <a class="nav-rail__item" href="/" aria-label="Back to landing" title="Landing"><i class="bi bi-house-door" aria-hidden="true"></i></a>
-      <a class="nav-rail__item nav-rail__item--current" href="/app${options.demo ? "?demo=1" : ""}" aria-label="Online Marketing dashboard" title="Online Marketing" aria-current="page"><i class="bi bi-bar-chart-line" aria-hidden="true"></i></a>
+      <a class="nav-rail__item nav-rail__item--current" href="/app" aria-label="Online Marketing dashboard" title="Online Marketing" aria-current="page"><i class="bi bi-bar-chart-line" aria-hidden="true"></i></a>
       <a class="nav-rail__item" href="/tasks" aria-label="Tasks" title="Tasks"><i class="bi bi-check2-square" aria-hidden="true"></i></a>
-      <a class="nav-rail__item" href="/comms${options.demo ? "?demo=1" : ""}" aria-label="Online Communications dashboard" title="Online Communications"><i class="bi bi-envelope-paper" aria-hidden="true"></i></a>
-      ${options.demo ? `<a class="nav-rail__item nav-rail__item--exit-demo" href="/app" aria-label="Exit demo mode" title="Exit demo"><i class="bi bi-eject" aria-hidden="true"></i></a>` : ""}
+      <a class="nav-rail__item" href="/comms" aria-label="Online Communications dashboard" title="Online Communications"><i class="bi bi-envelope-paper" aria-hidden="true"></i></a>
     </aside>
-    ${renderSnapshotOutcomeBanner(options.snapshotRefreshOutcome ?? null, options.demo === true)}
-    ${renderIntegrationErrorBanner(options.integrationError ?? null, options.demo === true)}
+    ${renderSnapshotOutcomeBanner(options.snapshotRefreshOutcome ?? null)}
+    ${renderIntegrationErrorBanner(options.integrationError ?? null)}
     ${layout}
-    <script>
-      (function() {
-        var demo = document.body.dataset.demo === "1";
-        window.MH_DEMO = demo;
-        window.mhDemoBody = function(obj) {
-          if (!demo) return obj || {};
-          return Object.assign({}, obj || {}, { demo: "1" });
-        };
-        window.mhDemoUrl = function(url) {
-          if (!demo) return url;
-          var sep = url.indexOf("?") === -1 ? "?" : "&";
-          return url + sep + "demo=1";
-        };
-      })();
-    </script>
     <script src="/vendor/chart.umd.js"></script>
     ${renderWaitlistChartScript()}
     ${renderAiChatScript()}

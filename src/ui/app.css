@@ -2616,8 +2616,7 @@ body.landing-body {
 
 .landing-feed__meta,
 .landing-feed__model,
-.landing-feed__error,
-.landing-feed-item__meta {
+.landing-feed__error {
   color: var(--color-muted);
   font-size: var(--font-size-small);
   line-height: var(--line-height-compact);
@@ -2727,6 +2726,14 @@ body.landing-body {
   color: var(--color-wait-long);
 }
 
+.landing-feed-item--opened {
+  opacity: 0.6;
+}
+
+.landing-feed-item--opened .landing-feed-item__icon {
+  color: var(--color-muted);
+}
+
 .landing-feed-item__icon {
   display: inline-flex;
   flex: 0 0 auto;
@@ -2743,29 +2750,25 @@ body.landing-body {
   white-space: nowrap;
 }
 
-.landing-feed-item__title,
-.landing-feed-item__brief {
+.landing-feed-item__title {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.landing-feed-item__title {
   color: inherit;
   font-weight: var(--font-weight-strong);
   font-size: 0.86rem;
-}
-
-.landing-feed-item__brief {
-  color: var(--color-text);
-  font-size: 0.82rem;
-  line-height: var(--line-height-compact);
   flex: 1 1 auto;
 }
 
 .landing-feed-item__meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
+  color: var(--color-text);
+  font-size: 0.82rem;
+  line-height: var(--line-height-compact);
   flex: 0 0 auto;
 }
 
@@ -3323,17 +3326,6 @@ body.general-chat-body {
 
 :root {
   --nav-rail-width: 44px;
-}
-
-.nav-rail__item--exit-demo {
-  margin-top: auto;
-  color: #f59e0b;
-}
-
-.nav-rail__item--exit-demo:hover,
-.nav-rail__item--exit-demo:focus-visible {
-  color: #fbbf24;
-  background: rgba(245, 158, 11, 0.12);
 }
 
 .nav-rail {
@@ -4295,6 +4287,38 @@ body.readme-body {
 .task-checklist__item--done .task-checklist__label span {
   color: var(--color-empty);
   text-decoration: line-through;
+}
+
+.task-checklist__edit {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+}
+
+.task-checklist__edit input {
+  background: none;
+  border: none;
+  border-bottom: 1px solid transparent;
+  color: var(--color-text);
+  font-size: var(--font-size-small);
+  padding: 2px 0;
+  width: 100%;
+}
+
+.task-checklist__edit input:focus {
+  border-bottom-color: var(--color-ghost);
+  outline: none;
+}
+
+.task-checklist__item--done .task-checklist__edit input {
+  color: var(--color-empty);
+  text-decoration: line-through;
+}
+
+.task-checklist__timestamp {
+  color: var(--color-ghost);
+  font-size: var(--font-size-small);
+  white-space: nowrap;
 }
 
 .task-checklist__remove {

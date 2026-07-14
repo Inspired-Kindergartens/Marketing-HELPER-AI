@@ -23,7 +23,6 @@ const VALID_TASKS_PANEL_IDS = new Set<string>(PANEL_DEFINITIONS.map((panel) => p
 
 export type TasksAppShellOptions = {
   focusPanelId?: string | null;
-  demo?: boolean;
   tasks: TaskView[];
   projects: ProjectListItem[];
   members: MemberDirectoryData;
@@ -40,7 +39,6 @@ export function resolveTasksFocusPanelId(input?: string | null) {
 }
 
 function renderPanelContent(panelId: string, options: TasksAppShellOptions): string {
-  const demo = options.demo === true;
   const memberList: MemberView[] = options.members.members;
 
   if (panelId === "task-detail") {
@@ -50,7 +48,6 @@ function renderPanelContent(panelId: string, options: TasksAppShellOptions): str
       members: memberList,
       projectRollup: options.selectedTaskProject ?? null,
       contactSuggestions: options.contactSuggestions ?? [],
-      demo,
     });
   }
 
@@ -59,12 +56,11 @@ function renderPanelContent(panelId: string, options: TasksAppShellOptions): str
       projects: options.projects,
       selectedProject: options.selectedProject ?? null,
       members: memberList,
-      demo,
     });
   }
 
   if (panelId === "members") {
-    return renderMembersPanel({ directory: options.members, demo });
+    return renderMembersPanel({ directory: options.members });
   }
 
   if (panelId === "chat") {
@@ -75,7 +71,6 @@ function renderPanelContent(panelId: string, options: TasksAppShellOptions): str
     tasks: options.tasks,
     projects: options.projects,
     members: memberList,
-    demo,
   });
 }
 
@@ -133,7 +128,7 @@ function renderTasksChatScript(): string {
             var response = await fetch(shell.dataset.aiChatEndpoint, {
               method: "POST",
               headers: { "content-type": "application/json" },
-              body: JSON.stringify(window.mhDemoBody({ prompt: prompt, messages: history })),
+              body: JSON.stringify({ prompt: prompt, messages: history }),
             });
             if (!response.ok || !response.body) throw new Error("Chat request failed.");
             var reader = response.body.getReader();
@@ -180,15 +175,13 @@ function renderTasksChatScript(): string {
 
 // One delegated client script for every mutation in the section. Each action is
 // a JSON fetch (matching the existing notes/notifications POST convention) that
-// reloads the page on success so the server re-renders the new state. Demo mode
-// short-circuits to a reload without mutating (the section is read-only in demo).
+// reloads the page on success so the server re-renders the new state.
 function renderTasksScript(): string {
   return `
     <script>
       (function() {
         var root = document.querySelector("[data-task-board], [data-task-detail], [data-projects-panel], [data-members-panel]");
         var body = document.body;
-        var demo = body.dataset.demo === "1";
 
         function reload() { window.location.reload(); }
 
@@ -196,7 +189,6 @@ function renderTasksScript(): string {
         // control of the page (used by "Open in Outlook", which must navigate to
         // a mailto: instead of reloading). Returns true on success.
         async function postRaw(url, payload, reloadOnSuccess) {
-          if (demo) { if (reloadOnSuccess !== false) reload(); return true; }
           try {
             var response = await fetch(url, {
               method: "POST",
@@ -215,7 +207,6 @@ function renderTasksScript(): string {
         function post(url, payload) { return postRaw(url, payload, true); }
 
         async function postForm(url, form) {
-          if (demo) { reload(); return true; }
           try {
             var response = await fetch(url, { method: "POST", body: new FormData(form) });
             if (!response.ok) throw new Error("Request failed");
@@ -362,6 +353,34 @@ function renderTasksScript(): string {
           post("/api/tasks/" + host.getAttribute("data-task-id") + "/status", { status: select.value });
         });
 
+        // Every other field on the task-edit form (title, description, due date,
+        // estimate, project, group, assignee) autosaves too: text-like fields on
+        // blur (so we're not posting per keystroke), selects on change. Changing
+        // the project reloads (its group options depend on the selected project);
+        // everything else saves silently in place so focus/scroll isn't disturbed.
+        function autosaveTaskEdit(field) {
+          var form = field.closest("[data-task-edit]");
+          if (!form) return;
+          var host = form.closest("[data-task-id]");
+          if (!host) return;
+          var titleInput = form.querySelector("[name=title]");
+          if (!titleInput || !titleInput.value.trim()) return;
+          var needsReload = field.getAttribute("name") === "projectId";
+          postRaw("/api/tasks/" + host.getAttribute("data-task-id"), formData(form), needsReload);
+        }
+
+        document.addEventListener("blur", function(event) {
+          var field = event.target instanceof Element ? event.target.closest("[data-task-edit] input, [data-task-edit] textarea") : null;
+          if (!field) return;
+          autosaveTaskEdit(field);
+        }, true);
+
+        document.addEventListener("change", function(event) {
+          var field = event.target instanceof Element ? event.target.closest("[data-task-edit] select") : null;
+          if (!field) return;
+          autosaveTaskEdit(field);
+        });
+
         function formData(form) {
           var data = {};
           new FormData(form).forEach(function(value, key) {
@@ -370,6 +389,17 @@ function renderTasksScript(): string {
           });
           return data;
         }
+
+        // Commit checklist edits when the field loses focus with a changed value
+        // (Enter also works via the form's submit handler below).
+        document.addEventListener("change", function(event) {
+          var input = event.target instanceof Element ? event.target.closest("[data-checklist-edit] input") : null;
+          if (!input) return;
+          var form = input.closest("form");
+          if (!form) return;
+          if (typeof form.requestSubmit === "function") form.requestSubmit();
+          else form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+        });
 
         document.addEventListener("submit", function(event) {
           var form = event.target;
@@ -394,6 +424,12 @@ function renderTasksScript(): string {
             event.preventDefault();
             var clHost = form.closest("[data-task-id]");
             post("/api/tasks/" + clHost.getAttribute("data-task-id") + "/checklist", formData(form));
+            return;
+          }
+          if (form.hasAttribute("data-checklist-edit")) {
+            event.preventDefault();
+            var editHost = form.closest("[data-task-id]");
+            post("/api/tasks/" + editHost.getAttribute("data-task-id") + "/checklist/" + form.getAttribute("data-item-id"), formData(form));
             return;
           }
           if (form.hasAttribute("data-task-attachment-upload")) {
@@ -430,7 +466,6 @@ function renderTasksScript(): string {
 
 export function renderTasksAppShell(options: TasksAppShellOptions): string {
   const focusPanelId = resolveTasksFocusPanelId(options.focusPanelId);
-  const demo = options.demo === true;
 
   const panelContent = PANEL_DEFINITIONS.map((panel) => ({
     id: panel.id,
@@ -450,25 +485,14 @@ export function renderTasksAppShell(options: TasksAppShellOptions): string {
     <link rel="stylesheet" href="/vendor/bootstrap-icons.css" />
     <link rel="stylesheet" href="/app.css" />
   </head>
-  <body class="app-shell-body"${demo ? ` data-demo="1"` : ""}>
+  <body class="app-shell-body">
     <aside class="nav-rail" aria-label="Primary navigation">
       <a class="nav-rail__item" href="/" aria-label="Back to landing" title="Landing"><i class="bi bi-house-door" aria-hidden="true"></i></a>
-      <a class="nav-rail__item" href="/app${demo ? "?demo=1" : ""}" aria-label="Online Marketing dashboard" title="Online Marketing"><i class="bi bi-bar-chart-line" aria-hidden="true"></i></a>
-      <a class="nav-rail__item nav-rail__item--current" href="/tasks${demo ? "?demo=1" : ""}" aria-label="Tasks" title="Tasks" aria-current="page"><i class="bi bi-check2-square" aria-hidden="true"></i></a>
-      <a class="nav-rail__item" href="/comms${demo ? "?demo=1" : ""}" aria-label="Online Communications dashboard" title="Online Communications"><i class="bi bi-envelope-paper" aria-hidden="true"></i></a>
-      ${demo ? `<a class="nav-rail__item nav-rail__item--exit-demo" href="/tasks" aria-label="Exit demo mode" title="Exit demo"><i class="bi bi-eject" aria-hidden="true"></i></a>` : ""}
+      <a class="nav-rail__item" href="/app" aria-label="Online Marketing dashboard" title="Online Marketing"><i class="bi bi-bar-chart-line" aria-hidden="true"></i></a>
+      <a class="nav-rail__item nav-rail__item--current" href="/tasks" aria-label="Tasks" title="Tasks" aria-current="page"><i class="bi bi-check2-square" aria-hidden="true"></i></a>
+      <a class="nav-rail__item" href="/comms" aria-label="Online Communications dashboard" title="Online Communications"><i class="bi bi-envelope-paper" aria-hidden="true"></i></a>
     </aside>
     ${layout}
-    <script>
-      (function() {
-        var demo = document.body.dataset.demo === "1";
-        window.MH_DEMO = demo;
-        window.mhDemoBody = function(obj) {
-          if (!demo) return obj || {};
-          return Object.assign({}, obj || {}, { demo: "1" });
-        };
-      })();
-    </script>
     ${renderTasksScript()}
     ${renderTasksChatScript()}
   </body>

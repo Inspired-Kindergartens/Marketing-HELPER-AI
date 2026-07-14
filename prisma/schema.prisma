@@ -92,6 +92,10 @@ model CentreReference {
   formstackSubmissions           FormstackSubmission[]
   projects                       Project[]
   tasks                          Task[]
+  jdCentreProfile                JdCentreProfile?
+  jobDescriptions                JobDescription[]
+  jdBlurbs                       JdBlurb[]
+  jdKnowledgeDocs                JdKnowledgeDoc[]
 
   @@index([ignored, openStatus, name])
 }
@@ -751,4 +755,142 @@ model TimeEntry {
   task      Task      @relation(fields: [taskId], references: [id], onDelete: Cascade, onUpdate: Cascade)
 
   @@index([taskId, createdAt(sort: Desc)])
+}
+
+// --- Job Descriptions ------------------------------------------------------
+// KTCA pay-scale rates by effective date. Selectable-by-date so the salary
+// range shown on a JD rolls over automatically as new rate steps take effect
+// (see KTCA 2026-2028 schedule in PLAN.md). `step` is null for flat scales
+// (K2/K2R).
+model JdPayScale {
+  id             Int      @id @default(autoincrement())
+  scaleKey       String
+  step           Int?
+  effectiveFrom  DateTime
+  annualRate     Decimal  @db.Decimal(10, 2)
+  sourceDocument String?
+  importedAt     DateTime @default(now())
+
+  @@unique([scaleKey, step, effectiveFrom])
+  @@index([scaleKey, effectiveFrom(sort: Desc)])
+}
+
+// One row per imported KTCA agreement document. Drives the yearly expiry
+// check (warn when `expiresOn` is past or within 90 days).
+model JdAgreement {
+  id            Int      @id @default(autoincrement())
+  name          String
+  fileName      String?
+  effectiveFrom DateTime
+  expiresOn     DateTime
+  importedAt    DateTime @default(now())
+
+  @@index([expiresOn(sort: Desc)])
+}
+
+// Per-job-title defaults: qualifications, role sections, PDF layout variant,
+// and the non-standard "extras" used by the administrator/professional
+// layouts (position hours, reports-to, remuneration text, etc). One row per
+// dropdown entry in the JD "Job Title" field.
+model JdTitleProfile {
+  id                  Int      @id @default(autoincrement())
+  jobTitle            String   @unique
+  sortOrder           Int      @default(0)
+  jobCategory         String
+  payScaleKey         String?
+  layoutVariant       String   @default("standard") // standard | administrator | professional
+  defaultPositionType String   @default("Full Time")
+  agreementText       String   @default("Kindergarten Teachers Collective Agreement")
+  qualificationsText  String
+  roleSections        Json // [{ heading, intro?, bullets: [{ text, boldLeadIn? }] }]
+  extras              Json? // positionHours, reportsTo, remunerationText, contractManagerName, subjectLine
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  jobDescriptions     JobDescription[]
+
+  @@index([sortOrder])
+}
+
+// Per-centre JD defaults, extending CentreReference. Maintained in the JD
+// settings panel; seeded initially only for centres with known values.
+model JdCentreProfile {
+  id                   Int             @id @default(autoincrement())
+  centreKey            Int             @unique
+  locationDisplay      String // e.g. "PAENGAROA Kindergarten"
+  introParagraph       String @default("")
+  seniorTeacherName    String @default("")
+  seniorTeacherAcronym String @default("")
+  createdAt            DateTime        @default(now())
+  updatedAt            DateTime        @updatedAt
+  centre               CentreReference @relation(fields: [centreKey], references: [centreKey], onDelete: Cascade, onUpdate: Cascade)
+}
+
+// A single generated Job Description. Field values are copied from the
+// title/centre profiles at creation time so each JD can be edited
+// independently afterwards without affecting the shared profile defaults.
+model JobDescription {
+  id                  Int              @id @default(autoincrement())
+  jobTitle            String
+  titleProfileId      Int?
+  centreKey           Int?
+  locationDisplay     String
+  positionType        String
+  fte                 Decimal?         @db.Decimal(4, 2)
+  jobCategory         String
+  layoutVariant       String           @default("standard")
+  agreementText       String           @default("")
+  salaryRangeText     String           @default("")
+  dateAdvertised      DateTime?
+  closingAt           DateTime?
+  startDateText       String           @default("To be negotiated")
+  qualificationsText  String           @default("")
+  introParagraph      String           @default("")
+  roleSections        Json
+  extras              Json?
+  seniorTeacherName   String           @default("")
+  blurbHtml           String?
+  reviewedByAcronym   String           @default("")
+  approvedByAcronym   String           @default("PM")
+  lastUpdatedByAcronym String          @default("")
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
+  titleProfile        JdTitleProfile?  @relation(fields: [titleProfileId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  centre               CentreReference? @relation(fields: [centreKey], references: [centreKey], onDelete: SetNull, onUpdate: Cascade)
+  blurbs               JdBlurb[]
+
+  @@index([centreKey, createdAt(sort: Desc)])
+  @@index([titleProfileId])
+}
+
+// Blurb save history: a new row is appended on every save (AI-generated or
+// hand-edited) so all prior versions remain available both to restore and as
+// future AI reference corpus for that centre.
+model JdBlurb {
+  id               Int             @id @default(autoincrement())
+  centreKey        Int
+  jobDescriptionId Int?
+  contentHtml      String
+  savedAt          DateTime        @default(now())
+  centre           CentreReference @relation(fields: [centreKey], references: [centreKey], onDelete: Cascade, onUpdate: Cascade)
+  jobDescription   JobDescription? @relation(fields: [jobDescriptionId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+
+  @@index([centreKey, savedAt(sort: Desc)])
+  @@index([jobDescriptionId, savedAt(sort: Desc)])
+}
+
+// Blurb information base for AI context: the IK generic/immovable text
+// (kind=generic, centreKey null) plus each centre's current and old website
+// blurbs (kind=service). `label` distinguishes "current" / "old" / a doc name.
+model JdKnowledgeDoc {
+  id          Int              @id @default(autoincrement())
+  kind        String // generic | service
+  centreKey   Int?
+  label       String
+  contentHtml String
+  updatedAt   DateTime         @updatedAt
+  createdAt   DateTime         @default(now())
+  centre      CentreReference? @relation(fields: [centreKey], references: [centreKey], onDelete: Cascade, onUpdate: Cascade)
+
+  @@unique([kind, centreKey, label])
+  @@index([kind, centreKey])
 }

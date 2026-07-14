@@ -28,7 +28,7 @@ function formatDueDate(iso: string | null): string | null {
   return date.toLocaleDateString("en-NZ", { day: "numeric", month: "short", year: "numeric" });
 }
 
-function renderTaskCard(task: TaskView, demo: boolean): string {
+function renderTaskCard(task: TaskView): string {
   const due = formatDueDate(task.dueDate);
   const timeLabel = task.estimatedMinutes
     ? `${formatMinutes(task.loggedMinutes)} / ${formatMinutes(task.estimatedMinutes)}`
@@ -37,7 +37,7 @@ function renderTaskCard(task: TaskView, demo: boolean): string {
   if (task.projectName) meta.push(escapeHtml(task.projectName));
   if (task.centreName) meta.push(escapeHtml(task.centreName));
 
-  const href = `/tasks?panel=task-detail&task=${task.id}${demo ? "&demo=1" : ""}`;
+  const href = `/tasks?panel=task-detail&task=${task.id}`;
 
   return `
     <article class="task-card${task.overdue ? " task-card--overdue" : ""}" data-task-id="${task.id}">
@@ -60,7 +60,7 @@ function renderTaskCard(task: TaskView, demo: boolean): string {
   `;
 }
 
-function renderColumn(status: TaskStatus, tasks: TaskView[], demo: boolean): string {
+function renderColumn(status: TaskStatus, tasks: TaskView[]): string {
   const columnTasks = tasks.filter((task) => task.status === status);
   return `
     <section class="task-board__column" data-status="${status}">
@@ -70,7 +70,7 @@ function renderColumn(status: TaskStatus, tasks: TaskView[], demo: boolean): str
       </header>
       <div class="task-board__column-body">
         ${columnTasks.length
-          ? columnTasks.map((task) => renderTaskCard(task, demo)).join("")
+          ? columnTasks.map((task) => renderTaskCard(task)).join("")
           : `<p class="task-board__empty">No tasks</p>`}
       </div>
     </section>
@@ -81,11 +81,10 @@ export type TaskBoardPanelOptions = {
   tasks: TaskView[];
   projects: ProjectListItem[];
   members: MemberView[];
-  demo: boolean;
 };
 
 export function renderTaskBoardPanel(options: TaskBoardPanelOptions): string {
-  const { tasks, projects, members, demo } = options;
+  const { tasks, projects, members } = options;
   const activeMembers = members.filter((member) => member.active);
 
   const projectOptions = projects
@@ -96,7 +95,7 @@ export function renderTaskBoardPanel(options: TaskBoardPanelOptions): string {
     .join("");
 
   return `
-    <div class="task-board" data-task-board${demo ? ` data-demo="1"` : ""}>
+    <div class="task-board" data-task-board>
       <form class="task-create" data-task-create>
         <input type="text" class="task-create__title" name="title" placeholder="Add a task…" maxlength="200" required />
         <input type="date" class="task-create__due" name="dueDate" aria-label="Due date" />
@@ -111,7 +110,7 @@ export function renderTaskBoardPanel(options: TaskBoardPanelOptions): string {
         <button type="submit" class="task-create__submit"><i class="bi bi-plus-lg ui-icon" aria-hidden="true"></i><span>Add</span></button>
       </form>
       <div class="task-board__columns">
-        ${TASK_STATUSES.map((status) => renderColumn(status, tasks, demo)).join("")}
+        ${TASK_STATUSES.map((status) => renderColumn(status, tasks)).join("")}
       </div>
     </div>
   `;

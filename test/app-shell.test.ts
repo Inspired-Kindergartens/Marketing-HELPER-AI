@@ -116,12 +116,6 @@ test("nav rail links to the Online Communications breakout app", () => {
   assert.match(html, /bi-envelope-paper/);
 });
 
-test("nav rail preserves demo flag when linking to comms", () => {
-  const html = renderAppShell(null, { demo: true });
-
-  assert.match(html, /href="\/comms\?demo=1"[^>]*aria-label="Online Communications dashboard"/);
-});
-
 test("analytics enrol/max shows enrolled headcount with booked utilisation percent", () => {
   const snapshotSet: LatestSnapshotSet = {
     runDate: "2026-05-05T00:00:00.000Z",
@@ -367,7 +361,7 @@ test("analytics table note buttons open the shared meta ads note flow", () => {
   assert.match(html, /data-replacement-pressure/);
   assert.match(html, /const analyticsNoteButton = target\.closest\("\[data-analytics-meta-note\]"\)/);
   assert.match(html, /function openMetaNoteModal\(context\)/);
-  assert.match(html, /fetch\((?:window\.mhDemoUrl\()?"\/api\/meta-recommendation-notes\/latest\?centre="/);
+  assert.match(html, /fetch\("\/api\/meta-recommendation-notes\/latest\?centre="/);
   assert.match(html, /openMetaNoteModal\(getMetaNoteButtonContext\(analyticsNoteButton\)\)/);
   assert.match(html, /modal\.dataset\.refreshOnClose === "true"/);
   assert.match(html, /window\.location\.reload\(\)/);

@@ -129,6 +129,34 @@ The landing page links to the main local tools:
 - **General Chat** (`/chat`) - a general-purpose local AI chat with retained conversations and groups.
 - **Communications** (`/comms`) - Postmark, Mailchimp, Formstack, and communications-focused AI help.
 
+## Tasks & Projects
+
+`/tasks` is a local task and project tracker, independent of the Infocare/Meta/GA dashboard.
+
+### Tasks
+
+Each task has a title/description, a **status** (`To do` / `In progress` / `Blocked` / `Done`), an optional due date, an optional checklist, and time tracking:
+
+- **Estimated minutes** - a manual estimate.
+- **Logged minutes** - the running total, built from manual time entries plus stopped timer sessions.
+- **Timer** - starting a timer stamps `timerStartedAt`; stopping it folds the elapsed minutes into the logged total and records a `TimeEntry` row. Reading a task's logged time while a timer is running includes the live elapsed minutes without writing anything.
+
+Moving a task's status to `Done` stamps `completedAt`; moving it back out of `Done` clears it.
+
+A task can optionally carry a project/group, a centre, and an assignee (from the Members directory). It can also hold file attachments and a draft email (subject/body/recipient) that hands off to the user's mail client via a `mailto:` link — Postmark/Mailchimp are not involved, this is a local compose convenience only.
+
+### Reminders
+
+The landing page shows a reminders strip for tasks that are **overdue** or **due soon** (not-done tasks with a due date, partitioned by whether the due date has already passed). The section is hidden entirely when there is nothing due. Each reminder links straight to that task's detail panel.
+
+### Projects
+
+A project consolidates tasks into named **groups**, tracks a member roster drawn from the **Members** directory, and renders a **timeline**: each scheduled task becomes a horizontal bar positioned by due date across the project's date range, grouped by task group. Tasks without a due date fall into an "Unscheduled" lane. If a project has no usable dates yet, the timeline falls back to a simple status breakdown (todo/in progress/blocked/done counts).
+
+### Members
+
+A simple directory of people who can be assigned to tasks and added to projects (name, optional email/role, active/inactive).
+
 ## Environment
 
 The app reads `.env` through `dotenv`. Required core values are:

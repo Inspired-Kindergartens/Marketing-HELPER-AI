@@ -13,6 +13,7 @@ export type ChecklistItemView = {
   label: string;
   done: boolean;
   position: number;
+  createdAt: string;
 };
 
 // A recipient previously used when emailing from this task — most-recently-used
@@ -155,6 +156,7 @@ type IncludedTask = {
     label: string;
     done: boolean;
     position: number;
+    createdAt: Date;
   }[];
   emailRecipients: {
     email: string;
@@ -202,6 +204,7 @@ function toTaskView(task: IncludedTask, now: Date = new Date()): TaskView {
       label: item.label,
       done: item.done,
       position: item.position,
+      createdAt: item.createdAt.toISOString(),
     })),
     emailSubject: task.emailSubject,
     emailBody: task.emailBody,
@@ -382,6 +385,17 @@ export async function addChecklistItem(taskId: number, label: string): Promise<v
   });
   await prisma.checklistItem.create({
     data: { taskId, label: text, position: (last?.position ?? -1) + 1 },
+  });
+}
+
+export async function updateChecklistItem(itemId: number, label: string): Promise<void> {
+  const text = label.trim();
+  if (text.length === 0) {
+    throw new Error("Checklist item is required");
+  }
+  await prisma.checklistItem.updateMany({
+    where: { id: itemId },
+    data: { label: text },
   });
 }
 

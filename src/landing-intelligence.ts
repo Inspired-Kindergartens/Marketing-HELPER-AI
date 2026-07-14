@@ -96,8 +96,15 @@ const SECTOR_SCRAPE_SOURCES = [
 ];
 
 const weatherLocations = [
-  { name: "Bay of Plenty", latitude: -37.6878, longitude: 176.1651 },
+  {
+    name: "Bay of Plenty",
+    latitude: -37.6878,
+    longitude: 176.1651,
+    href: "https://www.metservice.com/towns-cities/regions/bay-of-plenty/locations/tauranga",
+  },
 ];
+
+const WEATHER_WARNINGS_URL = "https://www.metservice.com/warnings/home";
 
 const severeWeatherCodes = new Set([95, 96, 99]);
 
@@ -503,7 +510,7 @@ async function fetchWeatherItems(): Promise<LandingIntelligenceItem[]> {
         kind: "weather" as const,
         title: `${location.name}: ${urgent ? "weather watch" : "weather check"}`,
         brief: `${describeWeatherCode(focusDay.code)} forecast ${dayLabel}, ${Math.round(focusDay.rain)} mm rain and max wind near ${Math.round(focusDay.wind)} km/h. Check staffing, excursions, and family comms if conditions change.`,
-        href: "https://www.metservice.com/warnings/home",
+        href: urgent ? WEATHER_WARNINGS_URL : location.href,
         source: "Open-Meteo forecast",
         publishedAt: `${focusDay.date}T00:00:00.000+13:00`,
         urgent,
@@ -523,7 +530,7 @@ async function fetchWeatherItems(): Promise<LandingIntelligenceItem[]> {
         kind: "weather",
         title: "Weather forecast unavailable",
         brief: "The Open-Meteo forecast service could not be reached. Check MetService directly for current conditions and warnings.",
-        href: "https://www.metservice.com/warnings/home",
+        href: weatherLocations[0].href,
         source: "Open-Meteo forecast",
         publishedAt: null,
         urgent: false,
