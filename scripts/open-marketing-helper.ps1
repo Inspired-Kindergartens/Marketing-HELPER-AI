@@ -9,6 +9,9 @@ $timeoutSeconds = 45
 
 Set-Location $repoRoot
 
+Write-Host "Marketing Helper AI"
+Write-Host "--------------------"
+
 function Read-DotEnvValue {
   param(
     [string]$Name,
@@ -53,15 +56,19 @@ function Test-OllamaReady {
 function Wait-OllamaReady {
   param([int]$Seconds)
 
+  Write-Host -NoNewline "Starting Ollama"
   $deadline = (Get-Date).AddSeconds($Seconds)
   while ((Get-Date) -lt $deadline) {
     if (Test-OllamaReady) {
+      Write-Host " ready!"
       return $true
     }
 
+    Write-Host -NoNewline "."
     Start-Sleep -Seconds 1
   }
 
+  Write-Host " timed out."
   return $false
 }
 
@@ -107,15 +114,19 @@ function Start-OllamaServer {
 function Wait-ServerReady {
   param([int]$Seconds)
 
+  Write-Host -NoNewline "Starting Marketing Helper AI"
   $deadline = (Get-Date).AddSeconds($Seconds)
   while ((Get-Date) -lt $deadline) {
     if (Test-ServerReady) {
+      Write-Host " ready!"
       return $true
     }
 
+    Write-Host -NoNewline "."
     Start-Sleep -Seconds 1
   }
 
+  Write-Host " timed out."
   return $false
 }
 

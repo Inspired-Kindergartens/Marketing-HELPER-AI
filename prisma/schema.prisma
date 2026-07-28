@@ -661,34 +661,34 @@ model TaskGroup {
 }
 
 model Task {
-  id              Int              @id @default(autoincrement())
-  title           String
-  description     String?
-  status          String           @default("todo")
-  dueDate         DateTime?
+  id               Int                  @id @default(autoincrement())
+  title            String
+  description      String?
+  status           String               @default("todo")
+  dueDate          DateTime?
   estimatedMinutes Int?
-  loggedMinutes   Int              @default(0)
-  timerStartedAt  DateTime?
-  projectId       Int?
-  taskGroupId     Int?
-  centreKey       Int?
-  assigneeId      Int?
-  position        Int              @default(0)
-  completedAt     DateTime?
+  loggedMinutes    Int                  @default(0)
+  timerStartedAt   DateTime?
+  projectId        Int?
+  taskGroupId      Int?
+  centreKey        Int?
+  assigneeId       Int?
+  position         Int                  @default(0)
+  completedAt      DateTime?
   // Last composed email draft for this task (reused as the editor's starting
   // point next time; the actual send happens via a mailto: link to Outlook).
-  emailSubject    String?
-  emailBody       String?
-  createdAt       DateTime         @default(now())
-  updatedAt       DateTime         @updatedAt
-  project         Project?         @relation(fields: [projectId], references: [id], onDelete: SetNull, onUpdate: Cascade)
-  group           TaskGroup?       @relation(fields: [taskGroupId], references: [id], onDelete: SetNull, onUpdate: Cascade)
-  centre          CentreReference? @relation(fields: [centreKey], references: [centreKey], onDelete: SetNull, onUpdate: Cascade)
-  assignee        Member?          @relation(fields: [assigneeId], references: [id], onDelete: SetNull, onUpdate: Cascade)
-  checklistItems  ChecklistItem[]
-  emailRecipients TaskEmailRecipient[]
+  emailSubject     String?
+  emailBody        String?
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+  project          Project?             @relation(fields: [projectId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  group            TaskGroup?           @relation(fields: [taskGroupId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  centre           CentreReference?     @relation(fields: [centreKey], references: [centreKey], onDelete: SetNull, onUpdate: Cascade)
+  assignee         Member?              @relation(fields: [assigneeId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  checklistItems   ChecklistItem[]
+  emailRecipients  TaskEmailRecipient[]
   attachments      TaskAttachment[]
-  timeEntries     TimeEntry[]
+  timeEntries      TimeEntry[]
 
   @@index([status, dueDate])
   @@index([projectId, position])
@@ -793,19 +793,19 @@ model JdAgreement {
 // layouts (position hours, reports-to, remuneration text, etc). One row per
 // dropdown entry in the JD "Job Title" field.
 model JdTitleProfile {
-  id                  Int      @id @default(autoincrement())
-  jobTitle            String   @unique
-  sortOrder           Int      @default(0)
+  id                  Int              @id @default(autoincrement())
+  jobTitle            String           @unique
+  sortOrder           Int              @default(0)
   jobCategory         String
   payScaleKey         String?
-  layoutVariant       String   @default("standard") // standard | administrator | professional
-  defaultPositionType String   @default("Full Time")
-  agreementText       String   @default("Kindergarten Teachers Collective Agreement")
+  layoutVariant       String           @default("standard") // standard | administrator | professional
+  defaultPositionType String           @default("Full Time")
+  agreementText       String           @default("Kindergarten Teachers Collective Agreement")
   qualificationsText  String
   roleSections        Json // [{ heading, intro?, bullets: [{ text, boldLeadIn? }] }]
   extras              Json? // positionHours, reportsTo, remunerationText, contractManagerName, subjectLine
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
   jobDescriptions     JobDescription[]
 
   @@index([sortOrder])
@@ -817,9 +817,10 @@ model JdCentreProfile {
   id                   Int             @id @default(autoincrement())
   centreKey            Int             @unique
   locationDisplay      String // e.g. "PAENGAROA Kindergarten"
-  introParagraph       String @default("")
-  seniorTeacherName    String @default("")
-  seniorTeacherAcronym String @default("")
+  introParagraph       String          @default("")
+  seniorTeacherName    String          @default("")
+  seniorTeacherAcronym String          @default("")
+  isEnviroschool       Boolean         @default(false) // Only true for centres factually registered as Enviroschools — drives the AI blurb prompt so it never invents this claim.
   createdAt            DateTime        @default(now())
   updatedAt            DateTime        @updatedAt
   centre               CentreReference @relation(fields: [centreKey], references: [centreKey], onDelete: Cascade, onUpdate: Cascade)
@@ -829,32 +830,32 @@ model JdCentreProfile {
 // title/centre profiles at creation time so each JD can be edited
 // independently afterwards without affecting the shared profile defaults.
 model JobDescription {
-  id                  Int              @id @default(autoincrement())
-  jobTitle            String
-  titleProfileId      Int?
-  centreKey           Int?
-  locationDisplay     String
-  positionType        String
-  fte                 Decimal?         @db.Decimal(4, 2)
-  jobCategory         String
-  layoutVariant       String           @default("standard")
-  agreementText       String           @default("")
-  salaryRangeText     String           @default("")
-  dateAdvertised      DateTime?
-  closingAt           DateTime?
-  startDateText       String           @default("To be negotiated")
-  qualificationsText  String           @default("")
-  introParagraph      String           @default("")
-  roleSections        Json
-  extras              Json?
-  seniorTeacherName   String           @default("")
-  blurbHtml           String?
-  reviewedByAcronym   String           @default("")
-  approvedByAcronym   String           @default("PM")
-  lastUpdatedByAcronym String          @default("")
-  createdAt           DateTime         @default(now())
-  updatedAt           DateTime         @updatedAt
-  titleProfile        JdTitleProfile?  @relation(fields: [titleProfileId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  id                   Int              @id @default(autoincrement())
+  jobTitle             String
+  titleProfileId       Int?
+  centreKey            Int?
+  locationDisplay      String
+  positionType         String
+  fte                  Decimal?         @db.Decimal(4, 2)
+  jobCategory          String
+  layoutVariant        String           @default("standard")
+  agreementText        String           @default("")
+  salaryRangeText      String           @default("")
+  dateAdvertised       DateTime?
+  closingAt            DateTime?
+  startDateText        String           @default("To be negotiated")
+  qualificationsText   String           @default("")
+  introParagraph       String           @default("")
+  roleSections         Json
+  extras               Json?
+  seniorTeacherName    String           @default("")
+  blurbHtml            String?
+  reviewedByAcronym    String           @default("")
+  approvedByAcronym    String           @default("PM")
+  lastUpdatedByAcronym String           @default("")
+  createdAt            DateTime         @default(now())
+  updatedAt            DateTime         @updatedAt
+  titleProfile         JdTitleProfile?  @relation(fields: [titleProfileId], references: [id], onDelete: SetNull, onUpdate: Cascade)
   centre               CentreReference? @relation(fields: [centreKey], references: [centreKey], onDelete: SetNull, onUpdate: Cascade)
   blurbs               JdBlurb[]
 

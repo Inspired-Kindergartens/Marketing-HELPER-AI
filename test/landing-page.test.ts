@@ -77,3 +77,39 @@ test("landing page still includes the primary Tasks button linking to /tasks", (
   assert.match(html, /landing-button landing-button--primary" href="\/tasks">/);
   assert.match(html, /landing-button__label">Tasks<\/span>/);
 });
+
+test("landing page includes a Job Descriptions tile linking to /jd", () => {
+  const html = renderLandingPage({});
+
+  assert.match(html, /href="\/jd">/);
+  assert.match(html, /Job Descriptions/);
+});
+
+test("landing page surfaces a KTCA expiry reminder alongside task reminders", () => {
+  const html = renderLandingPage({
+    reminders: { overdue: [], dueSoon: [], total: 0 },
+    ktcaReminder: { expired: false, daysUntilExpiry: 45 },
+  });
+
+  assert.match(html, /landing__reminders/);
+  assert.match(html, /KTCA agreement needs updating/);
+  assert.match(html, /Expires in 45 days/);
+  assert.match(html, /1 overdue · 1 need attention/);
+});
+
+test("landing page KTCA reminder shows 'Expired' wording once the agreement has lapsed", () => {
+  const html = renderLandingPage({
+    ktcaReminder: { expired: true, daysUntilExpiry: -10 },
+  });
+
+  assert.match(html, /Expired 10 days ago/);
+});
+
+test("landing page hides the KTCA reminder when the agreement is not close to expiry", () => {
+  const html = renderLandingPage({
+    reminders: { overdue: [], dueSoon: [], total: 0 },
+    ktcaReminder: null,
+  });
+
+  assert.doesNotMatch(html, /landing__reminders/);
+});

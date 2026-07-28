@@ -86,14 +86,14 @@ K1 full step table (2 Apr 2026 → 28 Jan 2027): 1: 62,862→64,119;
 ---
 
 ## 1. Data model (`prisma/schema.prisma`)
-- [ ] `JdPayScale` — scaleKey (K1/K2/K2R), step (nullable for flat scales),
+- [x] `JdPayScale` — scaleKey (K1/K2/K2R), step (nullable for flat scales),
       effectiveFrom, annualRate, sourceDocument, importedAt. Seeded from the
       table above (K1 + K2 + K2R only); selectable-by-date so ranges roll
       over automatically on 28 Jan 2027 / 29 Jun 2027.
-- [ ] `JdAgreement` — one row per imported KTCA document: name, fileName,
+- [x] `JdAgreement` — one row per imported KTCA document: name, fileName,
       effectiveFrom, expiresOn (28/12/2028), importedAt. Drives the yearly
       startup check.
-- [ ] `JdTitleProfile` — jobTitle (unique), sortOrder, jobCategory,
+- [x] `JdTitleProfile` — jobTitle (unique), sortOrder, jobCategory,
       payScaleKey?, layoutVariant (`standard` | `administrator` |
       `professional`), defaultPositionType, agreementText,
       qualificationsText, roleSections (JSON: `[{heading, intro?, bullets[]}]`
@@ -106,70 +106,76 @@ K1 full step table (2 Apr 2026 → 28 Jan 2027): 1: 62,862→64,119;
       `Job Description Administrator template.pdf` (category Administration,
       Position Hours field, core/other duties, required skills, reports to
       Head Teacher, no pay scale).
-- [ ] `JdCentreProfile` — extends the existing centre list: centreKey
+- [x] `JdCentreProfile` — extends the existing centre list: centreKey
       (unique, FK `CentreReference`), locationDisplay (CAPS +
       "Kindergarten"), introParagraph (operating hours + max roll),
       seniorTeacherName, seniorTeacherAcronym. Back-relation on
       `CentreReference`; seeded with a row per open, non-ignored centre
       (known values filled: PAENGAROA, OPEYS, Maungatapu; the rest edited in
       the settings panel).
-- [ ] `JobDescription` — jobTitle, centreKey, positionType, fte,
+- [x] `JobDescription` — jobTitle, centreKey, positionType, fte,
       jobCategory, salaryRangeText (frozen at generation), dateAdvertised,
       closingAt, startDateText, qualificationsText, introParagraph,
       roleSections JSON, blurbHtml, reviewedByAcronym, approvedByAcronym
       (default PM), lastUpdatedByAcronym, createdAt/updatedAt. Field values
       copied from profiles at creation so each JD is editable independently.
-- [ ] `JdBlurb` — blurb history: centreKey, jobDescriptionId?, contentHtml,
+- [x] `JdBlurb` — blurb history: centreKey, jobDescriptionId?, contentHtml,
       savedAt. **A new row on every save** (user may hand-edit; all versions
       kept as future AI reference corpus).
-- [ ] `JdKnowledgeDoc` — blurb information base: kind (`generic` |
+- [x] `JdKnowledgeDoc` — blurb information base: kind (`generic` |
       `service`), centreKey?, label (`current` | `old` | doc name),
-      contentHtml, updatedAt. **Seed from the two supplied documents**:
-      `D:\iK\Documents\JD\Current Kindergarten Website Blurbs.pdf` (all 26
-      open services — full coverage verified against `CentreReference`) and
-      `D:\iK\Documents\JD\OLD Kindergarten Website Blurbs.pdf` (22 services;
-      lacks Katikati, Brookfield, Matua, Thames Coast — expected, they're
-      newer additions). One `service`+`current` and (where present) one
-      `service`+`old` row per centre, preserving headings/bold/bullets/links
-      as HTML. Note: blurb docs spell "Maraawaewae"; DB has "Maarawaewae" —
-      match by centreKey, not name. The `generic` doc seeds with the
-      **immovable boilerplate** (below) captured from the live vacancy pages;
-      editable in the settings panel but locked in the blurb editor.
-- [ ] Migration `add_job_descriptions` + seed script
-      (`prisma/seed-jd.ts` or inline in migration) for pay scales, Teacher/
-      Head Teacher title profiles, and known centre profiles (PAENGAROA,
-      OPEYS from current PDFs).
+      contentHtml, updatedAt. Schema + CRUD (`upsertKnowledgeDoc`,
+      `listKnowledgeDocsForCentre`, `getGenericKnowledgeDoc`) done, editable
+      via the JD Settings panel.
+  - [ ] **Still pending: seed from the two supplied documents** —
+        `D:\iK\Documents\JD\Current Kindergarten Website Blurbs.pdf` (all 26
+        open services) and `OLD Kindergarten Website Blurbs.pdf` (22
+        services). Blocked on PDF→HTML extraction tooling (the local
+        `pdftoppm`/poppler renderer isn't installed, and the doc is too large
+        for direct text-layer extraction in one pass) — needs a follow-up
+        pass with a proper PDF text/HTML extractor, preserving
+        headings/bold/bullets/links, matched by centreKey (not name — the
+        blurb docs spell "Maraawaewae", the DB has "Maarawaewae").
+  - [ ] **Still pending:** seed the `generic` doc with the immovable
+        boilerplate text (captured in §4 below) so it's editable in Settings
+        from day one instead of only living in `jd-context.ts`.
+- [x] Migration `add_job_descriptions` + seed script
+      (`prisma/seed-jd.ts`) for pay scales, Teacher/Head Teacher/
+      Administrator/Part-time Teacher title profiles, and known centre
+      profiles (PAENGAROA, OPEYS, Maungatapu).
 
 ## 2. Pay-scale startup check (yearly KTCA update)
-- [ ] On server start (same pattern as other background refreshes in
+- [x] On server start (same pattern as other background refreshes in
       `src/server.ts`): resolve currently-effective rates by date, refresh any
       stored display ranges, and log the active scale window.
-- [ ] Warn when the newest `JdAgreement.expiresOn` is past or within 90 days:
+- [x] Warn when the newest `JdAgreement.expiresOn` is past or within 90 days:
       banner on the JD page (+ landing reminder strip entry) prompting an
       updated KTCA import.
-- [ ] KTCA import flow: upload new KTCA PDF → extract text → AI-assisted
-      extraction of K1 steps / K2 / K2R rate tables + effective dates →
-      review screen showing parsed rates → confirm to insert new
-      `JdPayScale` rows + `JdAgreement`. (Manual-edit fallback if parsing
-      fails.)
+- [x] KTCA import flow (partial): upload new KTCA PDF via
+      `POST /api/jd/settings/ktca-import` (accepted, stored in memory only).
+  - [ ] **Still pending:** AI-assisted extraction of K1 steps / K2 / K2R rate
+        tables + effective dates, and the review screen to confirm parsed
+        rates before inserting `JdPayScale` rows + `JdAgreement`. Currently
+        the upload just acknowledges receipt and prompts manual entry via
+        the pay-scale table in Settings.
 
 ## 3. Storage layer (`src/storage/jd-store.ts`)
-- [ ] Pay-scale helpers: `getEffectiveRates(date)`,
+- [x] Pay-scale helpers: `getEffectiveRates(date)`,
       `formatSalaryRange(scaleKey, date, fte?)` → e.g.
       `K1: $62,862 to $105,686`, flat scales `K2: $113,356`, part-time
       pro-rated (`fte × rate`, 2 dp, "to" range for stepped scales).
-- [ ] Title/centre profile CRUD (`listTitleProfiles`, `upsertCentreProfile`,
+- [x] Title/centre profile CRUD (`listTitleProfiles`, `upsertCentreProfile`,
       `listCentreProfiles` joined to `CentreReference`).
-- [ ] `JobDescription` CRUD; `createJobDescription` composes defaults from
+- [x] `JobDescription` CRUD; `createJobDescription` composes defaults from
       title profile + centre profile + effective pay scale.
-- [ ] Blurb helpers: `saveBlurb` (writes `JobDescription.blurbHtml` **and**
+- [x] Blurb helpers: `saveBlurb` (writes `JobDescription.blurbHtml` **and**
       appends a `JdBlurb` history row), `listBlurbsForCentre` (AI corpus).
-- [ ] Knowledge-doc CRUD (scaffold).
-- [ ] Server-side HTML sanitiser for WYSIWYG input (allow: h1–h3, p, strong,
+- [x] Knowledge-doc CRUD (scaffold).
+- [x] Server-side HTML sanitiser for WYSIWYG input (allow: h1–h3, p, strong,
       em, ul/ol/li, a[href], br; strip everything else).
 
 ## 4. AI blurb generation (`src/ai/jd-context.ts`)
-- [ ] Context builder: IK generic base text (`JdKnowledgeDoc` kind=generic) +
+- [x] Context builder: IK generic base text (`JdKnowledgeDoc` kind=generic) +
       the centre's `current` (primary) and `old` (secondary) website blurbs
       (kind=service for centreKey) + most recent N previously generated/saved
       blurbs for that centre (`JdBlurb`) + the JD's fields (title, position
@@ -177,7 +183,7 @@ K1 full step table (2 Apr 2026 → 28 Jan 2027): 1: 62,862→64,119;
       its established taglines, pou/values, whakataukī and factual claims
       (hours, free-hours offer, Enviroschools status) verbatim unless the JD
       fields contradict them.
-- [ ] Blurb template = **variable editorial section + immovable boilerplate**
+- [x] Blurb template = **variable editorial section + immovable boilerplate**
       (structure verified on the live vacancy pages for Tai o Fenua + OPEYS,
       `inspiredkindergartens.nz/employment-and-careers/vacancies/...`):
       1. *Variable (AI-generated)*: headline (e.g. "Kindergarten Teacher
@@ -201,24 +207,27 @@ K1 full step table (2 Apr 2026 → 28 Jan 2027): 1: 62,862→64,119;
       Prompt instructs the AI **not** to repeat the boilerplate sentences in
       the editorial section (the live pages currently duplicate the KTCA
       sentence — avoid that), and never to invent facts about the centre.
-- [ ] `POST /api/jd/:id/blurb/generate` uses `runLocalChat`
+- [x] `POST /api/jd/:id/blurb/generate` uses `runLocalChat`
       (`src/ai/client.ts`), sanitises the returned HTML, saves via
       `saveBlurb`, returns HTML for the editor.
-- [ ] Regenerate keeps prior versions in `JdBlurb` (nothing overwritten).
+- [x] Regenerate keeps prior versions in `JdBlurb` (nothing overwritten).
 
 ## 5. JD section UI (`src/ui/jd-app-shell.ts`, `src/ui/jd/`)
-- [ ] `jd-app-shell.ts` — `PANEL_DEFINITIONS`, `VALID_JD_PANEL_IDS`,
+- [x] `jd-app-shell.ts` — `PANEL_DEFINITIONS`, `VALID_JD_PANEL_IDS`,
       `renderJdAppShell` via `renderLayout` (same as tasks/comms shells).
-- [ ] `jd-list-panel.ts` — existing JDs (title, location, dates advertised/
+- [x] `jd-list-panel.ts` — existing JDs (title, location, dates advertised/
       closing), open/duplicate/delete; "New Job Description" form with the
       driving dropdowns (Job Title in the specified order; Location from
       centre profiles).
-- [ ] `jd-editor-panel.ts` — full field editor: dropdowns/date/date-time/text
-      inputs per the field rules; auto-fill on title/location change (with
-      "edited" fields preserved); Role & Responsibilities section editor
+- [x] `jd-editor-panel.ts` — full field editor: dropdowns/date/date-time/text
+      inputs per the field rules; Role & Responsibilities section editor
       (headings + bullet lists); Qualifications text; footer acronyms.
       Buttons: **Download PDF**, **Save**.
-- [ ] `jd-blurb-panel.ts` — WYSIWYG editor (custom `contenteditable`
+  - [ ] **Still pending:** auto-fill on title/location change after creation
+        (currently the driving dropdowns only apply at JD creation time via
+        `createJobDescription`; changing Job Title/Location on an existing
+        JD in the editor does not re-pull the new profile's defaults).
+- [x] `jd-blurb-panel.ts` — WYSIWYG editor (custom `contenteditable`
       component, no new heavy deps): toolbar for headings (H1/H2/H3),
       normal paragraph, **bold**, *italic*, bullets, hyperlinks;
       **Generate with AI** button; **Copy to clipboard** writing both
@@ -227,71 +236,86 @@ K1 full step table (2 Apr 2026 → 28 Jan 2027): 1: 62,862→64,119;
       a locked (non-editable) block below the editable section, with Start/
       Closing Date auto-filled from the JD fields; copy-to-clipboard includes
       both parts.
-- [ ] `jd-settings-panel.ts` — centre profiles table (intro paragraph, senior
+- [x] `jd-settings-panel.ts` — centre profiles table (intro paragraph, senior
       teacher name + acronym per kindergarten), title profiles
-      (qualifications + role sections per job title), knowledge docs
-      (generic text + per-service docs), pay-scale table with agreement
-      status + "Import new KTCA" upload.
+      (qualifications per job title), knowledge docs (generic text +
+      per-service docs), pay-scale table with agreement status +
+      "Import new KTCA" upload.
+  - [ ] **Still pending:** role-section editing lives in the JD Editor panel
+        per JD, not per title profile in Settings, as originally scoped.
 
 ## 6. PDF generation
-- [ ] Add `pdfmake` (declarative tables — fits this table-heavy template;
-      pure JS, works server-side in Fastify).
-- [ ] Extract the Inspired Kindergartens logo from an existing JD PDF (or the
-      brand asset if the user supplies one) into `src/assets/ik-logo.png`,
-      embedded as base64.
-- [ ] `src/ui/jd/jd-pdf.ts` — builds the document definition matching the
+- [x] Add `pdfmake` (declarative tables — fits this table-heavy template;
+      pure JS, works server-side in Fastify). Note: this pdfmake version
+      ships no bundled fonts/standard-14 fallback — fonts are read from the
+      local Windows Arial install (`C:\Windows\Fonts`), since this app is
+      local-only and Windows-only.
+- [x] Extract the Inspired Kindergartens logo from an existing JD PDF into
+      `src/assets/ik-logo.jpg` (extracted via PyMuPDF from the embedded JPEG
+      in `PD Teacher PAENGAROA July 2026.pdf`), embedded as base64.
+- [x] `src/ui/jd/jd-pdf.ts` — builds the document definition matching the
       current template: logo top-right; bordered 4-column field table; grey
       "Applications only accepted by" band with E-mail block +
       QUALIFICATIONS AND EDUCATION REQUIREMENTS side by side; grey "Job
       Description" band; intro paragraph; ROLE AND RESPONSIBILITIES sections
-      with bullet lists (section continues on page 2 with repeated heading);
-      footer review table (Reviewed By / Approved By / Last Updated By with
-      Date and Date/Time).
-- [ ] Layout variants driven by `JdTitleProfile.layoutVariant`: Administrator
+      with bullet lists; footer review table (Reviewed By / Approved By /
+      Last Updated By with Date and Date/Time). Verified against the
+      reference PDF — layout matches closely.
+  - [ ] **Still pending:** explicit page-2 continuation with a repeated
+        "ROLE AND RESPONSIBILITIES" heading — currently relies on pdfmake's
+        default flow/pagination rather than an explicit repeat-heading rule.
+- [x] Layout variants driven by `JdTitleProfile.layoutVariant`: Administrator
       (short field table with Position Hours, bold lead-in duty bullets,
       REQUIRED SKILLS, REPORTS TO, "Private and Confidential" page
-      header/footer) and Professional/contract (standard table with
-      Agreement/Remuneration/Contract Manager/Subject Line substitutions) —
-      the SLT docs get regenerated into this conforming layout.
-- [ ] `GET /api/jd/:id/pdf` → `application/pdf` download, filename
+      header/footer — updated to "Inspired Kindergartens 'Private and
+      Confidential'" per user decision, replacing the legacy "Tauranga
+      Region Kindergartens" wording).
+  - [ ] **Deferred (per user decision):** Professional/contract layout
+        variant (Agreement/Remuneration/Contract Manager/Subject Line) — the
+        schema supports `layoutVariant: "professional"` but no title profile
+        is seeded for it and the PDF generator doesn't yet special-case it.
+- [x] `GET /api/jd/:id/pdf` → `application/pdf` download, filename
       `PD <Job Title> <LOCATION> <Month Year>.pdf` (matches current naming).
-- [ ] Visual check against `PD Teacher PAENGAROA July 2026.pdf` side by side.
+- [x] Visual check against `PD Teacher PAENGAROA July 2026.pdf` side by
+      side — confirmed matching field table, applications block, and
+      footer layout via a rendered test PDF.
 
 ## 7. Routes (`src/server.ts`)
-- [ ] `GET /jd` (+ `?focus=` panel param, same pattern as `/tasks`).
-- [ ] JD API: create / update / delete / duplicate.
+- [x] `GET /jd` (+ `?panel=` panel param, same pattern as `/tasks`).
+- [x] JD API: create / update / delete / duplicate.
 - [ ] Blurb API: generate (AI), save (records history), list versions,
       restore version.
 - [ ] Settings API: centre profile upsert, title profile update, knowledge
       doc CRUD, KTCA import (multipart upload → parse → confirm).
-- [ ] `GET /api/jd/:id/pdf` download.
+- [x] `GET /api/jd/:id/pdf` download.
 
 ## 8. Landing page
-- [ ] `Job Descriptions` tile → `/jd` (same tile component/behaviour as
+- [x] `Job Descriptions` tile → `/jd` (same tile component/behaviour as
       existing tiles — no bespoke styling).
-- [ ] KTCA-expiry warning surfaces in the existing reminders strip when due.
+- [x] KTCA-expiry warning surfaces in the existing reminders strip when due.
 
 ## 9. Styles (`src/ui/app.css`)
-- [ ] `.jd-*` classes reusing existing panel/card/form patterns; WYSIWYG
+- [x] `.jd-*` classes reusing existing panel/card/form patterns; WYSIWYG
       toolbar + editor styles; blurb version list.
 
 ## 10. Tests
-- [ ] `test/jd-store.test.ts` — real unit tests for pure helpers:
+- [x] `test/jd-store.test.ts` — real unit tests for pure helpers:
       `formatSalaryRange` (K1 range, K2 flat, effective-date rollover on
       28 Jan 2027, part-time FTE pro-rating), HTML sanitiser, PDF filename
       formatting; source-pattern assertions for Prisma-backed store functions
       (repo convention — no test DB).
-- [ ] `test/jd-app-shell.test.ts` — panel selection guard, field-driving
+- [x] `test/jd-app-shell.test.ts` — panel selection guard, field-driving
       rules rendered (title order in dropdown, defaults), blurb toolbar +
       copy button present.
-- [ ] **Wire both into `test/run-tests.ts`** (don't repeat the tasks-shell
-      omission).
-- [ ] Landing tile test added to `test/landing-page.test.ts`.
+- [x] **Wired both into `test/run-tests.ts`**. Full suite: 139 passing / 2
+      pre-existing unrelated failures (confirmed failing identically before
+      this feature's changes).
+- [x] Landing tile test added to `test/landing-page.test.ts`.
 
 ## 11. Docs
-- [ ] `README.md` — `## Job Descriptions` section (blurb + PDF workflow,
+- [x] `README.md` — `## Job Descriptions` section (blurb + PDF workflow,
       settings, KTCA import).
-- [ ] `ROADMAP.md` — note the JD feature and its relationship to existing
+- [x] `ROADMAP.md` — note the JD feature and its relationship to existing
       apps.
 
 ## 12. Open inputs needed from user
@@ -304,22 +328,29 @@ K1 full step table (2 Apr 2026 → 28 Jan 2027): 1: 62,862→64,119;
 - [x] Centre fields: extend the existing centre list (`CentreReference`) via
       the new `JdCentreProfile` schema; values maintained in the settings
       panel.
-- [ ] **SLT clarification**: the `D:\iK\Documents\JD\SLT` PDFs are **Speech
-      Language Therapist** JDs (Professional / Contract for Services).
-      Confirm whether "Speech Language Therapist" (or a generic
-      "Professional/Contract" title) joins the dropdown as a fifth title, or
-      whether the professional layout variant is deferred.
-- [ ] Administrator PDF page header/footer says
-      `Tauranga Region Kindergartens 'Private and Confidential'` — keep
-      legacy wording or update to Inspired Kindergartens?
+- [x] **SLT clarification resolved**: deferred. The professional/contract
+      layout variant is not seeded and does not appear in the Job Title
+      dropdown yet; only Teacher/Head Teacher/Administrator/Part-time
+      Teacher ship in this pass.
+- [x] Administrator PDF page header/footer resolved: updated to
+      "Inspired Kindergartens 'Private and Confidential'" (legacy
+      "Tauranga Region Kindergartens" wording replaced).
 - [ ] Senior teacher name + acronym and intro paragraph (hours, max roll) for
-      the remaining centres — editable in settings; known: PAENGAROA +
-      Maungatapu → Vilna Van Rensburg (VVR), OPEYS → Haylee Dumbar (HD).
+      the remaining centres — editable in settings; known and seeded:
+      PAENGAROA + Maungatapu → Vilna Van Rensburg (VVR), OPEYS → Haylee
+      Dumbar (HD). Remaining ~23 centres are unseeded (empty in
+      `JdCentreProfile`) and need editing in the settings panel.
 - [x] **Blurb source documents received**: Current (26/26 open services —
-      complete) + OLD (22 services) Kindergarten Website Blurbs PDFs; seeded
-      per centre in `JdKnowledgeDoc`. No service is missing.
+      complete) + OLD (22 services) Kindergarten Website Blurbs PDFs
+      confirmed in hand at `D:\iK\Documents\JD\`. No service is missing from
+      the source material.
+  - [ ] **Not yet seeded into `JdKnowledgeDoc`** — see the pending item
+        under §1 above (blocked on PDF extraction tooling).
 - [x] IK **generic/immovable text**: captured from the live vacancy pages
       (Tai o Fenua + OPEYS) — KTCA terms sentence, JD PDF link, "apply online"
-      link, Start/Closing Date lines, "Be at the cutting edge" tagline
-      (see §4 for the exact wording).
-- [ ] Logo asset (else extracted from existing PDF).
+      link, Start/Closing Date lines, "Be at the cutting edge" tagline;
+      implemented as `buildImmovableBoilerplateHtml` in `src/ai/jd-context.ts`
+      (see §4 for the exact wording). Not yet mirrored into a `JdKnowledgeDoc`
+      `generic` row for Settings-panel editing (see §1).
+- [x] Logo asset extracted from `PD Teacher PAENGAROA July 2026.pdf` via
+      PyMuPDF → `src/assets/ik-logo.jpg`.

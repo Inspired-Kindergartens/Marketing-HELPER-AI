@@ -128,6 +128,7 @@ The landing page links to the main local tools:
 - **Tasks** (`/tasks`) - local task and project tracking.
 - **General Chat** (`/chat`) - a general-purpose local AI chat with retained conversations and groups.
 - **Communications** (`/comms`) - Postmark, Mailchimp, Formstack, and communications-focused AI help.
+- **Job Descriptions** (`/jd`) - AI-drafted website vacancy blurbs and PDF job descriptions per kindergarten.
 
 ## Tasks & Projects
 
@@ -156,6 +157,43 @@ A project consolidates tasks into named **groups**, tracks a member roster drawn
 ### Members
 
 A simple directory of people who can be assigned to tasks and added to projects (name, optional email/role, active/inactive).
+
+## Job Descriptions
+
+`/jd` creates and maintains kindergarten-specific Job Descriptions (JDs). Each JD produces two outputs: an AI-drafted website vacancy blurb and a downloadable PDF matching the current template.
+
+### Job Title, Location, and field-driving rules
+
+Creating a JD starts with two dropdowns:
+
+- **Job Title** - `Teacher`, `Head Teacher`, `Administrator`, or `Part-time Teacher` (in that order). The title selects a `JdTitleProfile`, which supplies the Job Category, qualifications text, Role & Responsibilities sections, default Position Type, and which **PDF layout variant** to use:
+  - *Standard* (Teacher, Head Teacher, Part-time Teacher) - the full field table (Job Title / Job Category / Location / Collective Agreement / Position Type / Date advertised / Level-Salary Range / Closing Date / Senior Teacher / Start Date).
+  - *Administrator* - a shorter field table (Job Title / Job Category / Location / Position Hours), no pay scale, and Core duties / Other duties / Required Skills / Reports To sections.
+- **Location** - any open, non-ignored kindergarten (`JdCentreProfile`, extending `CentreReference`). Location supplies the intro paragraph (operating hours, max roll), Senior Teacher name/acronym, and the Reviewed By acronym.
+
+Selecting both composes a new `JobDescription` by copying every field from the title/centre profiles at that moment - editing the JD afterwards never touches the shared profiles, and re-generating the profiles later doesn't retroactively change existing JDs.
+
+### Pay scales (KTCA)
+
+Salary ranges are computed from `JdPayScale` rows (K1 stepped scale, K2/K2R flat rates), each with an `effectiveFrom` date. `formatSalaryRange` picks the latest rate not after the JD's advertised date, so ranges roll forward automatically as new KTCA rate steps take effect (e.g. the 28 Jan 2027 step). Part-time positions pro-rate the range by FTE.
+
+On every server start, the app logs the currently-effective KTCA agreement and warns (in the log and via a landing-page reminder) when the imported `JdAgreement.expiresOn` is past or within 90 days - a prompt to import the next collective agreement. The **Import new KTCA** control in JD Settings accepts a new agreement PDF; full AI-assisted rate-table extraction is not yet implemented, so pay-scale rows are reviewed and entered manually after upload.
+
+### Website blurb
+
+The **Website Blurb** panel is a custom `contenteditable` WYSIWYG editor (headings, bold/italic, bullet lists, links - no external rich-text dependency). **Generate with AI** calls the local model with context built from: the IK generic base text, the centre's current and old website blurbs (seeded from the supplied blurb PDFs), and the centre's previously saved blurbs - so new drafts stay in that centre's established voice rather than reinventing it.
+
+Only the *variable, editorial* section is AI-generated. A fixed, non-editable **boilerplate** block (KTCA terms sentence, links to the JD PDF and the online application page, Start Date, Closing Date, and the "Be at the cutting edge" tagline) is appended verbatim below the editor and is never sent through the AI. **Copy to clipboard** copies both the editorial section and the boilerplate together, as both HTML and plain text.
+
+Every save (AI-generated or hand-edited) appends a new `JdBlurb` history row rather than overwriting - all prior versions stay available to restore and double as future AI reference material for that centre.
+
+### PDF
+
+**Download PDF** (`GET /api/jd/:id/pdf`) renders the JD with `pdfmake`, matching the layout of the existing PD PDFs: the Inspired Kindergartens logo, the bordered field table, the "Applications only accepted by" band with qualifications alongside, the Role & Responsibilities sections, and a footer review table (Reviewed By / Approved By / Last Updated By). The filename follows the existing convention: `PD <Job Title> <LOCATION> <Month Year>.pdf`. Because this app is local-only and Windows-only, the PDF fonts are read straight from the OS Arial install (`C:\Windows\Fonts`) rather than bundling font files into the repo.
+
+### Settings
+
+JD Settings maintains the shared profiles editors draw from: per-centre intro paragraph and Senior Teacher name/acronym, per-title qualifications text, the blurb knowledge base (generic IK text plus per-centre current/old website blurbs), and the KTCA pay-scale/agreement status.
 
 ## Environment
 

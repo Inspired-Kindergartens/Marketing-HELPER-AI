@@ -8,7 +8,8 @@
       "Bash(taskkill *)",
       "WebFetch(domain:developer.metservice.com)",
       "Bash(npx tsc *)",
-      "PowerShell(ollama list *)"
+      "PowerShell(ollama list *)",
+      "PowerShell(powershell.exe -NoProfile -File \"D:\\\\iK\\\\Marketing-HELPER-AI\\\\scripts\\\\open-marketing-helper.ps1\")"
     ]
   }
 }

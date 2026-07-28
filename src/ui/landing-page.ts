@@ -36,17 +36,36 @@ function renderReminderItem(reminder: TaskReminderView, overdue: boolean): strin
   `;
 }
 
-function renderReminders(reminders: TaskReminderFeed | undefined): string {
-  if (!reminders || reminders.total === 0) return "";
-  const items = [
-    ...reminders.overdue.map((reminder) => renderReminderItem(reminder, true)),
-    ...reminders.dueSoon.map((reminder) => renderReminderItem(reminder, false)),
-  ].join("");
-  const overdueCount = reminders.overdue.length;
-  const heading =
-    overdueCount > 0
-      ? `${overdueCount} overdue · ${reminders.total} need attention`
-      : `${reminders.total} due soon`;
+function renderKtcaReminderItem(reminder: KtcaReminder): string {
+  const label = reminder.expired
+    ? `Expired ${Math.abs(reminder.daysUntilExpiry)} day${Math.abs(reminder.daysUntilExpiry) === 1 ? "" : "s"} ago`
+    : `Expires in ${reminder.daysUntilExpiry} day${reminder.daysUntilExpiry === 1 ? "" : "s"}`;
+  return `
+    <a class="landing-reminder landing-reminder--overdue" href="/jd?panel=jd-settings">
+      <span class="landing-reminder__due">${escapeHtml(label)}</span>
+      <span class="landing-reminder__title">KTCA agreement needs updating</span>
+      <span class="landing-reminder__meta">Import the new Kindergarten Teachers Collective Agreement</span>
+    </a>
+  `;
+}
+
+export type KtcaReminder = {
+  expired: boolean;
+  daysUntilExpiry: number;
+};
+
+function renderReminders(reminders: TaskReminderFeed | undefined, ktcaReminder?: KtcaReminder | null): string {
+  const taskItems = reminders
+    ? [
+        ...reminders.overdue.map((reminder) => renderReminderItem(reminder, true)),
+        ...reminders.dueSoon.map((reminder) => renderReminderItem(reminder, false)),
+      ]
+    : [];
+  const items = [...(ktcaReminder ? [renderKtcaReminderItem(ktcaReminder)] : []), ...taskItems].join("");
+  const total = (reminders?.total ?? 0) + (ktcaReminder ? 1 : 0);
+  if (total === 0) return "";
+  const overdueCount = (reminders?.overdue.length ?? 0) + (ktcaReminder ? 1 : 0);
+  const heading = overdueCount > 0 ? `${overdueCount} overdue · ${total} need attention` : `${total} due soon`;
   return `
     <section class="landing__reminders" aria-label="Task reminders">
       <h2 class="landing-reminders__heading">${escapeHtml(heading)}</h2>
@@ -140,6 +159,7 @@ export function renderLandingIntelligenceFeed(feed: LandingIntelligenceFeed | un
 export type LandingPageOptions = {
   reminders?: TaskReminderFeed;
   intelligenceFeed?: LandingIntelligenceFeed;
+  ktcaReminder?: KtcaReminder | null;
 };
 
 export function renderLandingPage(options: LandingPageOptions = {}) {
@@ -148,6 +168,7 @@ export function renderLandingPage(options: LandingPageOptions = {}) {
     { label: "Tasks", description: "Tasks, projects & reminders", href: "/tasks", primary: true },
     { label: "General Chat", description: "General help with saved conversations", href: "/chat", primary: true },
     { label: "Communications", description: "Postmark, Mailchimp & Formstack", href: "/comms", primary: false },
+    { label: "Job Descriptions", description: "AI blurbs & PDF job descriptions", href: "/jd", primary: false },
   ];
 
   const secondaryTiles = [
@@ -199,7 +220,7 @@ export function renderLandingPage(options: LandingPageOptions = {}) {
         <source src="/assets/beepbeep-intro.mp4" type="video/mp4" />
       </video>
       <p class="landing__tagline">Local marketing &amp; enrolment intelligence for kindergartens.</p>
-      ${renderReminders(options.reminders)}
+      ${renderReminders(options.reminders, options.ktcaReminder)}
       <nav class="landing__buttons" aria-label="Primary navigation">
         ${buttonRow}
       </nav>

@@ -25,6 +25,8 @@ Planned breakout apps:
 
 **Shipped, not one of the six breakout apps above:** **Tasks & Projects** (`/tasks`) — general-purpose task/project tracking with time tracking, checklists, due-date reminders on the landing page, a Members directory, and a Gantt-style project timeline. See `PLAN.md` for the build checklist (complete) and the README's "Tasks & Projects" section for behaviour.
 
+**Also shipped, not one of the six breakout apps above:** **Job Descriptions** (`/jd`) — AI-drafted website vacancy blurbs and matching-template PDF job descriptions per kindergarten, driven by per-title and per-centre profiles and the KTCA pay-scale schedule. Unlike the breakout apps above (each wraps an external SaaS API), this is first-party like Job Tracking below — no upstream integration, own Postgres schema. See `PLAN.md` for the build checklist and the README's "Job Descriptions" section for behaviour.
+
 ---
 
 ## 1. Online Communications

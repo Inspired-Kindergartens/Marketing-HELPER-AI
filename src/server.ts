@@ -148,6 +148,30 @@ import {
 } from "./storage/member-store.js";
 import { renderTasksAppShell, resolveTasksFocusPanelId } from "./ui/tasks-app-shell.js";
 import { renderReadmePage } from "./ui/readme-page.js";
+import {
+  listJobDescriptions,
+  getJobDescription,
+  createJobDescription,
+  updateJobDescription,
+  deleteJobDescription,
+  duplicateJobDescription,
+  listTitleProfiles,
+  listCentreProfiles,
+  upsertCentreProfile,
+  upsertTitleProfile,
+  saveBlurb,
+  listBlurbVersions,
+  restoreBlurbVersion,
+  listBlurbsForCentre,
+  listKnowledgeDocsForCentre,
+  getGenericKnowledgeDoc,
+  upsertKnowledgeDoc,
+  getAgreementStatus,
+  type RoleSection,
+} from "./storage/jd-store.js";
+import { renderJdAppShell, resolveJdFocusPanelId } from "./ui/jd-app-shell.js";
+import { buildImmovableBoilerplateHtml, buildJdBlurbChatMessages } from "./ai/jd-context.js";
+import { generateJdPdfBuffer, jdPdfAssetUrl, jdPdfFilename } from "./ui/jd/jd-pdf.js";
 
 loadDotenv({ override: true });
 
@@ -177,7 +201,7 @@ const envSchema = z.object({
   AI_PROVIDER: z.enum(["builtin", "ollama"]).default("builtin"),
   AI_BASE_URL: z.string().url().default("http://127.0.0.1:11434"),
   AI_CHAT_MODEL: z.string().trim().default("llama3.1:8b"),
-  AI_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120000).default(60000),
+  AI_TIMEOUT_MS: z.coerce.number().int().min(1000).max(300000).default(60000),
   POSTMARK_WEBHOOK_BASIC_AUTH: z.string().trim().default(""),
   POSTMARK_SERVER_TOKEN: z.string().trim().default(""),
   CLOUDFLARE_SYNC_URL: z
@@ -862,7 +886,7 @@ function renderContactUploadPage(input: {
     <main class="contact-upload">
       <a class="contact-upload__back" href="/">Back to landing</a>
       <h1>Upload Contacts</h1>
-      <p>Replace the local centre contact workbook used for email actions and RSS ownership matching.</p>
+      <p>Update the contacts list from the <a href="https://ikindergartens.sharepoint.com/sites/InspiredKindergartenTeam/Lists/Kindergarten%20Contact%20List/AllItems.aspx" target="_blank" rel="noopener noreferrer">Kindergarten Contact List</a> from the Staff Portal Sharepoint site</p>
       ${status}
       <dl class="contact-upload__meta">
         <div><dt>Current rows</dt><dd>${input.currentRowCount}</dd></div>
@@ -883,10 +907,14 @@ function renderContactUploadPage(input: {
 
 app.get("/", async (_request, reply) => {
   void tickWeeklySnapshotRefresh(app.log);
-  const reminders = await getDueAndOverdueTasks();
+  const [reminders, agreementStatus] = await Promise.all([getDueAndOverdueTasks(), getAgreementStatus()]);
+  const ktcaReminder =
+    agreementStatus.expired || agreementStatus.expiringSoon
+      ? { expired: agreementStatus.expired, daysUntilExpiry: agreementStatus.daysUntilExpiry ?? 0 }
+      : null;
   return reply
     .type("text/html; charset=utf-8")
-    .send(renderLandingPage({ reminders, intelligenceFeed: getLandingIntelligenceFeed() }));
+    .send(renderLandingPage({ reminders, intelligenceFeed: getLandingIntelligenceFeed(), ktcaReminder }));
 });
 
 app.get("/api/landing-intelligence", async (_request, reply) => {
@@ -1469,6 +1497,384 @@ app.get<{ Querystring: { panel?: string; project?: string; task?: string } }>(
     );
   },
 );
+
+// --- Job Descriptions ------------------------------------------------------
+
+// The JD editor form posts role sections as bracket-form keys
+// ("roleSections[0][heading]", "roleSections[0][bullets][1][text]") since it
+// isn't a fixed shape. Rebuilds the RoleSection[] array from those flat keys.
+function parseRoleSectionsFromForm(body: Record<string, unknown>): RoleSection[] | undefined {
+  type SectionDraft = { heading: string; intro?: string; bullets: Map<number, { text: string; boldLeadIn?: string }> };
+  const sectionPattern = /^roleSections\[(\d+)\]\[(heading|intro)\]$/;
+  const bulletPattern = /^roleSections\[(\d+)\]\[bullets\]\[(\d+)\]\[(text|boldLeadIn)\]$/;
+  const sections = new Map<number, SectionDraft>();
+  let found = false;
+
+  for (const [key, rawValue] of Object.entries(body)) {
+    const value = typeof rawValue === "string" ? rawValue : "";
+    const sectionMatch = sectionPattern.exec(key);
+    if (sectionMatch) {
+      found = true;
+      const index = Number(sectionMatch[1]);
+      const field = sectionMatch[2] as "heading" | "intro";
+      const section: SectionDraft = sections.get(index) ?? { heading: "", bullets: new Map() };
+      section[field] = value;
+      sections.set(index, section);
+      continue;
+    }
+    const bulletMatch = bulletPattern.exec(key);
+    if (bulletMatch) {
+      found = true;
+      const index = Number(bulletMatch[1]);
+      const bulletIndex = Number(bulletMatch[2]);
+      const field = bulletMatch[3] as "text" | "boldLeadIn";
+      const section: SectionDraft = sections.get(index) ?? { heading: "", bullets: new Map() };
+      const bullet = section.bullets.get(bulletIndex) ?? { text: "" };
+      bullet[field] = value;
+      section.bullets.set(bulletIndex, bullet);
+      sections.set(index, section);
+    }
+  }
+
+  if (!found) return undefined;
+
+  return Array.from(sections.entries())
+    .sort(([a], [b]) => a - b)
+    .map(([, section]) => ({
+      heading: section.heading,
+      ...(section.intro ? { intro: section.intro } : {}),
+      bullets: Array.from(section.bullets.entries())
+        .sort(([a], [b]) => a - b)
+        .map(([, bullet]) => ({
+          text: bullet.text,
+          ...(bullet.boldLeadIn ? { boldLeadIn: bullet.boldLeadIn } : {}),
+        })),
+    }));
+}
+
+function parseExtrasFromForm(body: Record<string, unknown>): Record<string, string> | undefined {
+  const pattern = /^extras\[(\w+)\]$/;
+  const extras: Record<string, string> = {};
+  let found = false;
+  for (const [key, rawValue] of Object.entries(body)) {
+    const match = pattern.exec(key);
+    if (match) {
+      found = true;
+      extras[match[1]] = typeof rawValue === "string" ? rawValue : "";
+    }
+  }
+  return found ? extras : undefined;
+}
+
+app.get<{ Querystring: { panel?: string; jd?: string } }>("/jd", async (request, reply) => {
+  const selectedJdId = parsePositiveInt(request.query?.jd);
+  const focusPanelId =
+    resolveJdFocusPanelId(request.query?.panel) ?? (selectedJdId != null ? "jd-editor" : null);
+
+  const [jobDescriptions, titleProfiles, centreProfiles, agreementStatus] = await Promise.all([
+    listJobDescriptions(),
+    listTitleProfiles(),
+    listCentreProfiles(),
+    getAgreementStatus(),
+  ]);
+
+  const selectedJd = selectedJdId != null ? await getJobDescription(selectedJdId) : null;
+  const genericDoc = await getGenericKnowledgeDoc();
+  const knowledgeDocs = selectedJd?.centreKey != null ? await listKnowledgeDocsForCentre(selectedJd.centreKey) : [];
+  const blurbVersions = selectedJd != null ? await listBlurbVersions(selectedJd.id) : [];
+  const boilerplateHtml = selectedJd
+    ? buildImmovableBoilerplateHtml(selectedJd, jdPdfAssetUrl(selectedJd))
+    : "";
+
+  return reply.type("text/html; charset=utf-8").send(
+    renderJdAppShell({
+      focusPanelId,
+      list: { jobDescriptions, titleProfiles, centreProfiles },
+      editor: { jobDescription: selectedJd, titleProfiles, centreProfiles },
+      blurb: { jobDescription: selectedJd, boilerplateHtml, versions: blurbVersions },
+      settings: { centreProfiles, titleProfiles, knowledgeDocs: genericDoc ? [genericDoc, ...knowledgeDocs] : knowledgeDocs, agreementStatus },
+    }),
+  );
+});
+
+app.post<{ Body: { jobTitleProfileId?: string; centreKey?: string } }>("/api/jd", async (request, reply) => {
+  const jobTitleProfileId = parsePositiveInt(request.body?.jobTitleProfileId);
+  const centreKey = parsePositiveInt(request.body?.centreKey);
+  if (jobTitleProfileId == null || centreKey == null) {
+    reply.code(400);
+    return { error: "A job title and location are required." };
+  }
+  try {
+    const id = await createJobDescription({ jobTitleProfileId, centreKey });
+    // Kick off the first blurb draft in the background so it's often ready
+    // by the time the user opens the blurb panel. Fire-and-forget: a failure
+    // here (AI unavailable, timeout) just leaves the blurb empty for the
+    // user to generate manually — it must not fail JD creation.
+    void generateJdBlurb(id).catch((error) => {
+      app.log.warn({ error, jobDescriptionId: id }, "Automatic JD blurb generation failed");
+    });
+    return reply.code(201).send({ ok: true, id });
+  } catch (error) {
+    reply.code(400);
+    return { error: error instanceof Error ? error.message : "Could not create job description." };
+  }
+});
+
+app.post<{ Params: { id: string }; Body: Record<string, unknown> }>("/api/jd/:id", async (request, reply) => {
+  const id = parsePositiveInt(request.params.id);
+  if (id == null) {
+    reply.code(400);
+    return { error: "Valid job description id is required." };
+  }
+  const body = request.body ?? {};
+  const roleSections = parseRoleSectionsFromForm(body);
+  const extras = parseExtrasFromForm(body);
+  await updateJobDescription(id, {
+    ...(typeof body.jobTitle === "string" ? { jobTitle: body.jobTitle } : {}),
+    ...(body.titleProfileId !== undefined ? { titleProfileId: body.titleProfileId ? Number(body.titleProfileId) : null } : {}),
+    ...(body.centreKey !== undefined ? { centreKey: body.centreKey ? Number(body.centreKey) : null } : {}),
+    ...(typeof body.locationDisplay === "string" ? { locationDisplay: body.locationDisplay } : {}),
+    ...(typeof body.positionType === "string" ? { positionType: body.positionType } : {}),
+    ...(body.fte !== undefined ? { fte: body.fte ? Number(body.fte) : null } : {}),
+    ...(typeof body.jobCategory === "string" ? { jobCategory: body.jobCategory } : {}),
+    ...(body.layoutVariant === "standard" || body.layoutVariant === "administrator" || body.layoutVariant === "professional"
+      ? { layoutVariant: body.layoutVariant }
+      : {}),
+    ...(typeof body.agreementText === "string" ? { agreementText: body.agreementText } : {}),
+    ...(typeof body.salaryRangeText === "string" ? { salaryRangeText: body.salaryRangeText } : {}),
+    ...(body.dateAdvertised !== undefined ? { dateAdvertised: (body.dateAdvertised as string) || null } : {}),
+    ...(body.closingAt !== undefined ? { closingAt: (body.closingAt as string) || null } : {}),
+    ...(typeof body.startDateText === "string" ? { startDateText: body.startDateText } : {}),
+    ...(typeof body.qualificationsText === "string" ? { qualificationsText: body.qualificationsText } : {}),
+    ...(typeof body.introParagraph === "string" ? { introParagraph: body.introParagraph } : {}),
+    ...(roleSections ? { roleSections } : {}),
+    ...(extras ? { extras } : {}),
+    ...(typeof body.seniorTeacherName === "string" ? { seniorTeacherName: body.seniorTeacherName } : {}),
+    ...(typeof body.reviewedByAcronym === "string" ? { reviewedByAcronym: body.reviewedByAcronym } : {}),
+    ...(typeof body.approvedByAcronym === "string" ? { approvedByAcronym: body.approvedByAcronym } : {}),
+    ...(typeof body.lastUpdatedByAcronym === "string" ? { lastUpdatedByAcronym: body.lastUpdatedByAcronym } : {}),
+  });
+  return { ok: true };
+});
+
+app.post<{ Params: { id: string } }>("/api/jd/:id/delete", async (request, reply) => {
+  const id = parsePositiveInt(request.params.id);
+  if (id == null) {
+    reply.code(400);
+    return { error: "Valid job description id is required." };
+  }
+  await deleteJobDescription(id);
+  return { ok: true };
+});
+
+app.post<{ Params: { id: string } }>("/api/jd/:id/duplicate", async (request, reply) => {
+  const id = parsePositiveInt(request.params.id);
+  if (id == null) {
+    reply.code(400);
+    return { error: "Valid job description id is required." };
+  }
+  const newId = await duplicateJobDescription(id);
+  return reply.code(201).send({ ok: true, id: newId });
+});
+
+// Lightweight poll target for the blurb panel while an auto-generated first
+// draft is still running in the background — avoids re-fetching the whole page.
+app.get<{ Params: { id: string } }>("/api/jd/:id/blurb/status", async (request, reply) => {
+  const id = parsePositiveInt(request.params.id);
+  if (id == null) {
+    reply.code(400);
+    return { error: "Valid job description id is required." };
+  }
+  const jd = await getJobDescription(id);
+  if (!jd) {
+    reply.code(404);
+    return { error: "Job description not found." };
+  }
+  return { hasBlurb: jd.blurbHtml != null };
+});
+
+app.get<{ Params: { id: string } }>("/api/jd/:id/pdf", async (request, reply) => {
+  const id = parsePositiveInt(request.params.id);
+  if (id == null) {
+    reply.code(400);
+    return { error: "Valid job description id is required." };
+  }
+  const jd = await getJobDescription(id);
+  if (!jd) {
+    reply.code(404);
+    return { error: "Job description not found." };
+  }
+  const buffer = await generateJdPdfBuffer(jd);
+  return reply
+    .type("application/pdf")
+    .header("Content-Disposition", attachmentDownloadHeader(jdPdfFilename(jd)))
+    .send(buffer);
+});
+
+app.post<{ Params: { id: string }; Body: { html?: string } }>("/api/jd/:id/blurb", async (request, reply) => {
+  const id = parsePositiveInt(request.params.id);
+  if (id == null) {
+    reply.code(400);
+    return { error: "Valid job description id is required." };
+  }
+  try {
+    await saveBlurb(id, request.body?.html ?? "");
+    return { ok: true };
+  } catch (error) {
+    reply.code(400);
+    return { error: error instanceof Error ? error.message : "Could not save blurb." };
+  }
+});
+
+// Shared by the explicit "Generate with AI" button and the fire-and-forget
+// auto-generation kicked off when a JD is first created.
+async function generateJdBlurb(id: number): Promise<string> {
+  const jd = await getJobDescription(id);
+  if (!jd || jd.centreKey == null) {
+    throw new Error("Job description not found.");
+  }
+
+  const [centreProfiles, knowledgeDocs, genericDoc, priorBlurbs] = await Promise.all([
+    listCentreProfiles(),
+    listKnowledgeDocsForCentre(jd.centreKey),
+    getGenericKnowledgeDoc(),
+    listBlurbsForCentre(jd.centreKey, 3),
+  ]);
+  const centreProfile = centreProfiles.find((c) => c.centreKey === jd.centreKey) ?? null;
+  const centreName = centreProfile?.centreName ?? jd.locationDisplay;
+  const currentServiceDoc = knowledgeDocs.find((doc) => doc.kind === "service" && doc.label === "current") ?? null;
+  const oldServiceDoc = knowledgeDocs.find((doc) => doc.kind === "service" && doc.label === "old") ?? null;
+
+  const messages = buildJdBlurbChatMessages({
+    jobDescription: jd,
+    centreName,
+    genericDoc,
+    currentServiceDoc,
+    oldServiceDoc,
+    priorBlurbs,
+    isEnviroschool: centreProfile?.isEnviroschool ?? false,
+  });
+  // JD blurb generation deliberately uses llama3.1:8b instead of whatever
+  // model the dashboard chat is configured for: it's not a "thinking" model,
+  // so it skips the multi-minute hidden <think> reasoning that made qwen3
+  // time out on this hardware for a multi-paragraph draft (measured ~13
+  // tokens/sec, 39s+ for even a one-sentence reply). Still generous on
+  // timeout since it's a background/explicit action, not interactive chat.
+  const JD_BLURB_AI_MODEL = "llama3.1:8b";
+  const JD_BLURB_AI_TIMEOUT_MS = 120000;
+  const html = await runLocalChat(
+    { ...aiConfig, AI_CHAT_MODEL: JD_BLURB_AI_MODEL, AI_TIMEOUT_MS: JD_BLURB_AI_TIMEOUT_MS },
+    messages,
+  );
+  await saveBlurb(id, html);
+  return html;
+}
+
+app.post<{ Params: { id: string } }>("/api/jd/:id/blurb/generate", async (request, reply) => {
+  const id = parsePositiveInt(request.params.id);
+  if (id == null) {
+    reply.code(400);
+    return { error: "Valid job description id is required." };
+  }
+  try {
+    const html = await generateJdBlurb(id);
+    return { ok: true, html };
+  } catch (error) {
+    reply.code(error instanceof AiClientError ? error.statusCode : 500);
+    return { error: error instanceof Error ? error.message : "Blurb generation failed." };
+  }
+});
+
+app.post<{ Params: { id: string; blurbId: string } }>("/api/jd/:id/blurb/:blurbId/restore", async (request, reply) => {
+  const id = parsePositiveInt(request.params.id);
+  const blurbId = parsePositiveInt(request.params.blurbId);
+  if (id == null || blurbId == null) {
+    reply.code(400);
+    return { error: "Valid job description and blurb ids are required." };
+  }
+  try {
+    await restoreBlurbVersion(id, blurbId);
+    return { ok: true };
+  } catch (error) {
+    reply.code(400);
+    return { error: error instanceof Error ? error.message : "Could not restore blurb version." };
+  }
+});
+
+app.post<{ Params: { centreKey: string }; Body: Record<string, unknown> }>(
+  "/api/jd/settings/centre/:centreKey",
+  async (request, reply) => {
+    const centreKey = parsePositiveInt(request.params.centreKey);
+    if (centreKey == null) {
+      reply.code(400);
+      return { error: "Valid centre key is required." };
+    }
+    const body = request.body ?? {};
+    await upsertCentreProfile(centreKey, {
+      locationDisplay: typeof body.locationDisplay === "string" ? body.locationDisplay : "",
+      introParagraph: typeof body.introParagraph === "string" ? body.introParagraph : "",
+      seniorTeacherName: typeof body.seniorTeacherName === "string" ? body.seniorTeacherName : "",
+      seniorTeacherAcronym: typeof body.seniorTeacherAcronym === "string" ? body.seniorTeacherAcronym : "",
+      isEnviroschool: body.isEnviroschool === "on" || body.isEnviroschool === true,
+    });
+    return { ok: true };
+  },
+);
+
+app.post<{ Body: { jobTitle?: string; qualificationsText?: string } }>(
+  "/api/jd/settings/title",
+  async (request, reply) => {
+    const jobTitle = String(request.body?.jobTitle ?? "").trim();
+    if (!jobTitle) {
+      reply.code(400);
+      return { error: "Job title is required." };
+    }
+    const existing = (await listTitleProfiles()).find((profile) => profile.jobTitle === jobTitle);
+    if (!existing) {
+      reply.code(404);
+      return { error: "Unknown job title profile." };
+    }
+    await upsertTitleProfile({
+      ...existing,
+      qualificationsText: request.body?.qualificationsText ?? existing.qualificationsText,
+    });
+    return { ok: true };
+  },
+);
+
+app.post<{ Body: { id?: string; kind?: string; centreKey?: string; label?: string; contentHtml?: string } }>(
+  "/api/jd/settings/knowledge-doc",
+  async (request, reply) => {
+    const kind = request.body?.kind === "generic" ? "generic" : "service";
+    const label = String(request.body?.label ?? "").trim();
+    if (!label) {
+      reply.code(400);
+      return { error: "Document label is required." };
+    }
+    await upsertKnowledgeDoc({
+      kind,
+      centreKey: kind === "service" ? parsePositiveInt(request.body?.centreKey) : null,
+      label,
+      contentHtml: request.body?.contentHtml ?? "",
+    });
+    return { ok: true };
+  },
+);
+
+app.post("/api/jd/settings/ktca-import", async (request, reply) => {
+  const upload = await request.file();
+  if (!upload) {
+    reply.code(400);
+    return { error: "Choose a KTCA PDF to import." };
+  }
+  await upload.toBuffer();
+  // Full AI-assisted rate extraction is not yet implemented; acknowledge the
+  // upload so the settings panel can prompt for manual entry in the meantime.
+  return {
+    ok: true,
+    message: "KTCA PDF received. Automatic rate extraction isn't available yet — update pay scales manually below.",
+  };
+});
 
 // All mutations are JSON POSTs (matching the existing notes/notifications
 // convention). They reply with { ok: true } and the client reloads /tasks so the
@@ -2975,6 +3381,15 @@ app.get("/vendor/chart.umd.js", async (_request, reply) => {
   return reply.type("application/javascript; charset=utf-8").send(script);
 });
 
+app.get("/vendor/marked.umd.js", async (_request, reply) => {
+  const script = await readFile(
+    join(process.cwd(), "node_modules", "marked", "lib", "marked.umd.js"),
+    "utf8",
+  );
+
+  return reply.type("application/javascript; charset=utf-8").send(script);
+});
+
 app.get<{ Params: { file: string } }>("/vendor/fonts/:file", async (request, reply) => {
   const file = request.params.file;
 
@@ -3129,6 +3544,34 @@ async function checkPostmarkWebhookOnStartup() {
   }
 }
 
+// Logs the currently-effective KTCA pay-scale window on every server start,
+// and warns when the imported agreement is expired or within 90 days of
+// expiry (mirrored on the landing page reminders strip).
+async function logJdAgreementStatusOnStartup() {
+  try {
+    const status = await getAgreementStatus();
+    if (!status.latest) {
+      app.log.warn("No KTCA agreement imported yet — Job Description pay scales are unseeded.");
+      return;
+    }
+    const logPayload = {
+      agreement: status.latest.name,
+      effectiveFrom: status.latest.effectiveFrom,
+      expiresOn: status.latest.expiresOn,
+      daysUntilExpiry: status.daysUntilExpiry,
+    };
+    if (status.expired) {
+      app.log.warn(logPayload, "KTCA agreement has expired — import an updated agreement.");
+    } else if (status.expiringSoon) {
+      app.log.warn(logPayload, "KTCA agreement expires within 90 days.");
+    } else {
+      app.log.info(logPayload, "KTCA agreement startup check completed");
+    }
+  } catch (error) {
+    app.log.error({ error }, "KTCA agreement startup check failed");
+  }
+}
+
 async function start() {
   await prisma.$connect();
   await prisma.$queryRaw`SELECT 1`;
@@ -3147,6 +3590,7 @@ async function start() {
   void checkPostmarkWebhookOnStartup();
   startCloudflarePostmarkSyncLoop();
   void startLandingIntelligenceFeedLoop(aiConfig, app.log);
+  void logJdAgreementStatusOnStartup();
 
   if (mailchimpConfigStatus.isConfigured) {
     void ensureMailchimpSnapshotIfConfigured();

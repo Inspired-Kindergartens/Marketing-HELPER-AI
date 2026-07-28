@@ -5242,6 +5242,7 @@ export function renderAppShell(
       <a class="nav-rail__item nav-rail__item--current" href="/app" aria-label="Online Marketing dashboard" title="Online Marketing" aria-current="page"><i class="bi bi-bar-chart-line" aria-hidden="true"></i></a>
       <a class="nav-rail__item" href="/tasks" aria-label="Tasks" title="Tasks"><i class="bi bi-check2-square" aria-hidden="true"></i></a>
       <a class="nav-rail__item" href="/comms" aria-label="Online Communications dashboard" title="Online Communications"><i class="bi bi-envelope-paper" aria-hidden="true"></i></a>
+      <a class="nav-rail__item" href="/jd" aria-label="Job Descriptions" title="Job Descriptions"><i class="bi bi-file-earmark-person" aria-hidden="true"></i></a>
     </aside>
     ${renderSnapshotOutcomeBanner(options.snapshotRefreshOutcome ?? null)}
     ${renderIntegrationErrorBanner(options.integrationError ?? null)}

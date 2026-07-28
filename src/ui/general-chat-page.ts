@@ -1,4 +1,7 @@
+import { marked } from "marked";
 import type { GeneralChatPageData } from "../storage/general-chat-store.js";
+
+marked.setOptions({ gfm: true, breaks: true });
 
 function escapeHtml(value: string) {
   return value
@@ -7,6 +10,14 @@ function escapeHtml(value: string) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
+}
+
+function renderMessageBody(message: { role: string; content: string }) {
+  if (message.role !== "assistant") {
+    return escapeHtml(message.content).replaceAll("\n", "<br />");
+  }
+
+  return marked.parse(escapeHtml(message.content), { async: false });
 }
 
 function renderMessages(data: GeneralChatPageData) {
@@ -25,9 +36,13 @@ function renderMessages(data: GeneralChatPageData) {
         <article class="general-chat-message general-chat-message--${message.role}" data-message-id="${message.id}">
           <div class="general-chat-message__top">
             <span class="general-chat-message__role">${message.role === "user" ? "You" : "Beep Beep"}</span>
-            <button class="general-chat-icon-button" type="button" data-delete-message="${message.id}" title="Delete message" aria-label="Delete message"><i class="bi bi-trash" aria-hidden="true"></i></button>
+            <div class="general-chat-message__actions">
+              <button class="general-chat-icon-button" type="button" data-copy-message="${message.id}" title="Copy to clipboard" aria-label="Copy to clipboard"><i class="bi bi-clipboard" aria-hidden="true"></i></button>
+              <button class="general-chat-icon-button" type="button" data-delete-message="${message.id}" title="Delete message" aria-label="Delete message"><i class="bi bi-trash" aria-hidden="true"></i></button>
+            </div>
           </div>
-          <div class="general-chat-message__body">${escapeHtml(message.content).replaceAll("\n", "<br />")}</div>
+          <div class="general-chat-message__body${message.role === "assistant" ? " readme-md" : ""}"${message.role === "assistant" ? ' data-markdown="true"' : ""}>${renderMessageBody(message)}</div>
+          <script type="text/plain" data-raw-content>${escapeHtml(message.content)}</script>
         </article>
       `,
     )
@@ -94,6 +109,7 @@ export function renderGeneralChatPage(data: GeneralChatPageData) {
       <a class="nav-rail__item" href="/tasks" aria-label="Tasks" title="Tasks"><i class="bi bi-check2-square" aria-hidden="true"></i></a>
       <a class="nav-rail__item nav-rail__item--current" href="/chat" aria-label="General Chat" title="General Chat" aria-current="page"><i class="bi bi-chat-dots" aria-hidden="true"></i></a>
       <a class="nav-rail__item" href="/comms" aria-label="Online Communications dashboard" title="Online Communications"><i class="bi bi-envelope-paper" aria-hidden="true"></i></a>
+      <a class="nav-rail__item" href="/jd" aria-label="Job Descriptions" title="Job Descriptions"><i class="bi bi-file-earmark-person" aria-hidden="true"></i></a>
     </aside>
     <main class="general-chat-app" data-selected-conversation="${selectedId ?? ""}" data-selected-group="${selectedGroupId ?? ""}">
       <aside class="general-chat-sidebar">
@@ -131,6 +147,7 @@ export function renderGeneralChatPage(data: GeneralChatPageData) {
         </form>
       </section>
     </main>
+    <script src="/vendor/marked.umd.js"></script>
     <script>
       (function () {
         var app = document.querySelector("[data-selected-conversation]");
@@ -140,6 +157,15 @@ export function renderGeneralChatPage(data: GeneralChatPageData) {
         var composer = document.querySelector("[data-chat-composer]");
         var pendingAssistantRow = null;
         var pendingUserRow = null;
+
+        function escapeHtml(value) {
+          return String(value)
+            .replaceAll("&", "&amp;")
+            .replaceAll("<", "&lt;")
+            .replaceAll(">", "&gt;")
+            .replaceAll('"', "&quot;")
+            .replaceAll("'", "&#39;");
+        }
 
         function updateThreadMessageCount(count) {
           if (!selectedConversation || typeof count !== "number") return;
@@ -159,6 +185,15 @@ export function renderGeneralChatPage(data: GeneralChatPageData) {
           var label = document.createElement("span");
           label.className = "general-chat-message__role";
           label.textContent = role === "user" ? "You" : "Beep Beep";
+          var actions = document.createElement("div");
+          actions.className = "general-chat-message__actions";
+          var copyButton = document.createElement("button");
+          copyButton.className = "general-chat-icon-button";
+          copyButton.type = "button";
+          copyButton.title = "Copy to clipboard";
+          copyButton.setAttribute("aria-label", "Copy to clipboard");
+          copyButton.setAttribute("data-copy-message-pending", "1");
+          copyButton.innerHTML = '<i class="bi bi-clipboard" aria-hidden="true"></i>';
           var deleteButton = document.createElement("button");
           deleteButton.className = "general-chat-icon-button";
           deleteButton.type = "button";
@@ -166,25 +201,50 @@ export function renderGeneralChatPage(data: GeneralChatPageData) {
           deleteButton.setAttribute("aria-label", "Delete message");
           deleteButton.disabled = true;
           deleteButton.innerHTML = '<i class="bi bi-trash" aria-hidden="true"></i>';
+          actions.appendChild(copyButton);
+          actions.appendChild(deleteButton);
           var body = document.createElement("div");
-          body.className = "general-chat-message__body";
-          body.textContent = content;
+          body.className = "general-chat-message__body" + (role === "assistant" ? " readme-md" : "");
+          if (role === "assistant") body.setAttribute("data-markdown", "true");
+          var raw = document.createElement("script");
+          raw.type = "text/plain";
+          raw.setAttribute("data-raw-content", "1");
           top.appendChild(label);
-          top.appendChild(deleteButton);
+          top.appendChild(actions);
           row.appendChild(top);
           row.appendChild(body);
+          row.appendChild(raw);
           messages.appendChild(row);
+          setMessageContent(row, content || "");
           messages.scrollTop = messages.scrollHeight;
           return row;
+        }
+
+        function setMessageContent(row, text) {
+          if (!row) return;
+          var body = row.querySelector(".general-chat-message__body");
+          var raw = row.querySelector("[data-raw-content]");
+          if (raw) raw.textContent = text;
+          if (!body) return;
+          if (body.hasAttribute("data-markdown") && window.marked) {
+            body.innerHTML = window.marked.parse(escapeHtml(text), { gfm: true, breaks: true });
+          } else {
+            body.textContent = text;
+          }
         }
 
         function markMessageSaved(row, messageId) {
           if (!row || !messageId) return;
           row.setAttribute("data-message-id", String(messageId));
-          var button = row.querySelector(".general-chat-icon-button");
-          if (button) {
-            button.disabled = false;
-            button.setAttribute("data-delete-message", String(messageId));
+          var deleteButton = row.querySelector("button[disabled]");
+          if (deleteButton) {
+            deleteButton.disabled = false;
+            deleteButton.setAttribute("data-delete-message", String(messageId));
+          }
+          var copyButton = row.querySelector("[data-copy-message-pending]");
+          if (copyButton) {
+            copyButton.removeAttribute("data-copy-message-pending");
+            copyButton.setAttribute("data-copy-message", String(messageId));
           }
         }
 
@@ -233,6 +293,24 @@ export function renderGeneralChatPage(data: GeneralChatPageData) {
               .then(function (res) {
                 if (res.ok) window.location.href = "/chat";
               });
+            return;
+          }
+
+          var copyMessage = target.closest("[data-copy-message], [data-copy-message-pending]");
+          if (copyMessage instanceof HTMLButtonElement) {
+            var messageRow = copyMessage.closest(".general-chat-message");
+            var rawContent = messageRow ? messageRow.querySelector("[data-raw-content]") : null;
+            var messageBody = messageRow ? messageRow.querySelector(".general-chat-message__body") : null;
+            var messageText = rawContent ? rawContent.textContent || "" : (messageBody ? messageBody.textContent || "" : "");
+            var icon = copyMessage.querySelector("i");
+            navigator.clipboard.writeText(messageText).then(function () {
+              if (icon) {
+                icon.className = "bi bi-check-lg";
+                setTimeout(function () {
+                  icon.className = "bi bi-clipboard";
+                }, 1200);
+              }
+            });
             return;
           }
 
@@ -307,7 +385,7 @@ export function renderGeneralChatPage(data: GeneralChatPageData) {
           input.disabled = true;
           button.disabled = true;
           pendingUserRow = appendMessage("user", prompt);
-          pendingAssistantRow = appendMessage("assistant", "", "pending");
+          pendingAssistantRow = appendMessage("assistant", "Beep Beep is thinking", "pending");
           var sourceText = "";
 
           fetch("/api/general-chat/conversations/" + selectedConversation + "/stream", {
@@ -341,16 +419,14 @@ export function renderGeneralChatPage(data: GeneralChatPageData) {
                   }
                   if (event === "chunk") {
                     sourceText += payload.chunk || "";
-                    var pendingBody = pendingAssistantRow ? pendingAssistantRow.querySelector(".general-chat-message__body") : null;
-                    if (pendingBody) pendingBody.textContent = sourceText;
+                    setMessageContent(pendingAssistantRow, sourceText);
                   }
                   if (event === "done") {
                     if (pendingAssistantRow) pendingAssistantRow.removeAttribute("data-state");
                     updateThreadMessageCount(payload.messageCount);
                   }
                   if (event === "error" && pendingAssistantRow) {
-                    var errorBody = pendingAssistantRow.querySelector(".general-chat-message__body");
-                    if (errorBody) errorBody.textContent = payload.error || "Chat request failed.";
+                    setMessageContent(pendingAssistantRow, payload.error || "Chat request failed.");
                     pendingAssistantRow.setAttribute("data-state", "error");
                   }
                 });
@@ -361,8 +437,7 @@ export function renderGeneralChatPage(data: GeneralChatPageData) {
             return pump();
           }).catch(function (error) {
             if (pendingAssistantRow) {
-              var errorBody = pendingAssistantRow.querySelector(".general-chat-message__body");
-              if (errorBody) errorBody.textContent = error && error.message ? error.message : "Chat request failed.";
+              setMessageContent(pendingAssistantRow, error && error.message ? error.message : "Chat request failed.");
               pendingAssistantRow.setAttribute("data-state", "error");
             }
           }).finally(function () {

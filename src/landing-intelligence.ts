@@ -61,28 +61,43 @@ const FIFTEEN_MINUTES_MS = 15 * 60 * 1000;
 const GENERAL_NEWS_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
 const REQUEST_TIMEOUT_MS = 9000;
 const RECOMMENDED_MODEL = "qwen3:8b";
-const ECE_TERMS = '("Inspired Kindergartens" OR "early childhood education" OR kindergarten OR ECE OR preschool OR "childcare centre")';
-const NEWS_QUERY_TIERS = [
+const ECE_TERMS =
+  '("early childhood" OR "early childhood education" OR ECE OR kindergarten OR preschool OR "pre-school" OR childcare OR "childcare centre" OR "child care" OR "early learning")';
+export const NEWS_QUERY_TIERS = [
   `${ECE_TERMS} Tauranga`,
   `${ECE_TERMS} "Bay of Plenty"`,
-  `${ECE_TERMS} New Zealand`,
+  `${ECE_TERMS} "New Zealand"`,
+  `${ECE_TERMS} (NZ OR Aotearoa)`,
+  `${ECE_TERMS} (international OR global OR overseas OR Australia OR "United Kingdom" OR UK OR Canada OR "United States" OR USA)`,
+];
+export const SOURCE_SPECIFIC_NEWS_QUERIES = [
+  `${ECE_TERMS} "NZ Herald"`,
+  `${ECE_TERMS} site:nzherald.co.nz`,
+  `${ECE_TERMS} RNZ`,
+  `${ECE_TERMS} site:rnz.co.nz`,
 ];
 
-const BRAND_QUERIES: { query: string; mustContain: string[] }[] = [
+export const BRAND_QUERIES: { query: string; mustContain: string[] }[] = [
   { query: '"Inspired Kindergartens"', mustContain: ["inspired"] },
+  {
+    query: '"Tauranga Regional Free Kindergarten Association"',
+    mustContain: ["tauranga regional free kindergarten association"],
+  },
   { query: '"Ngā Kōhungahunga Manawanui"', mustContain: ["nga kohungahunga manawanui"] },
   { query: '("Peter Monteith" AND kindergarten)', mustContain: ["peter monteith"] },
 ];
 
-const SECTOR_WATCH_QUERIES: { query: string; mustContain: string[] }[] = [
+export const SECTOR_WATCH_QUERIES: { query: string; mustContain: string[] }[] = [
   { query: '"Enviroschools"', mustContain: ["enviroschools"] },
   { query: '"NZIE" (kindergarten OR ECE OR "early childhood")', mustContain: ["nzie"] },
   { query: '"Kindergartens Aotearoa"', mustContain: ["kindergartens aotearoa"] },
   { query: '("KA" AND kindergarten AND Aotearoa)', mustContain: ["kindergartens aotearoa"] },
+  { query: '"Whānau Manaaki"', mustContain: ["whanau manaaki"] },
   { query: '"Krissy Thompson" kindergarten', mustContain: ["krissy thompson"] },
 ];
 
-const ECE_RELEVANCE_PATTERN = /kindergarten|early childhood|\bece\b|preschool|pre-school|kōhanga|kohanga/i;
+const ECE_RELEVANCE_PATTERN =
+  /kindergarten|early childhood|\bece\b|preschool|pre-school|childcare|child care|early learning|kōhanga|kohanga/i;
 
 function isGroundedMatch(item: RssItem, mustContain: string[]) {
   const normalizedText = normalizeCentreContactName(`${item.title} ${item.description}`);
@@ -90,9 +105,14 @@ function isGroundedMatch(item: RssItem, mustContain: string[]) {
   return mustContain.some((term) => normalizedText.includes(term));
 }
 
-const SECTOR_SCRAPE_SOURCES = [
+const RNZ_SCRAPE_SOURCES = [
   { name: "RNZ Education", url: "https://www.rnz.co.nz/news/education" },
+  { name: "RNZ Crime and Justice", url: "https://www.rnz.co.nz/news/crime-and-justice" },
+];
+
+const NZ_HERALD_SCRAPE_SOURCES = [
   { name: "NZ Herald Education", url: "https://www.nzherald.co.nz/topic/education/" },
+  { name: "NZ Herald New Zealand", url: "https://www.nzherald.co.nz/nz/" },
 ];
 
 const weatherLocations = [
@@ -229,6 +249,10 @@ function isStaleRssItem(item: RssItem, now: number, maxAgeMs: number) {
   return !Number.isFinite(publishedAt) || now - publishedAt > maxAgeMs;
 }
 
+function rssItemIdentityKey(item: RssItem) {
+  return `${normalizeCentreContactName(item.title)}-${normalizeCentreContactName(item.source)}`;
+}
+
 const LOCAL_REGION_PATTERN = /bay of plenty|tauranga|katikati|waihi|te puke|te puna|omokoroa|matua|papamoa|welcome bay|thames coast|whakamarama|whangamata|maungatapu|otumoetai/i;
 const OTHER_REGION_PATTERN = /\b(auckland|wellington|christchurch|hamilton|dunedin|nelson|gisborne|taranaki|manawatu|wairarapa|marlborough|southland|otago|northland|hawke'?s bay|west coast|canterbury|waikato)\b/i;
 const NATIONWIDE_PATTERN = /new zealand|nationwide|national\b|across the country|whole country|state of emergency/i;
@@ -303,7 +327,7 @@ async function readOwnedKindergartenReferences(): Promise<OwnedKindergartenRefer
     .sort((left, right) => right.normalizedName.length - left.normalizedName.length);
 }
 
-const NEWS_ITEM_TARGET = 6;
+const NEWS_ITEM_TARGET = 12;
 
 async function fetchNewsItems() {
   const references = await readOwnedKindergartenReferences();
@@ -317,14 +341,14 @@ async function fetchNewsItems() {
   for (const item of scraped) {
     if (fresh.length >= NEWS_ITEM_TARGET) break;
 
-    const key = `${item.title}-${item.link ?? ""}`;
+    const key = rssItemIdentityKey(item);
 
     if (seen.has(key)) continue;
     seen.add(key);
     fresh.push(item);
   }
 
-  for (const query of NEWS_QUERY_TIERS) {
+  for (const query of [...SOURCE_SPECIFIC_NEWS_QUERIES, ...NEWS_QUERY_TIERS]) {
     if (fresh.length >= NEWS_ITEM_TARGET) break;
 
     const xml = await fetchText(rssUrl(query)).catch(() => "");
@@ -337,7 +361,7 @@ async function fetchNewsItems() {
       .sort((left, right) => (right.publishedAt ?? "").localeCompare(left.publishedAt ?? ""));
 
     for (const item of tierItems) {
-      const key = `${item.title}-${item.link ?? ""}`;
+      const key = rssItemIdentityKey(item);
 
       if (seen.has(key)) continue;
       seen.add(key);
@@ -377,7 +401,7 @@ async function fetchBrandMentionItems(): Promise<LandingIntelligenceItem[]> {
     );
 
     for (const item of matches) {
-      const key = `${item.title}-${item.link ?? ""}`;
+      const key = rssItemIdentityKey(item);
 
       if (seen.has(key)) continue;
       seen.add(key);
@@ -390,8 +414,8 @@ async function fetchBrandMentionItems(): Promise<LandingIntelligenceItem[]> {
   return items;
 }
 
-function parseRnzEducationListing(html: string): RssItem[] {
-  const blockPattern = /<h3 class="o-digest__headline"[^>]*><a[^>]*href="(\/news\/[^"]+)"[^>]*>((?:[^<])*)<\/a><\/h3>[\s\S]{0,400}?class="o-kicker__time kicker-item">([^<]+)</g;
+export function parseRnzListing(html: string, source = "RNZ"): RssItem[] {
+  const blockPattern = /<h3 class="o-digest__headline"[^>]*>\s*<a[^>]*href="(\/news\/[^"]+)"[^>]*>\s*([^<]*?)\s*<\/a>\s*<\/h3>[\s\S]{0,400}?class="o-kicker__time kicker-item">([^<]+)</g;
 
   return [...html.matchAll(blockPattern)].map((match) => {
     const [, path, title, dateText] = match;
@@ -400,42 +424,84 @@ function parseRnzEducationListing(html: string): RssItem[] {
     return {
       title: decodeXml(title),
       link: `https://www.rnz.co.nz${path}`,
-      source: "RNZ Education",
+      source,
       publishedAt: Number.isNaN(Date.parse(dateText.trim())) ? null : publishedAt,
       description: "",
     };
   });
 }
 
-function parseNzHeraldEducationListing(html: string): RssItem[] {
-  const blockPattern = /"headline":"((?:[^"\\]|\\.)*)","displayDate":"([^"]*)","publishDate":"([^"]*)","isUpdated":[a-z]+,"description":"((?:[^"\\]|\\.)*)"[^}]*?"websiteUrl":"([^"]*)"/g;
+function decodeJsonString(value: string) {
+  try {
+    return JSON.parse(`"${value.replace(/"/g, '\\"')}"`) as string;
+  } catch {
+    return value.replace(/\\"/g, '"').replace(/\\u002F/g, "/");
+  }
+}
 
-  return [...html.matchAll(blockPattern)].map((match) => {
+function jsonStringProperty(block: string, property: string) {
+  const found = block.match(new RegExp(`"${property}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)"`, "i"));
+
+  return found?.[1] ? decodeJsonString(found[1]) : "";
+}
+
+export function parseNzHeraldEducationListing(html: string): RssItem[] {
+  const blockPattern = /"headline":"((?:[^"\\]|\\.)*)","displayDate":"([^"]*)","publishDate":"([^"]*)","isUpdated":[a-z]+,"description":"((?:[^"\\]|\\.)*)"[^}]*?"websiteUrl":"([^"]*)"/g;
+  const genericBlockPattern = /\{[^{}]*"websiteUrl"\s*:\s*"[^"]+"[^{}]*\}|\{[^{}]*"headline"\s*:\s*"[^"]+"[^{}]*"websiteUrl"\s*:\s*"[^"]+"[^{}]*\}/g;
+
+  const legacyItems = [...html.matchAll(blockPattern)].map((match) => {
     const [, title, , publishDate, description, websiteUrl] = match;
     const link = websiteUrl.startsWith("http") ? websiteUrl : `https://www.nzherald.co.nz${websiteUrl}`;
 
     return {
-      title: title.replace(/\\"/g, '"').replace(/\\u002F/g, "/"),
+      title: decodeJsonString(title),
       link,
       source: "NZ Herald Education",
       publishedAt: publishDate && !Number.isNaN(Date.parse(publishDate)) ? new Date(publishDate).toISOString() : null,
-      description: description.replace(/\\"/g, '"'),
+      description: decodeJsonString(description),
     };
   });
+
+  const genericItems: RssItem[] = [...html.matchAll(genericBlockPattern)]
+    .map((match): RssItem | null => {
+      const block = match[0];
+      const title = jsonStringProperty(block, "headline");
+      const websiteUrl = jsonStringProperty(block, "websiteUrl");
+      const publishDate = jsonStringProperty(block, "publishDate") || jsonStringProperty(block, "displayDate");
+
+      if (!title || !websiteUrl) return null;
+
+      const link = websiteUrl.startsWith("http") ? websiteUrl : `https://www.nzherald.co.nz${websiteUrl}`;
+
+      return {
+        title,
+        link,
+        source: "NZ Herald Education",
+        publishedAt: publishDate && !Number.isNaN(Date.parse(publishDate)) ? new Date(publishDate).toISOString() : null,
+        description: jsonStringProperty(block, "description"),
+      };
+    })
+    .filter((item): item is RssItem => item != null);
+
+  return dedupeRssItems([...legacyItems, ...genericItems]);
 }
 
 async function fetchSectorScrapedItems(): Promise<RssItem[]> {
-  const [rnzHtml, nzhHtml] = await Promise.all([
-    fetchText(SECTOR_SCRAPE_SOURCES[0].url).catch(() => ""),
-    fetchText(SECTOR_SCRAPE_SOURCES[1].url).catch(() => ""),
+  const [rnzPages, nzhPages] = await Promise.all([
+    Promise.all(RNZ_SCRAPE_SOURCES.map((source) => fetchText(source.url).then((html) => ({ ...source, html })).catch(() => ({ ...source, html: "" })))),
+    Promise.all(NZ_HERALD_SCRAPE_SOURCES.map((source) => fetchText(source.url).catch(() => ""))),
   ]);
   const now = Date.now();
 
-  const rnzItems = parseRnzEducationListing(rnzHtml).filter(
-    (item) => ECE_RELEVANCE_PATTERN.test(item.title) && !isStaleRssItem(item, now, GENERAL_NEWS_MAX_AGE_MS),
+  const rnzItems = rnzPages.flatMap((page) => parseRnzListing(page.html, page.name)).filter(
+    (item) =>
+      ECE_RELEVANCE_PATTERN.test(`${item.title} ${item.description}`) &&
+      !isStaleRssItem(item, now, GENERAL_NEWS_MAX_AGE_MS),
   );
-  const nzhItems = parseNzHeraldEducationListing(nzhHtml).filter(
-    (item) => ECE_RELEVANCE_PATTERN.test(item.title) && !isStaleRssItem(item, now, GENERAL_NEWS_MAX_AGE_MS),
+  const nzhItems = nzhPages.flatMap(parseNzHeraldEducationListing).filter(
+    (item) =>
+      ECE_RELEVANCE_PATTERN.test(`${item.title} ${item.description}`) &&
+      !isStaleRssItem(item, now, GENERAL_NEWS_MAX_AGE_MS),
   );
 
   return [...rnzItems, ...nzhItems];
@@ -445,7 +511,7 @@ function dedupeRssItems(items: RssItem[]): RssItem[] {
   const seen = new Set<string>();
 
   return items.filter((item) => {
-    const key = `${item.title}-${item.link ?? ""}`;
+    const key = rssItemIdentityKey(item);
 
     if (seen.has(key)) return false;
     seen.add(key);
@@ -698,7 +764,7 @@ export async function refreshLandingIntelligenceFeed(config: AiConfig, logger?: 
       }
 
       const ranked = [...unique.values()].sort((left, right) => Number(right.urgent) - Number(left.urgent));
-      const items = await refineBriefsWithAi(config, ranked.slice(0, 8));
+      const items = await refineBriefsWithAi(config, ranked.slice(0, 12));
       const feed: LandingIntelligenceFeed = {
         generatedAt: generatedAt.toISOString(),
         nextRefreshAt: new Date(generatedAt.getTime() + FIFTEEN_MINUTES_MS).toISOString(),
