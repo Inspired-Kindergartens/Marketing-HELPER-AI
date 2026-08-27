@@ -183,13 +183,45 @@ On every server start, the app logs the currently-effective KTCA agreement and w
 
 The **Website Blurb** panel is a custom `contenteditable` WYSIWYG editor (headings, bold/italic, bullet lists, links - no external rich-text dependency). **Generate with AI** calls the local model with context built from: the IK generic base text, the centre's current and old website blurbs (seeded from the supplied blurb PDFs), and the centre's previously saved blurbs - so new drafts stay in that centre's established voice rather than reinventing it.
 
-Only the *variable, editorial* section is AI-generated. A fixed, non-editable **boilerplate** block (KTCA terms sentence, links to the JD PDF and the online application page, Start Date, Closing Date, and the "Be at the cutting edge" tagline) is appended verbatim below the editor and is never sent through the AI. **Copy to clipboard** copies both the editorial section and the boilerplate together, as both HTML and plain text.
+Only the *variable, editorial* section is AI-generated. A fixed, non-editable **boilerplate** block is appended verbatim below the editor and is never sent through the AI, so the model cannot paraphrase or drop it. It contains, in order: the italic KTCA terms sentence (which also states the New Zealand work-eligibility requirement - "By applying for this role you acknowledge that you are eligible to work in New Zealand. If you are not eligible to work in New Zealand then do not apply."), the link to the JD PDF, the link to the online application page, Start Date, Closing Date, and the "Be at the cutting edge" tagline. **Copy to clipboard** copies both the editorial section and the boilerplate together, as both HTML and plain text.
 
 Every save (AI-generated or hand-edited) appends a new `JdBlurb` history row rather than overwriting - all prior versions stay available to restore and double as future AI reference material for that centre.
 
+### Publishing to the website and Ed Gazette
+
+Advertising a vacancy involves three pieces that must agree with each other: the **page title** you give the website, the **page URL** the website generates from that title, and the **link you send to Ed Gazette**. The app derives all three from the same job description so they cannot drift apart.
+
+**Copy Website Page Title** (Website Blurb panel toolbar) copies the exact title to paste into the website when creating the vacancy page, for example:
+
+```
+Full-time Teacher / Kaiako Position - Gwen Rogers Kindergarten August 2026
+```
+
+The title is assembled from the JD, not typed by hand:
+
+- **Position type** comes from the JD's Position Type field and is stated once, at the front. `Full Time` is written as `Full-time`. If the job title already carries its own prefix (the `Part-time Teacher` title profile), it is not repeated.
+- **Role** is the job title, paired with `/ Kaiako` for teaching roles only - `Administrator` is never paired with it, since *kaiako* means teacher.
+- **Location** is title-cased, and a duplicated trailing "Kindergarten" is collapsed, so a stored `GWEN ROGERS  KINDERGARTEN Kindergarten` reads `Gwen Rogers Kindergarten`.
+- **Month and year** come from the JD's **Date Advertised**.
+
+The month and year exist to keep each posting unique. The website builds a vacancy page's URL automatically from its title, so re-advertising the same role at the same centre in a later month produces a distinct page instead of colliding with the previous one.
+
+**Generate Email** (JD Editor panel) opens a pre-filled mail draft to `office@ikindergartens.nz` announcing that the vacancy is live, containing the link to send on to Ed Gazette (shown wrapped here for readability - it is a single unbroken URL in the email):
+
+```
+https://inspiredkindergartens.nz/employment-and-careers/vacancies/full-time-teacher-kaiako-position-gwen-rogers-kindergarten-august-2026?utm_source=education_gazette&utm_medium=referral&utm_campaign=gwen_rogers_teacher_2026
+```
+
+That link *is* the live vacancy page URL, so its path is the slugified page title above - the same string **Copy Website Page Title** gives you. The `utm_` parameters tag arriving traffic as an Ed Gazette referral so those visits are attributable in Google Analytics; the campaign tag combines centre, role, and the Date Advertised year.
+
+**Two things to watch:**
+
+- The link only resolves once the vacancy page actually exists on the website, and only if the page was created with the copied title unchanged. Editing the title on the website changes the URL the site generates and breaks the emailed link. Publish the page first, then send the email.
+- Changing a JD's **Date Advertised**, **Position Type**, **Job Title**, or **Location** changes the title, and therefore the URL. If the page is already published, update it on the website too, or any link already sent out will 404.
+
 ### PDF
 
-**Download PDF** (`GET /api/jd/:id/pdf`) renders the JD with `pdfmake`, matching the layout of the existing PD PDFs: the Inspired Kindergartens logo, the bordered field table, the "Applications only accepted by" band with qualifications alongside, the Role & Responsibilities sections, and a footer review table (Reviewed By / Approved By / Last Updated By). The filename follows the existing convention: `PD <Job Title> <LOCATION> <Month Year>.pdf`. Because this app is local-only and Windows-only, the PDF fonts are read straight from the OS Arial install (`C:\Windows\Fonts`) rather than bundling font files into the repo.
+**Download PDF** (`GET /api/jd/:id/pdf`) renders the JD with `pdfmake`, matching the layout of the existing PD PDFs: the Inspired Kindergartens logo, the bordered field table, the "Applications only accepted by" band with qualifications alongside, the Role & Responsibilities sections, and a footer review table (Reviewed By / Approved By / Last Updated By). The filename follows the existing convention, hyphen-separated and ending in a timestamp so each regeneration is distinct: `PD-<Job-Title>-<LOCATION>-<Month>-<Day>-<Year>-<YYYYMMDD-HHMMSS>.pdf` (e.g. `PD-Teacher-GWEN-ROGERS-KINDERGARTEN-August-27-2026-20260827-235731.pdf`). The location keeps its stored upper-case form here, because this is the published asset filename the blurb boilerplate links to - only on-screen and in-document text is title-cased. Because this app is local-only and Windows-only, the PDF fonts are read straight from the OS Arial install (`C:\Windows\Fonts`) rather than bundling font files into the repo.
 
 ### Settings
 
