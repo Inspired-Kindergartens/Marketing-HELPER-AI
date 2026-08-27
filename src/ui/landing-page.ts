@@ -120,6 +120,34 @@ function renderFeedItem(item: LandingIntelligenceItem) {
   `;
 }
 
+function renderSearchTextControls(searchTexts: string[]) {
+  const items = searchTexts.length
+    ? searchTexts
+        .map(
+          (text) => `
+            <li class="landing-feed-search__item">
+              <span>${escapeHtml(text)}</span>
+              <button type="button" data-remove-landing-search-text="${escapeHtml(text)}" aria-label="Remove ${escapeHtml(text)}">
+                <i class="bi bi-x-lg" aria-hidden="true"></i>
+              </button>
+            </li>
+          `,
+        )
+        .join("")
+    : `<li class="landing-feed-search__empty">No extra search text saved</li>`;
+
+  return `
+    <div class="landing-feed-search" data-landing-search-panel hidden>
+      <form class="landing-feed-search__form" data-landing-search-form>
+        <input type="text" name="text" maxlength="180" autocomplete="off" placeholder="Add search text" aria-label="Search text" required />
+        <button type="submit" aria-label="Add search text"><i class="bi bi-plus-lg" aria-hidden="true"></i></button>
+      </form>
+      <ul class="landing-feed-search__list" data-landing-search-list>${items}</ul>
+      <p class="landing-feed-search__status" data-landing-search-status aria-live="polite"></p>
+    </div>
+  `;
+}
+
 export function renderLandingIntelligenceFeed(feed: LandingIntelligenceFeed | undefined) {
   const fallback: LandingIntelligenceItem = {
     id: "feed-loading",
@@ -138,6 +166,7 @@ export function renderLandingIntelligenceFeed(feed: LandingIntelligenceFeed | un
       : feed?.status === "error"
         ? "Source issue"
         : "Live RSS";
+  const searchTexts = feed?.searchTexts ?? [];
 
   return `
     <section class="landing-feed" aria-label="Local intelligence feed" data-landing-feed>
@@ -145,7 +174,18 @@ export function renderLandingIntelligenceFeed(feed: LandingIntelligenceFeed | un
         <div>
           <p class="landing-feed__meta">Updated ${escapeHtml(formatFeedTime(feed?.generatedAt ?? null))} · ${escapeHtml(statusLabel)}</p>
         </div>
+        <div class="landing-feed__actions">
+          <button type="button" class="landing-feed__copy" data-toggle-landing-search aria-expanded="false" aria-label="Open RSS search text">
+            <i class="bi bi-search" aria-hidden="true"></i>
+            <span>Search text</span>
+          </button>
+          <button type="button" class="landing-feed__copy" data-copy-landing-feed aria-label="Copy RSS feed to clipboard">
+            <i class="bi bi-clipboard" aria-hidden="true"></i>
+            <span>Copy to clipboard</span>
+          </button>
+        </div>
       </header>
+      ${renderSearchTextControls(searchTexts)}
       ${feed?.error ? `<p class="landing-feed__error">${escapeHtml(feed.error)}</p>` : ""}
       <div class="landing-feed__viewport" tabindex="0" aria-label="Scrolling local intelligence stories">
         <div class="landing-feed__list landing-feed__list--scroll">
@@ -174,6 +214,7 @@ export function renderLandingPage(options: LandingPageOptions = {}) {
   const secondaryTiles = [
     { label: "Read Me", href: "/readme", external: false },
     { label: "Upload Contacts", href: "/contacts/upload", external: false },
+    { label: "Open Upscalar", href: "upscalar://open", external: false },
     { label: "SharePoint", href: "https://ikindergartens.sharepoint.com/", external: true },
     { label: "Website", href: "https://inspiredkindergartens.nz/admin/", external: true },
   ];
@@ -454,27 +495,179 @@ export function renderLandingPage(options: LandingPageOptions = {}) {
             link.classList.toggle("landing-feed-item--opened", opened.indexOf(href) !== -1);
           });
         }
-        feed.addEventListener("click", function (event) {
-          var link = event.target.closest("[data-feed-href]");
+        function setCopyButtonState(button, text, disabled) {
+          var label = button.querySelector("span");
+          if (label) label.textContent = text;
+          button.disabled = Boolean(disabled);
+        }
+        function writePlainTextFallback(text) {
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            return navigator.clipboard.writeText(text);
+          }
+          var textarea = document.createElement("textarea");
+          textarea.value = text;
+          textarea.setAttribute("readonly", "");
+          textarea.style.position = "fixed";
+          textarea.style.top = "-1000px";
+          document.body.appendChild(textarea);
+          textarea.select();
+          var copied = document.execCommand("copy");
+          textarea.remove();
+          return copied ? Promise.resolve() : Promise.reject(new Error("Clipboard unavailable"));
+        }
+        function copyHtmlFallback(html) {
+          var container = document.createElement("div");
+          container.contentEditable = "true";
+          container.style.position = "fixed";
+          container.style.top = "-1000px";
+          container.innerHTML = html;
+          document.body.appendChild(container);
+          var range = document.createRange();
+          range.selectNodeContents(container);
+          var selection = window.getSelection();
+          if (selection) {
+            selection.removeAllRanges();
+            selection.addRange(range);
+          }
+          var copied = document.execCommand("copy");
+          if (selection) selection.removeAllRanges();
+          container.remove();
+          return copied ? Promise.resolve() : Promise.reject(new Error("Clipboard unavailable"));
+        }
+        function buildFeedClipboardPayload(root) {
+          var seen = {};
+          var list = document.createElement("ul");
+          var plain = [];
+          root.querySelectorAll("[data-feed-href]").forEach(function (link) {
+            var href = link.getAttribute("data-feed-href");
+            if (!href || seen[href]) return;
+            seen[href] = true;
+            var titleNode = link.querySelector(".landing-feed-item__title");
+            var metaNode = link.querySelector(".landing-feed-item__meta");
+            var title = titleNode ? titleNode.textContent.trim() : link.textContent.trim();
+            var meta = metaNode ? metaNode.textContent.trim() : "";
+            var item = document.createElement("li");
+            var anchor = document.createElement("a");
+            anchor.href = href;
+            anchor.textContent = title;
+            item.appendChild(anchor);
+            if (meta) {
+              item.appendChild(document.createTextNode(" - " + meta));
+            }
+            list.appendChild(item);
+            plain.push(title + (meta ? " - " + meta : "") + "\\n" + href);
+          });
+          return { html: list.outerHTML, text: plain.join("\\n\\n") };
+        }
+        function copyLandingFeed(button, root) {
+          var payload = buildFeedClipboardPayload(root);
+          if (!payload.text) return;
+          setCopyButtonState(button, "Copying...", true);
+          var write = navigator.clipboard && navigator.clipboard.write && window.ClipboardItem
+            ? navigator.clipboard.write([
+                new ClipboardItem({
+                  "text/html": new Blob([payload.html], { type: "text/html" }),
+                  "text/plain": new Blob([payload.text], { type: "text/plain" }),
+                }),
+              ])
+            : copyHtmlFallback(payload.html).catch(function () { return writePlainTextFallback(payload.text); });
+          write
+            .then(function () {
+              setCopyButtonState(button, "Copied", true);
+              setTimeout(function () { setCopyButtonState(button, "Copy to clipboard", false); }, 1800);
+            })
+            .catch(function () {
+              setCopyButtonState(button, "Copy failed", false);
+            });
+        }
+        function replaceLandingFeedHtml(html) {
+          if (!html) return false;
+          var wrapper = document.createElement("div");
+          wrapper.innerHTML = html;
+          var next = wrapper.querySelector("[data-landing-feed]");
+          var current = document.querySelector("[data-landing-feed]");
+          if (next && current) {
+            current.replaceWith(next);
+            feed = next;
+            applyOpenedState(feed);
+            return true;
+          }
+          return false;
+        }
+        function setSearchStatus(root, text) {
+          var status = root.querySelector("[data-landing-search-status]");
+          if (status) status.textContent = text || "";
+        }
+        function submitSearchText(root, text, remove) {
+          setSearchStatus(root, remove ? "Removing..." : "Refreshing RSS...");
+          return fetch(remove ? "/api/landing-intelligence/search-texts/remove" : "/api/landing-intelligence/search-texts", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text: text }),
+          })
+            .then(function (res) { return res.json(); })
+            .then(function (payload) {
+              if (!payload.ok) throw new Error(payload.error || "Search text update failed");
+              replaceLandingFeedHtml(payload.html);
+            })
+            .catch(function () {
+              setSearchStatus(root, "Update failed");
+            });
+        }
+        document.addEventListener("click", function (event) {
+          var target = event.target;
+          if (!(target instanceof Element)) return;
+          var toggleButton = target.closest("[data-toggle-landing-search]");
+          if (toggleButton instanceof HTMLButtonElement) {
+            var toggleRoot = toggleButton.closest("[data-landing-feed]");
+            var panel = toggleRoot ? toggleRoot.querySelector("[data-landing-search-panel]") : null;
+            if (panel instanceof HTMLElement) {
+              var isHidden = panel.hasAttribute("hidden");
+              panel.toggleAttribute("hidden", !isHidden);
+              toggleButton.setAttribute("aria-expanded", String(isHidden));
+              if (isHidden) {
+                var input = panel.querySelector("input[name='text']");
+                if (input instanceof HTMLInputElement) input.focus();
+              }
+            }
+            return;
+          }
+          var copyButton = target.closest("[data-copy-landing-feed]");
+          if (copyButton instanceof HTMLButtonElement) {
+            var copyRoot = copyButton.closest("[data-landing-feed]");
+            if (copyRoot) copyLandingFeed(copyButton, copyRoot);
+            return;
+          }
+          var removeButton = target.closest("[data-remove-landing-search-text]");
+          if (removeButton instanceof HTMLButtonElement) {
+            var removeRoot = removeButton.closest("[data-landing-feed]");
+            var text = removeButton.getAttribute("data-remove-landing-search-text") || "";
+            if (removeRoot && text) submitSearchText(removeRoot, text, true);
+            return;
+          }
+          var link = target.closest("[data-feed-href]");
           if (!link) return;
           markOpened(link.getAttribute("data-feed-href"));
           link.classList.add("landing-feed-item--opened");
+        });
+        document.addEventListener("submit", function (event) {
+          var target = event.target;
+          if (!(target instanceof HTMLFormElement) || !target.matches("[data-landing-search-form]")) return;
+          event.preventDefault();
+          var root = target.closest("[data-landing-feed]");
+          var input = target.querySelector("input[name='text']");
+          if (!root || !(input instanceof HTMLInputElement)) return;
+          var text = input.value.trim();
+          if (!text) return;
+          input.value = "";
+          submitSearchText(root, text, false);
         });
         applyOpenedState(feed);
         function refreshFeed() {
           fetch("/api/landing-intelligence", { cache: "no-store" })
             .then(function (res) { return res.text(); })
             .then(function (html) {
-              if (!html) return;
-              var wrapper = document.createElement("div");
-              wrapper.innerHTML = html;
-              var next = wrapper.querySelector("[data-landing-feed]");
-              var current = document.querySelector("[data-landing-feed]");
-              if (next && current) {
-                current.replaceWith(next);
-                feed = next;
-                applyOpenedState(feed);
-              }
+              replaceLandingFeedHtml(html);
             })
             .catch(function () {});
         }

@@ -108,7 +108,6 @@ export function renderJdSettingsPanel(options: JdSettingsPanelOptions): string {
     : `<div class="jd-settings__agreement-status jd-settings__agreement-status--warning"><span>No KTCA agreement imported yet.</span></div>`;
 
   return `
-    <a class="jd-back-link" href="/jd?panel=jd-list"><i class="bi bi-arrow-left ui-icon" aria-hidden="true"></i><span>Back to Job Descriptions</span></a>
     <div class="jd-settings">
       <section class="jd-settings__section">
         <h3>Kindergarten profiles</h3>

@@ -1,4 +1,5 @@
 import type { JobDescriptionView, JdTitleProfileView, JdCentreProfileView } from "../../storage/jd-store.js";
+import { formatNzDateInput, formatNzDateTimeInput } from "./jd-date.js";
 
 function escapeHtml(value: string) {
   return value
@@ -7,21 +8,6 @@ function escapeHtml(value: string) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
-}
-
-function toDateInputValue(iso: string | null): string {
-  if (!iso) return "";
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return "";
-  return date.toISOString().slice(0, 10);
-}
-
-function toDateTimeInputValue(iso: string | null): string {
-  if (!iso) return "";
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return "";
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
 export type JdEditorPanelOptions = {
@@ -89,8 +75,6 @@ export function renderJdEditorPanel(options: JdEditorPanelOptions): string {
   const isPartTime = jd.positionType === "Part-time";
 
   return `
-    <a class="jd-back-link" href="/jd?panel=jd-list"><i class="bi bi-arrow-left ui-icon" aria-hidden="true"></i><span>Back to Job Descriptions</span></a>
-    <a class="jd-back-link" href="/jd?panel=jd-blurb&jd=${jd.id}"><i class="bi bi-file-earmark-richtext ui-icon" aria-hidden="true"></i><span>Website blurb for this JD</span></a>
     <form class="jd-editor" data-jd-edit data-jd-id="${jd.id}">
       <div class="jd-editor__field-grid">
         <label>
@@ -119,9 +103,9 @@ export function renderJdEditorPanel(options: JdEditorPanelOptions): string {
         <label>
           <span>Date advertised</span>
           <span class="jd-editor__date-combo">
-            <input type="text" name="dateAdvertised" value="${toDateInputValue(jd.dateAdvertised)}" placeholder="YYYY-MM-DD" inputmode="numeric" data-jd-date-text />
+            <input type="text" name="dateAdvertised" value="${formatNzDateInput(jd.dateAdvertised)}" placeholder="YYYY-MM-DD" inputmode="numeric" data-jd-date-text />
             <button type="button" class="jd-editor__date-button" data-jd-open-date-picker title="Choose date" aria-label="Choose date advertised"><i class="bi bi-calendar3 ui-icon" aria-hidden="true"></i></button>
-            <input type="date" class="jd-editor__date-picker" value="${toDateInputValue(jd.dateAdvertised)}" data-jd-date-picker tabindex="-1" aria-hidden="true" />
+            <input type="date" class="jd-editor__date-picker" value="${formatNzDateInput(jd.dateAdvertised)}" data-jd-date-picker tabindex="-1" aria-hidden="true" />
           </span>
         </label>
         <label>
@@ -131,9 +115,9 @@ export function renderJdEditorPanel(options: JdEditorPanelOptions): string {
         <label>
           <span>Closing Date</span>
           <span class="jd-editor__date-combo">
-            <input type="text" name="closingAt" value="${toDateTimeInputValue(jd.closingAt)}" placeholder="YYYY-MM-DDTHH:mm" inputmode="numeric" data-jd-date-text />
+            <input type="text" name="closingAt" value="${formatNzDateTimeInput(jd.closingAt)}" placeholder="YYYY-MM-DDTHH:mm" inputmode="numeric" data-jd-date-text />
             <button type="button" class="jd-editor__date-button" data-jd-open-date-picker title="Choose closing date and time" aria-label="Choose closing date and time"><i class="bi bi-calendar3 ui-icon" aria-hidden="true"></i></button>
-            <input type="datetime-local" class="jd-editor__date-picker" value="${toDateTimeInputValue(jd.closingAt)}" data-jd-date-picker tabindex="-1" aria-hidden="true" />
+            <input type="datetime-local" class="jd-editor__date-picker" value="${formatNzDateTimeInput(jd.closingAt)}" data-jd-date-picker tabindex="-1" aria-hidden="true" />
           </span>
         </label>
         <label>

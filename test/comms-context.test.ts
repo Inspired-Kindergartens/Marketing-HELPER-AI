@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildBuiltinCommsAnswer, buildCommsAiDashboardContext, buildCommsAiChatMessages } from "../src/ai/comms-context.js";
+import {
+  buildBuiltinCommsAnswer,
+  buildCommsAiDashboardContext,
+  buildCommsAiChatMessages,
+  buildLocalCommunicationsGrounding,
+  isLocalCommunicationsPrompt,
+} from "../src/ai/comms-context.js";
 import type { FormstackDashboardData } from "../src/storage/formstack-store.js";
 import type { MailchimpDashboardData } from "../src/storage/mailchimp-store.js";
 
@@ -114,4 +120,64 @@ test("communications built-in answer summarizes Formstack imports", () => {
   });
 
   assert.match(buildBuiltinCommsAnswer(context, "How many form submissions?"), /18 stored submissions/);
+});
+
+test("communications AI grounding attaches local Postmark database evidence", () => {
+  const postmark = {
+    delivered: 1,
+    opened: 1,
+    clicked: 0,
+    bounced: 0,
+    latestReceivedAt: "2026-08-04T03:00:00.000Z",
+    recentMessages: [
+      {
+        messageId: "msg-1",
+        recipient: "gwenrogers@example.com",
+        tag: "Gwen Rogers",
+        centreKey: 117,
+        centreName: "Gwen Rogers Kindergarten",
+        category: "centre" as const,
+        latestOccurredAt: "2026-08-04T02:50:00.000Z",
+        delivered: true,
+        opened: true,
+        clicked: false,
+        bounced: false,
+      },
+    ],
+    relevantMessageCount: 1,
+    centreMessageCount: 1,
+    officeStaffMessageCount: 0,
+    messagePage: 1,
+    messagePageSize: 10,
+    messagePageCount: 1,
+    centreActivity: [
+      {
+        centreKey: 117,
+        centreName: "Gwen Rogers Kindergarten",
+        delivered: 1,
+        opened: 1,
+        bounced: 0,
+        lastSentAt: "2026-08-04T02:50:00.000Z",
+      },
+    ],
+  };
+  const grounding = buildLocalCommunicationsGrounding({
+    prompt: "Are there any recent emails to Gwen Rogers?",
+    postmark,
+    centreName: "Gwen Rogers Kindergarten",
+  });
+  const context = buildCommsAiDashboardContext({
+    mailchimp: SAMPLE_MAILCHIMP_DASHBOARD,
+    formstack: SAMPLE_FORMSTACK_DASHBOARD,
+    postmark,
+  });
+  const messages = buildCommsAiChatMessages(context, "Are there any recent emails to Gwen Rogers?", [], grounding);
+
+  assert.equal(isLocalCommunicationsPrompt("Are there any recent emails to Gwen Rogers?"), true);
+  assert.match(grounding, /already queried stored Postmark webhook\/export records/);
+  assert.match(grounding, /Do not say you cannot access email systems/);
+  assert.match(grounding, /Gwen Rogers Kindergarten/);
+  assert.match(grounding, /gwenrogers@example\.com/);
+  assert.match(messages[2]?.content ?? "", /Local communications database grounding/);
+  assert.equal(messages.at(-1)?.content, "Are there any recent emails to Gwen Rogers?");
 });

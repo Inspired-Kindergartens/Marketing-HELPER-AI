@@ -2,6 +2,8 @@ import PdfPrinter from "pdfmake";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { JobDescriptionView } from "../../storage/jd-store.js";
+import { formatNzClosingDate, formatNzDisplayDate, formatNzDateTimeInput, NZ_TIME_ZONE } from "./jd-date.js";
+import { formatJdLocationDisplay } from "./jd-email.js";
 
 // Matches the current PD template (see PLAN.md §6): logo top-right, bordered
 // field table, grey "Applications only accepted by" band with qualifications
@@ -54,27 +56,6 @@ async function getLogoDataUri(): Promise<string | null> {
   }
 }
 
-function formatDate(iso: string | null): string {
-  if (!iso) return "";
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return "";
-  return date.toLocaleDateString("en-NZ", { day: "2-digit", month: "2-digit", year: "numeric" });
-}
-
-function formatClosingDate(iso: string | null): string {
-  if (!iso) return "";
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return "";
-  const datePart = formatDate(iso);
-  const hour = date.getHours();
-  const minute = date.getMinutes();
-  const timePart =
-    minute === 0
-      ? `${hour % 12 === 0 ? 12 : hour % 12}${hour >= 12 ? "pm" : "am"}`
-      : `${hour % 12 === 0 ? 12 : hour % 12}:${String(minute).padStart(2, "0")}${hour >= 12 ? "pm" : "am"}`;
-  return `${datePart} at ${timePart}`;
-}
-
 function titleText(label: string): string {
   const cleaned = label.replace(/[:;]\s*$/g, "").replace(/\s+/g, " ").trim();
   if (!cleaned) return cleaned;
@@ -102,14 +83,14 @@ function buildStandardFieldTable(jd: JobDescriptionView): PdfContent {
       widths: ["25%", "25%", "25%", "25%"],
       body: [
         [fieldCell("Job Title"), jd.jobTitle, fieldCell("Job Category"), jd.jobCategory],
-        [fieldCell("Location"), jd.locationDisplay, fieldCell("Collective Agreement"), jd.agreementText],
+        [fieldCell("Location"), formatJdLocationDisplay(jd.locationDisplay), fieldCell("Collective Agreement"), jd.agreementText],
         [
           fieldCell("Position Type"),
           jd.fte ? `${jd.positionType} (${jd.fte} FTE)` : jd.positionType,
           fieldCell("Date Advertised"),
-          formatDate(jd.dateAdvertised),
+          formatNzDisplayDate(jd.dateAdvertised),
         ],
-        [fieldCell("Level/Salary Range"), jd.salaryRangeText, fieldCell("Closing Date"), formatClosingDate(jd.closingAt)],
+        [fieldCell("Level/Salary Range"), jd.salaryRangeText, fieldCell("Closing Date"), formatNzClosingDate(jd.closingAt)],
         [fieldCell("Senior Teacher:"), jd.seniorTeacherName, fieldCell("Start Date"), jd.startDateText],
       ],
     },
@@ -123,7 +104,7 @@ function buildAdministratorFieldTable(jd: JobDescriptionView): PdfContent {
       widths: ["25%", "25%", "25%", "25%"],
       body: [
         [fieldCell("Job Title"), jd.jobTitle, fieldCell("Job Category"), jd.jobCategory],
-        [fieldCell("Location"), jd.locationDisplay, fieldCell("Position Hours"), jd.extras?.positionHours ?? ""],
+        [fieldCell("Location"), formatJdLocationDisplay(jd.locationDisplay), fieldCell("Position Hours"), jd.extras?.positionHours ?? ""],
       ],
     },
     layout: "jdFieldTable",
@@ -207,7 +188,7 @@ function buildRoleAndResponsibilities(jd: JobDescriptionView): PdfContent[] {
 
 function buildFooterTable(jd: JobDescriptionView): PdfContent {
   const now = new Date();
-  const lastUpdatedDate = `${formatDate(now.toISOString())} ${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+  const lastUpdatedDate = formatNzDateTimeInput(now).replace("T", " ");
   return {
     table: {
       widths: ["25%", "25%", "25%", "25%"],
@@ -222,7 +203,6 @@ function buildFooterTable(jd: JobDescriptionView): PdfContent {
   };
 }
 
-const NZ_TIME_ZONE = "Pacific/Auckland";
 const JD_PDF_ASSET_BASE_URL = "https://inspiredkindergartens.nz/assets/Job-Descriptions";
 
 function nzAdvertisedDateParts(date: Date): Record<string, string> {

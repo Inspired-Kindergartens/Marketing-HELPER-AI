@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
+import { defaultClosingDate } from "../src/storage/jd-store.js";
 import { formatSalaryRange, type PayScaleRow } from "../src/storage/jd-pay-scale.js";
 import { sanitizeJdBlurbHtml } from "../src/storage/jd-sanitize-html.js";
+import { formatNzDateTimeInput } from "../src/ui/jd/jd-date.js";
 import { jdPdfAssetUrl, jdPdfFilename } from "../src/ui/jd/jd-pdf.js";
 import type { JobDescriptionView } from "../src/storage/jd-store.js";
 
@@ -61,6 +63,12 @@ test("formatSalaryRange pro-rating does not apply at full FTE", () => {
 
 test("formatSalaryRange returns null when no rate is known before the given date", () => {
   assert.equal(formatSalaryRange(K1_ROWS, "K1", new Date("2020-01-01")), null);
+});
+
+test("defaultClosingDate returns the Friday at 4pm at least four weeks after advertising", () => {
+  const closing = defaultClosingDate(new Date("2026-08-25T21:30:00.000Z"));
+
+  assert.equal(formatNzDateTimeInput(closing), "2026-09-25T16:00");
 });
 
 test("sanitizeJdBlurbHtml keeps allowed tags and strips disallowed ones", () => {
@@ -142,7 +150,9 @@ test("createJobDescription composes defaults from the title profile, centre prof
 
   assert.match(store, /titleProfile\.jobTitle/);
   assert.match(store, /centreProfile\.locationDisplay/);
+  assert.match(store, /seniorTeacherName: centreProfile\.seniorTeacherName/);
   assert.match(store, /formatSalaryRange\(titleProfile\.payScaleKey, dateAdvertised, fte\)/);
+  assert.match(store, /closingAt: parseDate\(input\.closingAt\) \?\? defaultClosingDate\(dateAdvertised\)/);
 });
 
 test("saveBlurb sanitises the incoming HTML and appends a JdBlurb history row without overwriting prior versions", () => {

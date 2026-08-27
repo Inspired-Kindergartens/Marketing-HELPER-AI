@@ -8,11 +8,26 @@ import multipart from "@fastify/multipart";
 import { z } from "zod";
 
 import { buildAiChatMessages, buildDeterministicChatAnswer, type AiChatHistoryMessageInput } from "./ai/chat.js";
+import { buildHistoryChatMemory, findMentionedCentres } from "./ai/chat-memory.js";
 import { runLocalChat, streamLocalChat, AiClientError } from "./ai/client.js";
-import { buildBuiltinCommsAnswer, buildCommsAiChatMessages, buildCommsAiDashboardContext } from "./ai/comms-context.js";
+import {
+  buildBuiltinCommsAnswer,
+  buildCommsAiChatMessages,
+  buildCommsAiDashboardContext,
+  buildLocalCommunicationsGrounding,
+  isLocalCommunicationsPrompt,
+} from "./ai/comms-context.js";
 import { buildBuiltinTasksAnswer, buildTasksAiChatMessages, buildTasksAiDashboardContext } from "./ai/tasks-context.js";
 import { buildAiDashboardContext, buildDashboardSystemPrompt } from "./ai/context.js";
+import {
+  buildLiveInfocareGrounding,
+  formatLiveInfocareAnswer,
+  isLiveInfocarePrompt,
+  planLiveInfocareRequest,
+  runLiveInfocareRequest,
+} from "./ai/infocare-live.js";
 import { readAiConfig } from "./ai/config.js";
+import { buildChatDocumentPrompt, extractChatDocument } from "./ai/document-reader.js";
 import {
   clearSnapshotRefreshOutcome,
   getSnapshotRefreshState,
@@ -40,12 +55,14 @@ import { ensureDailyMailchimpSnapshot, refreshMailchimpSnapshot } from "./mailch
 import { getMetaConfig, readMetaConfigStatus } from "./meta/config.js";
 import { refreshMetaAds } from "./meta/refresh.js";
 import {
+  readCentreReferences,
   readCentreSnapshotHistory,
   readLatestAnalyticsSnapshotSet,
 } from "./storage/analytics-store.js";
 import { readCentreContactList, readCentreContactListStats } from "./storage/centre-contact-store.js";
 import {
   addGeneralChatMessage,
+  buildGeneralChatMemory,
   buildGeneralChatMessages,
   createGeneralChatConversation,
   createGeneralChatGroup,
@@ -83,6 +100,7 @@ import {
   readLatestMetaRecommendationNotesForNotification,
   restoreMetaRecommendationNote,
   softDeleteMetaRecommendationNote,
+  updateMetaRecommendationNote,
 } from "./storage/meta-recommendation-notes-store.js";
 import {
   readMetaEmailContent,
@@ -101,8 +119,11 @@ import { ingestPostmarkEvent, isPostmarkSourceIp, verifyBasicAuth } from "./post
 import { readCloudflareSyncConfig, syncPostmarkEventsFromCloudflare } from "./postmark/cloudflare-sync.js";
 import { renderLandingIntelligenceFeed, renderLandingPage } from "./ui/landing-page.js";
 import {
+  addLandingIntelligenceSearchText,
   getLandingIntelligenceFeed,
+  readLandingIntelligenceSearchTexts,
   refreshLandingIntelligenceFeed,
+  removeLandingIntelligenceSearchText,
   startLandingIntelligenceFeedLoop,
 } from "./landing-intelligence.js";
 import { renderGeneralChatPage } from "./ui/general-chat-page.js";
@@ -163,6 +184,8 @@ import {
   listBlurbVersions,
   restoreBlurbVersion,
   listBlurbsForCentre,
+  listRecentBlurbsAcrossCentres,
+  listIntroParagraphExamples,
   listKnowledgeDocsForCentre,
   getGenericKnowledgeDoc,
   upsertKnowledgeDoc,
@@ -170,7 +193,7 @@ import {
   type RoleSection,
 } from "./storage/jd-store.js";
 import { renderJdAppShell, resolveJdFocusPanelId } from "./ui/jd-app-shell.js";
-import { buildImmovableBoilerplateHtml, buildJdBlurbChatMessages } from "./ai/jd-context.js";
+import { buildImmovableBoilerplateHtml, buildJdBlurbChatMessages, buildJdIntroChatMessages } from "./ai/jd-context.js";
 import { generateJdPdfBuffer, jdPdfAssetUrl, jdPdfFilename } from "./ui/jd/jd-pdf.js";
 
 loadDotenv({ override: true });
@@ -241,7 +264,7 @@ await app.register(multipart, {
   },
 });
 
-const VALID_PANEL_IDS = new Set(["analytics", "waitlist", "meta-ads", "google-analytics", "chat"]);
+const VALID_PANEL_IDS = new Set(["analytics", "waitlist", "meta-ads", "google-analytics", "notes", "chat"]);
 const META_ADS_AUTO_REFRESH_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const RECOMMENDED_AI_CHAT_MODEL = "qwen3:8b";
 let aiModelUpdateInProgress = false;
@@ -251,6 +274,52 @@ let aiModelUpdateStatus: {
   progress: number | null;
   detail: string | null;
 } = { state: "idle", model: RECOMMENDED_AI_CHAT_MODEL, progress: null, detail: null };
+
+async function readGeneralChatStreamInput(request: { headers: Record<string, string | string[] | undefined>; body?: { prompt?: string }; parts?: () => AsyncIterable<unknown> }) {
+  const contentType = String(request.headers["content-type"] ?? "").toLowerCase();
+
+  if (!contentType.includes("multipart/form-data")) {
+    return { prompt: String(request.body?.prompt ?? "").trim() };
+  }
+
+  let prompt = "";
+  let documentPrompt: string | null = null;
+
+  if (!request.parts) {
+    throw new Error("Document upload support is not available.");
+  }
+
+  for await (const part of request.parts()) {
+    const item = part as {
+      type?: string;
+      fieldname?: string;
+      value?: unknown;
+      filename?: string;
+      mimetype?: string;
+      toBuffer?: () => Promise<Buffer>;
+    };
+
+    if (item.type === "field" && item.fieldname === "prompt") {
+      prompt = String(item.value ?? "").trim();
+      continue;
+    }
+
+    if (item.type === "file" && item.fieldname === "document" && item.filename && item.toBuffer) {
+      const document = await extractChatDocument({
+        filename: item.filename,
+        mimeType: item.mimetype,
+        buffer: await item.toBuffer(),
+      });
+      documentPrompt = buildChatDocumentPrompt(prompt || "Read this document.", document);
+    }
+  }
+
+  return {
+    prompt,
+    modelPrompt: documentPrompt ?? prompt,
+    hasDocument: documentPrompt != null,
+  };
+}
 
 function trackAiModelPullProgress(chunk: unknown) {
   const text = String(chunk);
@@ -852,6 +921,55 @@ function escapeHtml(value: string) {
     .replaceAll("'", "&#39;");
 }
 
+function escapeXml(value: string) {
+  return escapeHtml(value);
+}
+
+function cdata(value: string) {
+  return `<![CDATA[${value.replaceAll("]]>", "]]]]><![CDATA[>")}]]>`;
+}
+
+function buildPostmarkRecentMessagesRss(input: {
+  checkedAt: Date;
+  weekStart: Date;
+  relevantMessageCount: number;
+  latestReceivedAt: string | null;
+}) {
+  const feedUrl = "http://127.0.0.1:3000/rss/postmark-recent-messages";
+  const hasRecentMessages = input.relevantMessageCount > 0;
+  const statusColor = hasRecentMessages ? "#166534" : "#b42318";
+  const daysSinceLatest = input.latestReceivedAt
+    ? Math.max(0, Math.floor((input.checkedAt.getTime() - new Date(input.latestReceivedAt).getTime()) / (24 * 60 * 60 * 1000)))
+    : 7;
+  const alertMessage = `ALERT: No emails have been sent from our website for ${daysSinceLatest} days`;
+  const title = hasRecentMessages ? "Postmark Recent messages current" : alertMessage;
+  const detail = hasRecentMessages
+    ? `${input.relevantMessageCount} relevant Postmark email${input.relevantMessageCount === 1 ? "" : "s"} found in Recent messages in the past week.`
+    : alertMessage;
+  const latest = input.latestReceivedAt
+    ? `Latest stored email activity: ${new Date(input.latestReceivedAt).toLocaleString("en-NZ")}.`
+    : "No stored email activity exists yet.";
+  const description = `<p style="color:${statusColor};font-weight:700;">${escapeHtml(detail)}</p><p>${escapeHtml(latest)}</p>`;
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Marketing Helper AI - Postmark Recent messages</title>
+    <link>${escapeXml(feedUrl)}</link>
+    <description>Webhook email health check for the Webmail Recent messages list.</description>
+    <lastBuildDate>${input.checkedAt.toUTCString()}</lastBuildDate>
+    <item>
+      <title>${escapeXml(title)}</title>
+      <link>${escapeXml(feedUrl)}</link>
+      <guid isPermaLink="false">postmark-recent-messages:${input.weekStart.toISOString().slice(0, 10)}</guid>
+      <pubDate>${input.checkedAt.toUTCString()}</pubDate>
+      <category>${hasRecentMessages ? "ok" : "red"}</category>
+      <description>${cdata(description)}</description>
+    </item>
+  </channel>
+</rss>`;
+}
+
 function renderContactUploadPage(input: {
   status?: string;
   contactCount?: string;
@@ -928,6 +1046,55 @@ app.get("/api/landing-intelligence", async (_request, reply) => {
   void refreshLandingIntelligenceFeed(aiConfig, app.log);
 
   return reply.type("text/html; charset=utf-8").send(renderLandingIntelligenceFeed(cached));
+});
+
+app.get("/api/landing-intelligence/search-texts", async (_request, reply) => {
+  return reply.type("application/json; charset=utf-8").send({
+    ok: true,
+    searchTexts: await readLandingIntelligenceSearchTexts(),
+  });
+});
+
+app.get("/rss/postmark-recent-messages", async (_request, reply) => {
+  const checkedAt = new Date();
+  const weekStart = new Date(checkedAt.getTime() - 7 * 24 * 60 * 60 * 1000);
+  const [recentDashboardData, allDashboardData] = await Promise.all([
+    readPostmarkDashboardData({ fromDate: weekStart }),
+    readPostmarkDashboardData(),
+  ]);
+
+  return reply.type("application/rss+xml; charset=utf-8").send(
+    buildPostmarkRecentMessagesRss({
+      checkedAt,
+      weekStart,
+      relevantMessageCount: recentDashboardData.relevantMessageCount,
+      latestReceivedAt: allDashboardData.recentMessages[0]?.latestOccurredAt ?? null,
+    }),
+  );
+});
+
+app.post<{ Body: { text?: string } }>("/api/landing-intelligence/search-texts", async (request, reply) => {
+  const body = z.object({ text: z.string().trim().min(1).max(180) }).parse(request.body ?? {});
+  const searchTexts = await addLandingIntelligenceSearchText(body.text);
+  const feed = await refreshLandingIntelligenceFeed(aiConfig, app.log, { force: true });
+
+  return reply.type("application/json; charset=utf-8").send({
+    ok: true,
+    searchTexts,
+    html: renderLandingIntelligenceFeed(feed),
+  });
+});
+
+app.post<{ Body: { text?: string } }>("/api/landing-intelligence/search-texts/remove", async (request, reply) => {
+  const body = z.object({ text: z.string().trim().min(1).max(180) }).parse(request.body ?? {});
+  const searchTexts = await removeLandingIntelligenceSearchText(body.text);
+  const feed = await refreshLandingIntelligenceFeed(aiConfig, app.log, { force: true });
+
+  return reply.type("application/json; charset=utf-8").send({
+    ok: true,
+    searchTexts,
+    html: renderLandingIntelligenceFeed(feed),
+  });
 });
 
 app.get("/readme", async (_request, reply) => {
@@ -1118,14 +1285,26 @@ app.post<{ Params: { id: string }; Body: { prompt?: string } }>(
   "/api/general-chat/conversations/:id/stream",
   async (request, reply) => {
     const conversationId = Number.parseInt(request.params.id, 10);
-    const prompt = String(request.body?.prompt ?? "").trim();
+    let streamInput;
+
+    try {
+      streamInput = await readGeneralChatStreamInput(request);
+    } catch (error) {
+      reply.code(400);
+      return {
+        error: error instanceof Error ? error.message : "The attached document could not be read.",
+      };
+    }
+
+    const prompt = streamInput.prompt;
+    const modelPrompt = streamInput.modelPrompt ?? prompt;
 
     if (!Number.isInteger(conversationId) || conversationId <= 0) {
       reply.code(400);
       return { error: "Valid conversation id is required." };
     }
 
-    if (!prompt) {
+    if (!prompt && !streamInput.hasDocument) {
       reply.code(400);
       return { error: "Prompt is required." };
     }
@@ -1135,8 +1314,7 @@ app.post<{ Params: { id: string }; Body: { prompt?: string } }>(
       return { error: "Prompt is too long. Keep it under 6,000 characters." };
     }
 
-    const userMessage = await addGeneralChatMessage(conversationId, "user", prompt);
-    const messages = await buildGeneralChatMessages(conversationId);
+    const userMessage = await addGeneralChatMessage(conversationId, "user", modelPrompt);
 
     reply.raw.writeHead(200, {
       "Content-Type": "text/event-stream; charset=utf-8",
@@ -1152,6 +1330,36 @@ app.post<{ Params: { id: string }; Body: { prompt?: string } }>(
     let answer = "";
     try {
       writeEvent("saved", { role: "user", messageId: userMessage.id, messageCount: userMessage.messageCount });
+
+      const centreReferences = await readCentreReferences();
+      let liveGrounding: string | null = null;
+
+      if (!streamInput.hasDocument && isLiveInfocarePrompt(prompt)) {
+        const memory = await buildGeneralChatMemory(conversationId, centreReferences);
+        const livePlan = planLiveInfocareRequest(prompt, centreReferences, memory.selectedCentreKey);
+
+        if (!livePlan.intent) {
+          writeEvent("error", { error: livePlan.error ?? "I could not determine which live Infocare data to read." });
+          return;
+        }
+
+        const liveResult = await runLiveInfocareRequest(livePlan.intent);
+        answer = formatLiveInfocareAnswer(liveResult, prompt);
+        for (const chunk of answer.split(/(\s+)/).filter(Boolean)) {
+          writeEvent("chunk", { chunk });
+        }
+
+        const assistantMessage = await addGeneralChatMessage(conversationId, "assistant", answer);
+        writeEvent("saved", {
+          role: "assistant",
+          messageId: assistantMessage.id,
+          messageCount: assistantMessage.messageCount,
+        });
+        writeEvent("done", { messageCount: assistantMessage.messageCount });
+        return;
+      }
+
+      const messages = await buildGeneralChatMessages(conversationId, centreReferences, liveGrounding);
 
       for await (const chunk of streamLocalChat(aiConfig, messages)) {
         answer += chunk;
@@ -1610,10 +1818,18 @@ app.post<{ Body: { jobTitleProfileId?: string; centreKey?: string } }>("/api/jd"
     // by the time the user opens the blurb panel. Fire-and-forget: a failure
     // here (AI unavailable, timeout) just leaves the blurb empty for the
     // user to generate manually — it must not fail JD creation.
+    let introGenerated = false;
+
+    try {
+      introGenerated = (await generateJdIntroParagraphIfEmpty(id)) != null;
+    } catch (error) {
+      app.log.warn({ error, jobDescriptionId: id }, "Automatic JD intro paragraph generation failed");
+    }
+
     void generateJdBlurb(id).catch((error) => {
       app.log.warn({ error, jobDescriptionId: id }, "Automatic JD blurb generation failed");
     });
-    return reply.code(201).send({ ok: true, id });
+    return reply.code(201).send({ ok: true, id, introGenerated });
   } catch (error) {
     reply.code(400);
     return { error: error instanceof Error ? error.message : "Could not create job description." };
@@ -1726,6 +1942,72 @@ app.post<{ Params: { id: string }; Body: { html?: string } }>("/api/jd/:id/blurb
   }
 });
 
+function cleanGeneratedIntroParagraph(value: string): string {
+  return value
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/^["'\s]+|["'\s]+$/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+async function generateJdIntroParagraphIfEmpty(id: number): Promise<string | null> {
+  const jd = await getJobDescription(id);
+  if (!jd || jd.centreKey == null) {
+    throw new Error("Job description not found.");
+  }
+
+  if (jd.introParagraph.trim()) {
+    return jd.introParagraph;
+  }
+
+  const [centreProfiles, knowledgeDocs, latestSnapshotSet, centreExamples, fallbackExamples] = await Promise.all([
+    listCentreProfiles(),
+    listKnowledgeDocsForCentre(jd.centreKey),
+    readLatestAnalyticsSnapshotSet(),
+    listIntroParagraphExamples({ centreKey: jd.centreKey, limit: 3 }),
+    listIntroParagraphExamples({ excludeCentreKey: jd.centreKey, limit: 6 }),
+  ]);
+  const centreProfile = centreProfiles.find((c) => c.centreKey === jd.centreKey) ?? null;
+  const centreName = centreProfile?.centreName ?? jd.locationDisplay;
+  const currentServiceDoc = knowledgeDocs.find((doc) => doc.kind === "service" && doc.label === "current") ?? null;
+  const oldServiceDoc = knowledgeDocs.find((doc) => doc.kind === "service" && doc.label === "old") ?? null;
+  const snapshot = latestSnapshotSet?.snapshots.find((entry) => entry.centreKey === jd.centreKey) ?? null;
+  const messages = buildJdIntroChatMessages({
+    jobDescription: jd,
+    centreName,
+    currentServiceDoc,
+    oldServiceDoc,
+    infocareFacts: snapshot
+      ? {
+          snapshotDate: snapshot.date,
+          enrolledCount: snapshot.enrolledCount,
+          enrolledFteCount: snapshot.enrolledFteCount,
+          licensedCapacity: snapshot.licensedCapacity,
+          licensedUnder2Capacity: snapshot.licensedUnder2Capacity ?? null,
+          licensedOver2Capacity: snapshot.licensedOver2Capacity ?? null,
+        }
+      : null,
+    centreExamples,
+    fallbackExamples,
+  });
+  const JD_INTRO_AI_MODEL = "llama3.1:8b";
+  const JD_INTRO_AI_TIMEOUT_MS = 120000;
+  const introParagraph = cleanGeneratedIntroParagraph(
+    await runLocalChat(
+      { ...aiConfig, AI_CHAT_MODEL: JD_INTRO_AI_MODEL, AI_TIMEOUT_MS: JD_INTRO_AI_TIMEOUT_MS },
+      messages,
+    ),
+  );
+
+  if (!introParagraph) {
+    return null;
+  }
+
+  await updateJobDescription(id, { introParagraph });
+  return introParagraph;
+}
+
 // Shared by the explicit "Generate with AI" button and the fire-and-forget
 // auto-generation kicked off when a JD is first created.
 async function generateJdBlurb(id: number): Promise<string> {
@@ -1740,6 +2022,8 @@ async function generateJdBlurb(id: number): Promise<string> {
     getGenericKnowledgeDoc(),
     listBlurbsForCentre(jd.centreKey, 3),
   ]);
+  const fallbackBlurbs =
+    priorBlurbs.length === 0 ? await listRecentBlurbsAcrossCentres(6, jd.centreKey) : [];
   const centreProfile = centreProfiles.find((c) => c.centreKey === jd.centreKey) ?? null;
   const centreName = centreProfile?.centreName ?? jd.locationDisplay;
   const currentServiceDoc = knowledgeDocs.find((doc) => doc.kind === "service" && doc.label === "current") ?? null;
@@ -1752,6 +2036,7 @@ async function generateJdBlurb(id: number): Promise<string> {
     currentServiceDoc,
     oldServiceDoc,
     priorBlurbs,
+    fallbackBlurbs,
     isEnviroschool: centreProfile?.isEnviroschool ?? false,
   });
   // JD blurb generation deliberately uses llama3.1:8b instead of whatever
@@ -2561,6 +2846,27 @@ app.post<{ Body: { notificationId?: string; text?: string; notification?: Partia
   return reply.code(201).send({ note });
 });
 
+app.post<{ Params: { id: string }; Body: { text?: string } }>("/api/meta-recommendation-notes/:id", async (request, reply) => {
+  const id = Number.parseInt(request.params.id, 10);
+  const text = String(request.body?.text ?? "").trim();
+
+  if (!Number.isInteger(id) || id <= 0) {
+    reply.code(400);
+
+    return { error: "Valid note id is required." };
+  }
+
+  if (!text) {
+    reply.code(400);
+
+    return { error: "text is required." };
+  }
+
+  const note = await updateMetaRecommendationNote(id, text);
+
+  return { note };
+});
+
 app.get<{ Params: { centreKey: string } }>("/api/meta-email-content/:centreKey", async (request, reply) => {
   const centreKey = Number.parseInt(request.params.centreKey, 10);
 
@@ -2636,6 +2942,28 @@ app.post<{ Params: { id: string } }>("/api/meta-recommendation-notes/:id/restore
   return { note };
 });
 
+async function buildLocalCommsGrounding(prompt: string) {
+  if (!isLocalCommunicationsPrompt(prompt)) {
+    return null;
+  }
+
+  const centres = await readCentreReferences();
+  const centreMatches = findMentionedCentres(prompt, centres);
+  const centre = centreMatches.length === 1 ? centreMatches[0] : null;
+  const postmark = await readPostmarkDashboardData({
+    centreKeys: centre ? [centre.centreKey] : undefined,
+  });
+
+  return {
+    postmark,
+    grounding: buildLocalCommunicationsGrounding({
+      prompt,
+      postmark,
+      centreName: centre?.name ?? null,
+    }),
+  };
+}
+
 app.post<{
   Body: {
     prompt?: string;
@@ -2654,8 +2982,10 @@ app.post<{
     return { error: "Prompt is too long. Keep it under 2,000 characters." };
   }
 
+  const localCommsGrounding = await buildLocalCommsGrounding(prompt);
+  const postmarkData = localCommsGrounding?.postmark ?? await readPostmarkDashboardData();
   const context = buildCommsAiDashboardContext({
-    postmark: await readPostmarkDashboardData(),
+    postmark: postmarkData,
     mailchimp: await readMailchimpDashboardData({ serverPrefix: mailchimpConfigStatus.serverPrefix ?? undefined }),
     formstack: await readFormstackDashboardData(),
   });
@@ -2665,7 +2995,10 @@ app.post<{
   }
 
   try {
-    const answer = await runLocalChat(aiConfig, buildCommsAiChatMessages(context, prompt, request.body?.messages));
+    const answer = await runLocalChat(
+      aiConfig,
+      buildCommsAiChatMessages(context, prompt, request.body?.messages, localCommsGrounding?.grounding),
+    );
     return { answer, model: aiConfig.AI_CHAT_MODEL };
   } catch (error) {
     app.log.warn({ error }, "Communications AI model unavailable; using built-in summary fallback");
@@ -2686,8 +3019,10 @@ app.post<{
     return { error: !prompt ? "Prompt is required." : "Prompt is too long. Keep it under 2,000 characters." };
   }
 
+  const localCommsGrounding = await buildLocalCommsGrounding(prompt);
+  const postmarkData = localCommsGrounding?.postmark ?? await readPostmarkDashboardData();
   const context = buildCommsAiDashboardContext({
-    postmark: await readPostmarkDashboardData(),
+    postmark: postmarkData,
     mailchimp: await readMailchimpDashboardData({ serverPrefix: mailchimpConfigStatus.serverPrefix ?? undefined }),
     formstack: await readFormstackDashboardData(),
   });
@@ -2707,7 +3042,10 @@ app.post<{
     if (aiConfig.AI_PROVIDER === "builtin") {
       writeEvent("chunk", { chunk: buildBuiltinCommsAnswer(context, prompt) });
     } else {
-      for await (const chunk of streamLocalChat(aiConfig, buildCommsAiChatMessages(context, prompt, request.body?.messages))) {
+      for await (const chunk of streamLocalChat(
+        aiConfig,
+        buildCommsAiChatMessages(context, prompt, request.body?.messages, localCommsGrounding?.grounding),
+      )) {
         writeEvent("chunk", { chunk });
       }
     }
@@ -2797,6 +3135,35 @@ app.post<{
     return { error: "Prompt is too long. Keep it under 2,000 characters." };
   }
 
+  const centreReferences = await readCentreReferences();
+  const memory = buildHistoryChatMemory(request.body?.messages, centreReferences);
+  const memorySelectedCentreKey = selectedCentreKey ?? memory.selectedCentreKey;
+  let liveGrounding: string | null = null;
+
+  if (isLiveInfocarePrompt(prompt)) {
+    const livePlan = planLiveInfocareRequest(prompt, centreReferences, memorySelectedCentreKey);
+
+    if (!livePlan.intent) {
+      reply.code(400);
+
+      return { error: livePlan.error ?? "I could not determine which live Infocare data to read." };
+    }
+
+    const liveResult = await runLiveInfocareRequest(livePlan.intent);
+    liveGrounding = buildLiveInfocareGrounding(liveResult, prompt);
+    const answer = formatLiveInfocareAnswer(liveResult, prompt);
+
+    return {
+      answer,
+      model: "live Infocare read-only",
+      context: {
+        selectedCentre: livePlan.intent.kind === "centre_list" ? null : livePlan.intent.centre.name,
+        selectedWindowKey,
+        snapshotCreatedAt: null,
+      },
+    };
+  }
+
   const latestSnapshotSet = await readLatestAnalyticsSnapshotSet();
   const latestRunDate = latestSnapshotSet ? new Date(latestSnapshotSet.runDate) : new Date();
   const windowStartDate = resolveWindowStartDate(latestRunDate, selectedWindowKey);
@@ -2806,12 +3173,12 @@ app.post<{
   });
   const googleAnalyticsSnapshot = await readLatestGoogleAnalyticsDailySnapshot(env.GOOGLE_ANALYTICS_PROPERTY_ID);
   const selectedCentreNotes =
-    selectedCentreKey == null
+    memorySelectedCentreKey == null
       ? []
-      : await readLatestMetaRecommendationNotesForCentre(selectedCentreKey, 10);
+      : await readLatestMetaRecommendationNotesForCentre(memorySelectedCentreKey, 10);
   const context = buildAiDashboardContext({
     snapshotSet: latestSnapshotSet,
-    selectedCentreKey,
+    selectedCentreKey: memorySelectedCentreKey,
     selectedWindowKey,
     metaAdsDashboardData,
     googleAnalyticsSnapshot,
@@ -2820,7 +3187,7 @@ app.post<{
 
   const deterministicAnswer = buildDeterministicChatAnswer(context, prompt);
 
-  if (deterministicAnswer && aiConfig.AI_PROVIDER === "builtin") {
+  if (!liveGrounding && deterministicAnswer && aiConfig.AI_PROVIDER === "builtin") {
     return {
       answer: deterministicAnswer,
       model: "built-in campaign timing",
@@ -2835,7 +3202,7 @@ app.post<{
   try {
     const answer = await runLocalChat(
       aiConfig,
-      buildAiChatMessages(buildDashboardSystemPrompt(), context, prompt, request.body?.messages),
+      buildAiChatMessages(buildDashboardSystemPrompt(), context, prompt, request.body?.messages, memory, liveGrounding),
     );
 
     return {
@@ -2848,7 +3215,7 @@ app.post<{
       },
     };
   } catch (error) {
-    if (deterministicAnswer) {
+    if (!liveGrounding && deterministicAnswer) {
       return {
         answer: deterministicAnswer,
         model: "built-in campaign timing fallback",
@@ -2902,6 +3269,53 @@ app.post<{
     return { error: "Prompt is too long. Keep it under 2,000 characters." };
   }
 
+  const centreReferences = await readCentreReferences();
+  const memory = buildHistoryChatMemory(request.body?.messages, centreReferences);
+  const memorySelectedCentreKey = selectedCentreKey ?? memory.selectedCentreKey;
+  let liveGrounding: string | null = null;
+
+  if (isLiveInfocarePrompt(prompt)) {
+    const livePlan = planLiveInfocareRequest(prompt, centreReferences, memorySelectedCentreKey);
+
+    if (!livePlan.intent) {
+      reply.code(400);
+
+      return { error: livePlan.error ?? "I could not determine which live Infocare data to read." };
+    }
+
+    const liveResult = await runLiveInfocareRequest(livePlan.intent);
+    liveGrounding = buildLiveInfocareGrounding(liveResult, prompt);
+    const answer = formatLiveInfocareAnswer(liveResult, prompt);
+    const selectedCentreName = livePlan.intent.kind === "centre_list" ? null : livePlan.intent.centre.name;
+
+    reply.raw.writeHead(200, {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+    });
+
+    const writeEvent = (event: string, data: unknown) => {
+      reply.raw.write(`event: ${event}\n`);
+      reply.raw.write(`data: ${JSON.stringify(data)}\n\n`);
+    };
+
+    writeEvent("meta", {
+      model: "live Infocare read-only",
+      context: {
+        selectedCentre: selectedCentreName,
+        selectedCentreKey: livePlan.intent.kind === "centre_list" ? null : livePlan.intent.centre.centreKey,
+        selectedWindowKey,
+        snapshotCreatedAt: null,
+      },
+    });
+    for (const chunk of answer.split(/(\s+)/).filter(Boolean)) {
+      writeEvent("chunk", { chunk });
+    }
+    writeEvent("done", {});
+    reply.raw.end();
+    return;
+  }
+
   const latestSnapshotSet = await readLatestAnalyticsSnapshotSet();
   const latestRunDate = latestSnapshotSet ? new Date(latestSnapshotSet.runDate) : new Date();
   const windowStartDate = resolveWindowStartDate(latestRunDate, selectedWindowKey);
@@ -2911,18 +3325,25 @@ app.post<{
   });
   const googleAnalyticsSnapshot = await readLatestGoogleAnalyticsDailySnapshot(env.GOOGLE_ANALYTICS_PROPERTY_ID);
   const selectedCentreNotes =
-    selectedCentreKey == null
+    memorySelectedCentreKey == null
       ? []
-      : await readLatestMetaRecommendationNotesForCentre(selectedCentreKey, 10);
+      : await readLatestMetaRecommendationNotesForCentre(memorySelectedCentreKey, 10);
   const context = buildAiDashboardContext({
     snapshotSet: latestSnapshotSet,
-    selectedCentreKey,
+    selectedCentreKey: memorySelectedCentreKey,
     selectedWindowKey,
     metaAdsDashboardData,
     googleAnalyticsSnapshot,
     selectedCentreNotes,
   });
-  const messages = buildAiChatMessages(buildDashboardSystemPrompt(), context, prompt, request.body?.messages);
+  const messages = buildAiChatMessages(
+    buildDashboardSystemPrompt(),
+    context,
+    prompt,
+    request.body?.messages,
+    memory,
+    liveGrounding,
+  );
   const deterministicAnswer = buildDeterministicChatAnswer(context, prompt);
 
   reply.raw.writeHead(200, {
@@ -2953,7 +3374,7 @@ app.post<{
   });
 
   try {
-    if (deterministicAnswer && aiConfig.AI_PROVIDER === "builtin") {
+    if (!liveGrounding && deterministicAnswer && aiConfig.AI_PROVIDER === "builtin") {
       writeAnswerChunks(deterministicAnswer);
       writeEvent("done", {});
       return;
@@ -2965,7 +3386,7 @@ app.post<{
 
     writeEvent("done", {});
   } catch (error) {
-    if (deterministicAnswer) {
+    if (!liveGrounding && deterministicAnswer) {
       writeAnswerChunks(deterministicAnswer);
       writeEvent("done", {});
       return;

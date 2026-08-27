@@ -1,5 +1,7 @@
 import type { AiChatMessage } from "./client.js";
 import type { AiDashboardContext } from "./context.js";
+import type { ChatMemory } from "./chat-memory.js";
+import { buildChatMemoryMessage } from "./chat-memory.js";
 
 export type AiChatHistoryMessageInput = {
   role?: unknown;
@@ -94,12 +96,23 @@ export function buildAiChatMessages(
   context: AiDashboardContext,
   prompt: string,
   history: AiChatHistoryMessageInput[] | undefined,
+  memory?: ChatMemory | null,
+  extraGrounding?: string | null,
 ): AiChatMessage[] {
   const sanitizedHistory = sanitizeChatHistory(history);
   const groundingContext = buildGroundingContext(context);
   const campaignTimingGuardrail = buildCampaignTimingGuardrail(context, prompt);
+  const memoryMessage = buildChatMemoryMessage(
+    memory ?? {
+      selectedCentreKey: null,
+      selectedCentreName: null,
+      categoryName: null,
+      conversationTitle: null,
+      text: null,
+    },
+  );
 
-  return [
+  const messages: AiChatMessage[] = [
     {
       role: "system",
       content: systemPrompt,
@@ -124,12 +137,28 @@ export function buildAiChatMessages(
         "Answer only from named fields in this JSON. If a specific detail is absent, say it is not available in the dashboard context.",
       ].filter(Boolean).join("\n"),
     },
+  ];
+
+  if (memoryMessage) {
+    messages.push(memoryMessage);
+  }
+
+  if (extraGrounding?.trim()) {
+    messages.push({
+      role: "user",
+      content: extraGrounding.trim(),
+    });
+  }
+
+  messages.push(
     ...sanitizedHistory,
     {
       role: "user",
       content: prompt,
     },
-  ];
+  );
+
+  return messages;
 }
 
 function isCampaignTimingPrompt(prompt: string) {

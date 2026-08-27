@@ -41,6 +41,32 @@ test("external provider clients append raw response payload captures", () => {
   assert.match(schema, /model ExternalApiCapture/);
 });
 
+test("Infocare client remains allowlisted and blocks write-like modes", () => {
+  const infocareClient = source("../src/infocare/client.ts");
+
+  assert.match(infocareClient, /ALLOWED_INFOCARE_MODES[\s\S]*"get_child_list"/);
+  assert.match(infocareClient, /ALLOWED_INFOCARE_MODES[\s\S]*"get_contact_list"/);
+  assert.match(infocareClient, /BLOCKED_INFOCARE_MODE_PREFIXES[\s\S]*"create_"/);
+  assert.match(infocareClient, /BLOCKED_INFOCARE_MODE_PREFIXES[\s\S]*"update_"/);
+  assert.match(infocareClient, /BLOCKED_INFOCARE_MODE_PREFIXES[\s\S]*"delete_"/);
+  assert.match(infocareClient, /validateInfocareMode\(mode\)/);
+  assert.match(infocareClient, /isBlockedMode\(parsedMode\)/);
+});
+
+test("dashboard live Infocare chat reads API data without write endpoints", () => {
+  const infocareLive = source("../src/ai/infocare-live.ts");
+  const server = source("../src/server.ts");
+
+  assert.match(infocareLive, /client\.request\("get_child_list"/);
+  assert.match(infocareLive, /client\.request\("get_child"/);
+  assert.match(infocareLive, /client\.request\("get_contact_list"/);
+  assert.match(infocareLive, /client\.request\("get_license_list"/);
+  assert.match(infocareLive, /client\.request\("get_centre_list"/);
+  assert.doesNotMatch(infocareLive, /client\.request\("(create|update|delete|set)_/);
+  assert.match(server, /\/api\/general-chat\/conversations\/:id\/stream[\s\S]*?isLiveInfocarePrompt\(prompt\)[\s\S]*?runLiveInfocareRequest/);
+  assert.match(server, /isLiveInfocarePrompt\(prompt\)[\s\S]*?return;[\s\S]*?const messages = await buildGeneralChatMessages/);
+});
+
 test("capture failures are not acknowledged or suppressed", () => {
   const server = source("../src/server.ts");
   const mailchimpRefresh = source("../src/mailchimp/refresh.ts");
@@ -58,6 +84,17 @@ test("Postmark Webmail display reads stored webhook events without altering them
   assert.doesNotMatch(postmarkStore, /\.(update|delete|upsert|create)\(/);
   assert.match(postmarkPanel, /Recent messages/);
   assert.match(postmarkPanel, /External test activity is excluded from this list/);
+});
+
+test("Postmark Recent messages RSS flags a seven-day quiet period", () => {
+  const server = source("../src/server.ts");
+
+  assert.match(server, /\/rss\/postmark-recent-messages/);
+  assert.match(server, /application\/rss\+xml; charset=utf-8/);
+  assert.match(server, /readPostmarkDashboardData\(\{ fromDate: weekStart \}\)/);
+  assert.match(server, /7 \* 24 \* 60 \* 60 \* 1000/);
+  assert.match(server, /ALERT: No emails have been sent from our website for \$\{daysSinceLatest\} days/);
+  assert.match(server, /#b42318/);
 });
 
 test("Postmark CSV export imports historical events into retained message storage", () => {

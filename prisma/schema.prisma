@@ -166,14 +166,11 @@ model ServiceAnalyticsSnapshot {
   replacementPressureCountsByWindow Json                 @default("{\"1W\":0,\"2W\":0,\"3W\":0,\"1M\":0,\"2M\":0,\"3M\":0,\"6M\":0,\"12M\":0}")
   replacementPressure               Int
   waitlistCoverRatio                Decimal              @db.Decimal(8, 4)
-  urgencyScore                      Decimal              @db.Decimal(8, 4)
-  urgencyBand                       String
   createdAt                         DateTime             @default(now())
   centre                            CentreReference      @relation(fields: [centreKey], references: [centreKey], onDelete: Restrict, onUpdate: Cascade)
   run                               AnalyticsSnapshotRun @relation(fields: [runId], references: [id], onDelete: Cascade, onUpdate: Cascade)
 
   @@unique([runId, centreKey])
-  @@index([runId, urgencyScore(sort: Desc)])
   @@index([centreKey, date(sort: Desc)])
 }
 

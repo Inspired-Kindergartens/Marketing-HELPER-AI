@@ -381,6 +381,13 @@ const ENVIROSCHOOL_CENTRE_NAMES = [
   "Welcome Bay Kindergarten", // Green Gold EnviroKindergarten
 ];
 
+// Centre names already end in "Kindergarten"; appending another (and
+// upper-casing) produced e.g. "GWEN ROGERS  KINDERGARTEN Kindergarten".
+function seedLocationDisplay(name: string): string {
+  const cleaned = name.replace(/\s+/g, " ").trim();
+  return /\s*kindergarten$/i.test(cleaned) ? cleaned : `${cleaned} Kindergarten`;
+}
+
 async function seedEnviroschoolFlags() {
   const rows = await prisma.centreReference.findMany({
     where: { name: { in: ENVIROSCHOOL_CENTRE_NAMES } },
@@ -395,7 +402,7 @@ async function seedEnviroschoolFlags() {
     await prisma.jdCentreProfile.upsert({
       where: { centreKey: row.centreKey },
       update: { isEnviroschool: true },
-      create: { centreKey: row.centreKey, locationDisplay: `${row.name.trim().toUpperCase()} Kindergarten`, isEnviroschool: true },
+      create: { centreKey: row.centreKey, locationDisplay: seedLocationDisplay(row.name), isEnviroschool: true },
     });
   }
   console.log(`Seeded isEnviroschool=true for ${rows.length} centres.`);

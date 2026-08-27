@@ -166,8 +166,6 @@ function mapSnapshot(record: {
   replacementPressureCountsByWindow: Prisma.JsonValue | null;
   replacementPressure: number;
   waitlistCoverRatio: { toString(): string };
-  urgencyScore: { toString(): string };
-  urgencyBand: string;
 }): ServiceAnalyticsSnapshot {
   return {
     centreKey: record.centreKey,
@@ -203,8 +201,6 @@ function mapSnapshot(record: {
     ),
     replacementPressure: record.replacementPressure,
     waitlistCoverRatio: toNumber(record.waitlistCoverRatio),
-    urgencyScore: toNumber(record.urgencyScore),
-    urgencyBand: record.urgencyBand as UrgencyBand,
   };
 }
 
@@ -342,8 +338,6 @@ async function appendSnapshotRows(
           getFallbackReplacementPressureCounts(snapshot)) as Prisma.InputJsonValue,
       replacementPressure: snapshot.replacementPressure,
       waitlistCoverRatio: snapshot.waitlistCoverRatio,
-      urgencyScore: snapshot.urgencyScore,
-      urgencyBand: snapshot.urgencyBand,
     })),
   });
 }
@@ -373,7 +367,7 @@ export async function readLatestAnalyticsSnapshotSet(): Promise<LatestSnapshotSe
     orderBy: [{ runDate: "desc" }, { createdAt: "desc" }],
     include: {
       snapshots: {
-        orderBy: [{ urgencyScore: "desc" }, { serviceName: "asc" }],
+        orderBy: [{ serviceName: "asc" }],
       },
     },
   });
@@ -406,7 +400,7 @@ export async function readWindowAnalyticsSnapshotSet(
     orderBy: [{ runDate: "asc" }, { createdAt: "asc" }],
     include: {
       snapshots: {
-        orderBy: [{ urgencyScore: "desc" }, { serviceName: "asc" }],
+        orderBy: [{ serviceName: "asc" }],
       },
     },
   });
@@ -511,15 +505,12 @@ export async function readWindowAnalyticsSnapshotSet(
         ),
         replacementPressure: Math.round(average((entry) => entry.replacementPressure)),
         waitlistCoverRatio: Number(average((entry) => entry.waitlistCoverRatio).toFixed(2)),
-        urgencyScore: Number(average((entry) => entry.urgencyScore).toFixed(2)),
         enrolmentRatio: Number(average((entry) => entry.enrolmentRatio).toFixed(4)),
       };
     })
-    .sort(
-      (left, right) =>
-        right.urgencyScore - left.urgencyScore ||
-        left.serviceName.localeCompare(right.serviceName),
-    );
+    // Ordered by name only: urgency is derived at read time from the window on
+    // screen, so there is no stored score to sort by here.
+    .sort((left, right) => left.serviceName.localeCompare(right.serviceName));
 
   return {
     runDate: latestRun.runDate.toISOString(),
@@ -556,7 +547,7 @@ async function readAnalyticsSnapshotSetInRange(start: Date, end: Date): Promise<
     orderBy: [{ runDate: "desc" }, { createdAt: "desc" }],
     include: {
       snapshots: {
-        orderBy: [{ urgencyScore: "desc" }, { serviceName: "asc" }],
+        orderBy: [{ serviceName: "asc" }],
       },
     },
   });
@@ -580,7 +571,7 @@ export async function readSnapshotSetByRunDate(runDateInput: string | Date): Pro
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     include: {
       snapshots: {
-        orderBy: [{ urgencyScore: "desc" }, { serviceName: "asc" }],
+        orderBy: [{ serviceName: "asc" }],
       },
     },
   });
@@ -602,7 +593,7 @@ async function readSnapshotSetByRunId(runId: number): Promise<LatestSnapshotSet 
     where: { id: runId },
     include: {
       snapshots: {
-        orderBy: [{ urgencyScore: "desc" }, { serviceName: "asc" }],
+        orderBy: [{ serviceName: "asc" }],
       },
     },
   });

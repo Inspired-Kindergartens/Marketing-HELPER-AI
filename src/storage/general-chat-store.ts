@@ -1,5 +1,11 @@
 import { prisma } from "../db.js";
 import type { AiChatMessage } from "../ai/client.js";
+import {
+  buildChatMemory,
+  buildChatMemoryMessage,
+  type ChatMemory,
+  type ChatMemoryCentreReference,
+} from "../ai/chat-memory.js";
 
 export const GENERAL_CHAT_MODEL_CONTEXT_TOKENS = 131072;
 export const GENERAL_CHAT_SEND_CHAR_BUDGET = 24000;
@@ -236,11 +242,53 @@ export async function deleteGeneralChatMessage(id: number) {
   return { conversationId: message.conversationId, messageCount };
 }
 
-export async function buildGeneralChatMessages(conversationId: number): Promise<AiChatMessage[]> {
-  const rows = await prisma.generalChatMessage.findMany({
-    where: { conversationId },
-    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+async function readConversationMemoryMetadata(conversationId: number) {
+  const conversation = await prisma.generalChatConversation.findUnique({
+    where: { id: conversationId },
+    select: {
+      title: true,
+      group: {
+        select: { name: true },
+      },
+    },
   });
+
+  return {
+    categoryName: conversation?.group?.name ?? null,
+    conversationTitle: conversation?.title ?? null,
+  };
+}
+
+export async function buildGeneralChatMemory(
+  conversationId: number,
+  centres: readonly ChatMemoryCentreReference[] = [],
+): Promise<ChatMemory> {
+  const [rows, metadata] = await Promise.all([
+    prisma.generalChatMessage.findMany({
+      where: { conversationId },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      select: { role: true, content: true },
+    }),
+    readConversationMemoryMetadata(conversationId),
+  ]);
+
+  return buildChatMemory(rows, centres, metadata);
+}
+
+export async function buildGeneralChatMessages(
+  conversationId: number,
+  centres: readonly ChatMemoryCentreReference[] = [],
+  extraGrounding?: string | null,
+): Promise<AiChatMessage[]> {
+  const [rows, metadata] = await Promise.all([
+    prisma.generalChatMessage.findMany({
+      where: { conversationId },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    }),
+    readConversationMemoryMetadata(conversationId),
+  ]);
+  const chronologicalRows = [...rows].reverse();
+  const memoryMessage = buildChatMemoryMessage(buildChatMemory(chronologicalRows, centres, metadata));
 
   const selected: typeof rows = [];
   let used = 0;
@@ -256,15 +304,31 @@ export async function buildGeneralChatMessages(conversationId: number): Promise<
 
   selected.reverse();
 
-  return [
+  const messages: AiChatMessage[] = [
     {
       role: "system",
       content:
-        "You are Beep Beep, a general-purpose local assistant. Help with everyday questions, writing, planning, explanation, troubleshooting, and technical work. Be practical, concise, and clear. The app retains the full conversation, but only the latest working window is sent to the model when a conversation grows long.",
+        "You are Beep Beep, a general-purpose local assistant. Help with everyday questions, writing, planning, explanation, troubleshooting, and technical work. Be practical, concise, and clear. The app retains the full conversation, but only the latest working window is sent to the model when a conversation grows long. If live read-only grounding says the app has already performed an Infocare lookup, treat that grounding as available evidence and do not respond with a generic external-database access refusal.",
     },
+  ];
+
+  if (memoryMessage) {
+    messages.push(memoryMessage);
+  }
+
+  if (extraGrounding?.trim()) {
+    messages.push({
+      role: "user",
+      content: extraGrounding.trim(),
+    });
+  }
+
+  messages.push(
     ...selected.map((row) => ({
       role: normalizeRole(row.role),
       content: row.content,
     })),
-  ];
+  );
+
+  return messages;
 }

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import type { LandingIntelligenceFeed } from "../src/landing-intelligence.js";
 import { renderLandingPage } from "../src/ui/landing-page.js";
 import type { TaskReminderFeed, TaskReminderView } from "../src/storage/task-store.js";
 
@@ -85,6 +86,13 @@ test("landing page includes a Job Descriptions tile linking to /jd", () => {
   assert.match(html, /Job Descriptions/);
 });
 
+test("landing page includes an Upscalar launcher tile", () => {
+  const html = renderLandingPage({});
+
+  assert.match(html, /href="upscalar:\/\/open"/);
+  assert.match(html, /Open Upscalar/);
+});
+
 test("landing page surfaces a KTCA expiry reminder alongside task reminders", () => {
   const html = renderLandingPage({
     reminders: { overdue: [], dueSoon: [], total: 0 },
@@ -112,4 +120,50 @@ test("landing page hides the KTCA reminder when the agreement is not close to ex
   });
 
   assert.doesNotMatch(html, /landing__reminders/);
+});
+
+test("landing page includes a rich clipboard copy action for the RSS feed", () => {
+  const intelligenceFeed: LandingIntelligenceFeed = {
+    generatedAt: "2026-07-30T01:00:00.000Z",
+    nextRefreshAt: "2026-07-30T01:15:00.000Z",
+    status: "ready",
+    error: null,
+    items: [
+      {
+        id: "news-1",
+        kind: "news",
+        title: "ECE funding update",
+        brief: "Relevant update for early childhood planning.",
+        href: "https://example.com/ece-funding",
+        source: "Example News",
+        publishedAt: "2026-07-30T00:30:00.000Z",
+        urgent: false,
+      },
+    ],
+    searchTexts: ["teacher misconduct"],
+    aiModel: {
+      currentModel: "qwen3:8b",
+      recommendedModel: "qwen3:8b",
+      fallbackModel: null,
+      secondaryFallbackModel: null,
+      isUpgrade: false,
+      sellingPoint: "Qwen3 8B is already selected for local AI chat.",
+      updatePrompt: "No model update is currently recommended.",
+      comparison: "qwen3:8b is current.",
+      computerSpec: "Test machine.",
+      canOperate: true,
+      rollbackPrompt: null,
+      deletionPrompt: null,
+    },
+  };
+  const html = renderLandingPage({ intelligenceFeed });
+
+  assert.match(html, /data-copy-landing-feed/);
+  assert.match(html, /Copy RSS feed to clipboard/);
+  assert.match(html, /ClipboardItem/);
+  assert.match(html, /text\/html/);
+  assert.match(html, /data-toggle-landing-search/);
+  assert.match(html, /teacher misconduct/);
+  assert.match(html, /data-landing-search-form/);
+  assert.match(html, /api\/landing-intelligence\/search-texts/);
 });

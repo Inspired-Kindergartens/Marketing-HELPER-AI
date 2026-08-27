@@ -9,6 +9,15 @@ function toJsonInput(value: object | null): Prisma.InputJsonValue | typeof Prism
   return value === null ? Prisma.JsonNull : (value as Prisma.InputJsonValue);
 }
 
+// Centre names already end in "Kindergarten", so the old fallback
+// (`${name.toUpperCase()} Kindergarten`) doubled the word and shouted the
+// name. Collapse the repeat and keep the stored casing; display-side
+// formatting lives in formatJdLocationDisplay (src/ui/jd/jd-email.ts).
+function defaultLocationDisplay(name: string): string {
+  const cleaned = name.replace(/\s+/g, " ").trim();
+  return /\s*kindergarten$/i.test(cleaned) ? cleaned : `${cleaned} Kindergarten`;
+}
+
 // Job Descriptions: title/centre profiles drive defaults for a generated
 // JobDescription, which is then editable independently (values are copied at
 // creation, not referenced live). Mirrors the Tasks/Comms store conventions.
@@ -85,10 +94,85 @@ function emptyToNull(value: string | null | undefined): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+const NZ_TIME_ZONE = "Pacific/Auckland";
+
+function nzDateTimeParts(date: Date): Record<string, string> {
+  return Object.fromEntries(
+    new Intl.DateTimeFormat("en-NZ", {
+      timeZone: NZ_TIME_ZONE,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hourCycle: "h23",
+    })
+      .formatToParts(date)
+      .map((part) => [part.type, part.value]),
+  );
+}
+
+function zonedDateTimeToUtc(
+  year: number,
+  month: number,
+  day: number,
+  hour = 0,
+  minute = 0,
+  second = 0,
+): Date {
+  let utc = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
+
+  for (let i = 0; i < 3; i += 1) {
+    const parts = nzDateTimeParts(utc);
+    const actualAsUtc = Date.UTC(
+      Number(parts.year),
+      Number(parts.month) - 1,
+      Number(parts.day),
+      Number(parts.hour),
+      Number(parts.minute),
+      Number(parts.second),
+    );
+    const desiredAsUtc = Date.UTC(year, month - 1, day, hour, minute, second);
+    const diff = actualAsUtc - desiredAsUtc;
+    if (diff === 0) break;
+    utc = new Date(utc.getTime() - diff);
+  }
+
+  return utc;
+}
+
 function parseDate(value: string | null | undefined): Date | null {
   if (!value) return null;
-  const date = new Date(value);
+  const trimmed = value.trim();
+  const localMatch = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2}))?$/.exec(trimmed);
+  const date = localMatch
+    ? zonedDateTimeToUtc(
+        Number(localMatch[1]),
+        Number(localMatch[2]),
+        Number(localMatch[3]),
+        localMatch[4] ? Number(localMatch[4]) : 0,
+        localMatch[5] ? Number(localMatch[5]) : 0,
+      )
+    : new Date(trimmed);
   return Number.isNaN(date.getTime()) ? null : date;
+}
+
+export function defaultClosingDate(advertisedDate: Date): Date {
+  const advertised = nzDateTimeParts(advertisedDate);
+  const localClosingDate = new Date(
+    Date.UTC(Number(advertised.year), Number(advertised.month) - 1, Number(advertised.day) + 28),
+  );
+  const daysUntilFriday = (5 - localClosingDate.getUTCDay() + 7) % 7;
+  localClosingDate.setUTCDate(localClosingDate.getUTCDate() + daysUntilFriday);
+
+  return zonedDateTimeToUtc(
+    localClosingDate.getUTCFullYear(),
+    localClosingDate.getUTCMonth() + 1,
+    localClosingDate.getUTCDate(),
+    16,
+    0,
+  );
 }
 
 function resolveLayoutVariant(value: string): JdLayoutVariant {
@@ -230,7 +314,7 @@ export async function listCentreProfiles(): Promise<JdCentreProfileView[]> {
   return rows.map((row) => ({
     centreKey: row.centreKey,
     centreName: row.name,
-    locationDisplay: row.jdCentreProfile?.locationDisplay ?? `${row.name.toUpperCase()} Kindergarten`,
+    locationDisplay: row.jdCentreProfile?.locationDisplay ?? defaultLocationDisplay(row.name),
     introParagraph: row.jdCentreProfile?.introParagraph ?? "",
     seniorTeacherName: row.jdCentreProfile?.seniorTeacherName ?? "",
     seniorTeacherAcronym: row.jdCentreProfile?.seniorTeacherAcronym ?? "",
@@ -247,7 +331,7 @@ export async function getCentreProfile(centreKey: number): Promise<JdCentreProfi
   return {
     centreKey: row.centreKey,
     centreName: row.name,
-    locationDisplay: row.jdCentreProfile?.locationDisplay ?? `${row.name.toUpperCase()} Kindergarten`,
+    locationDisplay: row.jdCentreProfile?.locationDisplay ?? defaultLocationDisplay(row.name),
     introParagraph: row.jdCentreProfile?.introParagraph ?? "",
     seniorTeacherName: row.jdCentreProfile?.seniorTeacherName ?? "",
     seniorTeacherAcronym: row.jdCentreProfile?.seniorTeacherAcronym ?? "",
@@ -444,7 +528,7 @@ export async function createJobDescription(input: CreateJobDescriptionInput): Pr
       agreementText: titleProfile.layoutVariant === "administrator" ? "" : titleProfile.agreementText,
       salaryRangeText,
       dateAdvertised,
-      closingAt: parseDate(input.closingAt),
+      closingAt: parseDate(input.closingAt) ?? defaultClosingDate(dateAdvertised),
       startDateText: emptyToNull(input.startDateText) ?? "To be negotiated",
       qualificationsText: titleProfile.qualificationsText,
       introParagraph: centreProfile.introParagraph,
@@ -558,6 +642,13 @@ export async function duplicateJobDescription(id: number): Promise<number> {
 // --- Blurbs ------------------------------------------------------------------
 
 export type JdBlurbVersion = { id: number; contentHtml: string; savedAt: string };
+export type JdIntroParagraphExample = {
+  id: number;
+  centreKey: number | null;
+  centreName: string | null;
+  introParagraph: string;
+  source: "job-description" | "centre-profile";
+};
 
 // Writes the JD's current blurb and appends a history row. A new row is
 // written on every save (AI-generated or hand-edited) so nothing is ever
@@ -595,6 +686,91 @@ export async function listBlurbsForCentre(
     contentHtml: row.contentHtml,
     savedAt: row.savedAt.toISOString(),
   }));
+}
+
+export async function listRecentBlurbsAcrossCentres(
+  limit = 6,
+  excludeCentreKey?: number | null,
+): Promise<JdBlurbVersion[]> {
+  const rows = await prisma.jdBlurb.findMany({
+    where: excludeCentreKey != null ? { centreKey: { not: excludeCentreKey } } : undefined,
+    orderBy: { savedAt: "desc" },
+    take: limit,
+  });
+  return rows.map((row) => ({
+    id: row.id,
+    contentHtml: row.contentHtml,
+    savedAt: row.savedAt.toISOString(),
+  }));
+}
+
+export async function listIntroParagraphExamples(options: {
+  centreKey?: number | null;
+  excludeCentreKey?: number | null;
+  limit?: number;
+} = {}): Promise<JdIntroParagraphExample[]> {
+  const limit = options.limit ?? 6;
+  const centreFilter =
+    options.centreKey != null
+      ? { centreKey: options.centreKey }
+      : options.excludeCentreKey != null
+        ? { centreKey: { not: options.excludeCentreKey } }
+        : {};
+
+  const rows = await prisma.jobDescription.findMany({
+    where: {
+      ...centreFilter,
+      introParagraph: { not: "" },
+    },
+    orderBy: { updatedAt: "desc" },
+    take: limit,
+    select: {
+      id: true,
+      centreKey: true,
+      locationDisplay: true,
+      introParagraph: true,
+      centre: { select: { name: true } },
+    },
+  });
+
+  const examples = rows.map((row) => ({
+    id: row.id,
+    centreKey: row.centreKey,
+    centreName: row.centre?.name ?? row.locationDisplay,
+    introParagraph: row.introParagraph,
+    source: "job-description" as const,
+  }));
+
+  if (examples.length >= limit || options.centreKey != null) {
+    return examples;
+  }
+
+  const centreRows = await prisma.jdCentreProfile.findMany({
+    where: {
+      ...(options.excludeCentreKey != null ? { centreKey: { not: options.excludeCentreKey } } : {}),
+      introParagraph: { not: "" },
+    },
+    orderBy: { updatedAt: "desc" },
+    take: limit - examples.length,
+    select: {
+      id: true,
+      centreKey: true,
+      locationDisplay: true,
+      introParagraph: true,
+      centre: { select: { name: true } },
+    },
+  });
+
+  return [
+    ...examples,
+    ...centreRows.map((row) => ({
+      id: row.id,
+      centreKey: row.centreKey,
+      centreName: row.centre?.name ?? row.locationDisplay,
+      introParagraph: row.introParagraph,
+      source: "centre-profile" as const,
+    })),
+  ];
 }
 
 export async function listBlurbVersions(jobDescriptionId: number): Promise<JdBlurbVersion[]> {

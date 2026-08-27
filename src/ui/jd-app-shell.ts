@@ -3,6 +3,7 @@ import { renderJdListPanel, type JdListPanelOptions } from "./jd/jd-list-panel.j
 import { renderJdEditorPanel, type JdEditorPanelOptions } from "./jd/jd-editor-panel.js";
 import { renderJdBlurbPanel, type JdBlurbPanelOptions } from "./jd/jd-blurb-panel.js";
 import { renderJdSettingsPanel, type JdSettingsPanelOptions } from "./jd/jd-settings-panel.js";
+import { buildJdGenerateEmailHref, formatJdLocationDisplay } from "./jd/jd-email.js";
 
 const PANEL_DEFINITIONS = [
   { id: "jd-list", title: "Job Descriptions", className: "panel--jd-list" },
@@ -30,6 +31,50 @@ function renderPanelContent(panelId: string, options: JdAppShellOptions): string
   if (panelId === "jd-blurb") return renderJdBlurbPanel(options.blurb);
   if (panelId === "jd-settings") return renderJdSettingsPanel(options.settings);
   return renderJdListPanel(options.list);
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function renderPanelActions(panelId: string, options: JdAppShellOptions): string | undefined {
+  if (panelId === "jd-list") {
+    return `
+      <a class="panel-action-link" href="/jd?panel=jd-settings"><i class="bi bi-gear ui-icon" aria-hidden="true"></i><span>Settings</span></a>
+    `;
+  }
+
+  if (panelId === "jd-editor" && options.editor.jobDescription) {
+    const jd = options.editor.jobDescription;
+    const emailHref = buildJdGenerateEmailHref(jd);
+
+    return `
+      <a class="panel-action-link" href="/jd?panel=jd-list"><i class="bi bi-arrow-left ui-icon" aria-hidden="true"></i><span>Back to Job Descriptions</span></a>
+      <a class="panel-action-link" href="/jd?panel=jd-blurb&jd=${jd.id}"><i class="bi bi-file-earmark-richtext ui-icon" aria-hidden="true"></i><span>Website blurb for this JD</span></a>
+      <a class="panel-action-link" href="${escapeHtml(emailHref)}"><i class="bi bi-envelope-plus ui-icon" aria-hidden="true"></i><span>Generate Email</span></a>
+    `;
+  }
+
+  if (panelId === "jd-blurb" && options.blurb.jobDescription) {
+    const jd = options.blurb.jobDescription;
+
+    return `
+      <a class="panel-action-link" href="/jd?panel=jd-editor&jd=${jd.id}"><i class="bi bi-arrow-left ui-icon" aria-hidden="true"></i><span>Back to ${escapeHtml(jd.jobTitle)} - ${escapeHtml(formatJdLocationDisplay(jd.locationDisplay))}</span></a>
+    `;
+  }
+
+  if (panelId === "jd-settings") {
+    return `
+      <a class="panel-action-link" href="/jd?panel=jd-list"><i class="bi bi-arrow-left ui-icon" aria-hidden="true"></i><span>Back to Job Descriptions</span></a>
+    `;
+  }
+
+  return undefined;
 }
 
 // One delegated client script for every mutation in the section, matching the
@@ -68,6 +113,45 @@ function renderJdScript(): string {
           } catch (error) {
             window.alert("That action couldn't be saved. Please try again.");
             return null;
+          }
+        }
+
+        function setCreateBusy(form, busy) {
+          var busyStatus = form.querySelector("[data-jd-create-busy]");
+          var submit = form.querySelector("[data-jd-create-submit]");
+          var fields = form.querySelectorAll("select, button");
+          fields.forEach(function(field) {
+            field.disabled = busy;
+          });
+          form.setAttribute("aria-busy", busy ? "true" : "false");
+          if (busyStatus) busyStatus.hidden = !busy;
+          if (submit) {
+            submit.innerHTML = busy
+              ? '<span class="jd-list__create-spinner" aria-hidden="true"></span><span>Generating...</span>'
+              : '<i class="bi bi-plus-lg ui-icon" aria-hidden="true"></i><span>New Job Description</span>';
+          }
+        }
+
+        async function postCreate(url, payload, form) {
+          setCreateBusy(form, true);
+          try {
+            var response = await fetch(url, {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify(payload || {}),
+            });
+            if (!response.ok) throw new Error("Request failed");
+            var result = await response.json().catch(function () { return {}; });
+            if (result && result.id) {
+              window.location.href = "/jd?panel=jd-editor&jd=" + encodeURIComponent(String(result.id));
+            } else {
+              reload();
+            }
+            return true;
+          } catch (error) {
+            setCreateBusy(form, false);
+            window.alert("That job description couldn't be created. Please try again.");
+            return false;
           }
         }
 
@@ -208,7 +292,7 @@ function renderJdScript(): string {
 
           if (form.hasAttribute("data-jd-create")) {
             event.preventDefault();
-            post("/api/jd", formData(form));
+            postCreate("/api/jd", formData(form), form);
             return;
           }
           if (form.hasAttribute("data-jd-edit")) {
@@ -293,6 +377,7 @@ export function renderJdAppShell(options: JdAppShellOptions): string {
     id: panel.id,
     title: panel.title,
     className: panel.className,
+    actions: renderPanelActions(panel.id, options),
     children: renderPanelContent(panel.id, options),
   }));
   const layout = renderLayout({ panels: panelContent, focusPanelId });

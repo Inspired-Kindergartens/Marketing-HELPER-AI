@@ -1,5 +1,6 @@
 import { resolveWindowKey, type WindowKey } from "../analytics/windows.js";
 import { estimateActionableWaitlistCount } from "../analytics/waitlist-profile.js";
+import { calculateUrgencyScore, determineUrgencyBand } from "../analytics/compute.js";
 import type { ServiceAnalyticsSnapshot } from "../infocare/models.js";
 import type { MetaAdsDashboardData } from "../storage/meta-store.js";
 import type { GoogleAnalyticsDailySnapshotView } from "../storage/google-analytics-store.js";
@@ -130,12 +131,20 @@ function mapCentre(row: ServiceAnalyticsSnapshot, windowKey: WindowKey, coverage
   const nearFive = getWindowCount(row.approachingFiveCountsByWindow, windowKey);
   const replacementPressure = getReplacementPressure(row, windowKey);
   const activeCampaignCount = centreCoverage?.activeCampaignCount ?? 0;
+  // Derived from this row and the selected window, never read from storage, so
+  // Beep Beep always agrees with the panel for the window on screen.
+  const urgencyScore = calculateUrgencyScore({
+    licensedCapacity: row.licensedCapacity,
+    availablePlaces: Math.max(row.licensedCapacity - row.enrolledCount, 0),
+    scopedLeavingCount: leaving,
+    actionableWaitlist: actionableWaitlist,
+  });
 
   return {
     centreKey: row.centreKey,
     serviceName: row.serviceName,
-    urgencyBand: row.urgencyBand,
-    urgencyScore: row.urgencyScore,
+    urgencyBand: determineUrgencyBand(urgencyScore),
+    urgencyScore,
     enrolled: row.enrolledCount,
     licensedCapacity: row.licensedCapacity,
     bookedAverageDailyCount: row.bookedAverageDailyCount,
@@ -189,18 +198,16 @@ export function buildAiDashboardContext(input: AiDashboardContextInput) {
     input.selectedCentreKey == null
       ? centres[0] ?? null
       : centres.find((row) => row.centreKey === input.selectedCentreKey) ?? null;
+  // Beep Beep must rank centres exactly as the Infocare Analytics panel does,
+  // otherwise its advice contradicts the list the user is looking at. This
+  // previously sorted by its own leaving-minus-waitlist gap, which put the
+  // panel's bottom-ranked centres at the top of the chat's priorities.
   const priorityCentres = [...centres]
-    .sort((left, right) => {
-      const leftGap = Math.max(left.selectedWindow.leaving - left.waitlist.actionable, 0);
-      const rightGap = Math.max(right.selectedWindow.leaving - right.waitlist.actionable, 0);
-
-      return (
-        rightGap - leftGap ||
-        right.selectedWindow.replacementPressure - left.selectedWindow.replacementPressure ||
-        right.estimatedOpenPlaces - left.estimatedOpenPlaces ||
-        right.urgencyScore - left.urgencyScore
-      );
-    })
+    .sort(
+      (left, right) =>
+        right.urgencyScore - left.urgencyScore ||
+        left.serviceName.localeCompare(right.serviceName),
+    )
     .slice(0, 12);
 
   return {
@@ -251,7 +258,10 @@ export function buildDashboardSystemPrompt() {
     "Answer with the decision first. Do not begin with setup phrases such as 'to determine', 'let us look', 'let's look', or 'based on the data'.",
     "Do not expose internal field names or implementation labels such as selectedCentre, priorityCentres, campaignGuidance, JSON, schema, variable, or context object.",
     "Do not narrate your reasoning process. Internally inspect the metrics, then return the conclusion, evidence, and next action.",
-    "Use only the supplied dashboard context. If the answer needs data not present, say what is missing.",
+    "Use only the supplied dashboard context and any supplied live read-only grounding. If the answer needs data not present, say what is missing.",
+    "If live read-only grounding says the app has already performed an Infocare lookup, treat that grounding as available evidence and do not respond with a generic external-database access refusal.",
+    "Continuously check that your answer is satisfying the user's exact request. If the user asks for a yes/no, a name search, or a specific field, answer that directly before adding any supporting detail.",
+    "Do not provide broad lists, unrelated child details, or generic overviews when the user asked for a specific person, status, date, or confirmation.",
     "Never invent audience demographics, parent intent, campaign names, centre metrics, dates, or external facts that are not in the dashboard context.",
     "When recommending ads or follow-up, ground the action in named centre metrics from the context.",
     "Use selected-centre notes as decision evidence. Notes from the last month are important and should outrank older notes; within notes, the newest note has the highest priority.",

@@ -8,6 +8,7 @@ export const ALLOWED_INFOCARE_MODES = [
   "get_centre_list",
   "get_child_list",
   "get_child",
+  "get_contact_list",
   "get_license_list",
   "get_booking_list",
 ] as const;

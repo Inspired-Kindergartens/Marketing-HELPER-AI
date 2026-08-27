@@ -9,6 +9,7 @@ import type { LatestSnapshotSet } from "../src/storage/analytics-store.js";
 import type { GoogleAnalyticsDailySnapshotView } from "../src/storage/google-analytics-store.js";
 import type { MetaAdsDashboardData } from "../src/storage/meta-store.js";
 import type { MetaNotificationHistoryRow } from "../src/storage/meta-recommendation-notifications-store.js";
+import type { MetaRecommendationNoteView } from "../src/storage/meta-recommendation-notes-store.js";
 
 function readChartConfig(html: string, chartId: string) {
   const pattern = new RegExp(`<script type="application/json" data-waitlist-chart="${chartId}">([\\s\\S]*?)</script>`);
@@ -412,6 +413,41 @@ test("meta recommendation note popup uses shared note API and shows latest notes
   assert.match(html, /Older note/);
   assert.match(html, /fetch\("\/api\/meta-recommendation-notes"/);
   assert.match(html, /notificationId: context\.notificationId, text, notification: context\.notification/);
+});
+
+test("marketing dashboard shows Notes below Google Analytics newest first with editable note text", () => {
+  const notes: MetaRecommendationNoteView[] = [
+    {
+      id: 2,
+      notificationId: "meta-ads:3M:2:review-spend",
+      text: "Newest note",
+      submittedAt: "2026-05-13T09:00:00.000Z",
+      deletedAt: null,
+      centreName: "Bethlehem Kindergarten",
+      heading: "Review spend",
+    },
+    {
+      id: 1,
+      notificationId: "meta-ads:3M:1:needs-ads",
+      text: "Older note",
+      submittedAt: "2026-05-12T09:00:00.000Z",
+      deletedAt: null,
+      centreName: "Te Puke Kindergarten",
+      heading: "Needs ads",
+    },
+  ];
+  const html = renderAppShell(null, { metaRecommendationNotes: notes });
+
+  assert.match(html, /data-panel-id="notes"/);
+  assert.match(html, /Notes/);
+  assert.ok(html.indexOf('data-panel-id="google-analytics"') < html.indexOf('data-panel-id="notes"'));
+  assert.ok(html.indexOf("Newest note") < html.indexOf("Older note"));
+  assert.match(html, /Bethlehem Kindergarten/);
+  assert.match(html, /Review spend/);
+  assert.match(html, /data-latest-meta-note-edit/);
+  assert.match(html, /data-latest-meta-note-save/);
+  assert.match(html, /fetch\("\/api\/meta-recommendation-notes\/" \+ encodeURIComponent\(id\)/);
+  assert.match(html, /querySelector\("\[data-latest-meta-note-timestamp\]"\)|data-latest-meta-note-timestamp/);
 });
 
 test("google analytics most visited pages can open as focused breakout section", () => {

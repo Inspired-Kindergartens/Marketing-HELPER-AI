@@ -23,6 +23,7 @@ import {
   estimateActionableWaitlistCount,
   estimateShortPlusTypicalWaitlistCount,
 } from "../analytics/waitlist-profile.js";
+import { calculateUrgencyScore, determineUrgencyBand } from "../analytics/compute.js";
 import { renderLayout } from "./layout.js";
 
 type AnalyticsRow = NonNullable<LatestSnapshotSet>["snapshots"][number];
@@ -42,6 +43,7 @@ const PANEL_DEFINITIONS = [
   { id: "waitlist", title: "Waitlist Quality", className: "panel--waitlist" },
   { id: "meta-ads", title: "META Ads", className: "panel--meta-ads" },
   { id: "google-analytics", title: "Google Analytics", className: "panel--google-analytics" },
+  { id: "notes", title: "Notes", className: "panel--notes" },
   { id: "chat", title: "AI Chat with Beep Beep", className: "panel--chat" },
 ] as const;
 
@@ -342,6 +344,22 @@ function getEstimatedOpenPlaces(row: AnalyticsRow) {
   return Math.max(0, Math.round(row.licensedCapacity - row.bookedAverageDailyCount));
 }
 
+// Urgency is derived from the row's facts and the window on screen, never read
+// from storage. Changing the time filter re-ranks the table because the score
+// itself is recomputed for that window.
+function getUrgencyScore(row: AnalyticsRow, windowKey: WindowKey) {
+  return calculateUrgencyScore({
+    licensedCapacity: row.licensedCapacity,
+    availablePlaces: Math.max(row.licensedCapacity - row.enrolledCount, 0),
+    scopedLeavingCount: getScopedKnownLeavingCount(row, windowKey),
+    actionableWaitlist: getActionableWaitlistCount(row),
+  });
+}
+
+function getUrgencyBand(row: AnalyticsRow, windowKey: WindowKey) {
+  return determineUrgencyBand(getUrgencyScore(row, windowKey));
+}
+
 function getPriorityWaitlistGap(row: AnalyticsRow, windowKey: WindowKey) {
   const scopedLeavingCount = getScopedKnownLeavingCount(row, windowKey);
   const actionableWaitlistCount = getActionableWaitlistCount(row);
@@ -384,20 +402,18 @@ function sortAnalyticsRows(rows: readonly AnalyticsRow[], serviceSort: ServiceSo
     return sorted.sort((left, right) => right.serviceName.localeCompare(left.serviceName));
   }
 
+  // Order by the same urgency score the bands are derived from, so a centre's
+  // position and its Critical/High/Moderate/Stable label always agree. The
+  // remaining comparisons only break ties between equal scores.
   return sorted.sort((left, right) => {
     const leftLeavingCount = getScopedKnownLeavingCount(left, windowKey);
     const rightLeavingCount = getScopedKnownLeavingCount(right, windowKey);
-    const leftActionableWaitlist = getActionableWaitlistCount(left);
-    const rightActionableWaitlist = getActionableWaitlistCount(right);
 
     return (
-      getPriorityListingScore(right, windowKey) - getPriorityListingScore(left, windowKey) ||
+      getUrgencyScore(right, windowKey) - getUrgencyScore(left, windowKey) ||
       getPriorityWaitlistGap(right, windowKey) - getPriorityWaitlistGap(left, windowKey) ||
       rightLeavingCount - leftLeavingCount ||
-      leftActionableWaitlist - rightActionableWaitlist ||
-      left.waitlistCount - right.waitlistCount ||
       getEstimatedOpenPlaces(right) - getEstimatedOpenPlaces(left) ||
-      right.urgencyScore - left.urgencyScore ||
       left.serviceName.localeCompare(right.serviceName)
     );
   });
@@ -441,16 +457,23 @@ function buildOverviewStatement(row: AnalyticsRow, windowKey: WindowKey) {
   const scopedReplacementPressure = getScopedReplacementPressure(row, windowKey);
   const availablePlaces = row.licensedCapacity - row.enrolledCount;
 
+  // Band first: a Stable or Moderate centre never gets escalating language,
+  // however its individual numbers read. The specific concern is still named
+  // below, just without an urgency claim the band does not support.
+  if (getUrgencyBand(row, windowKey) === "Stable") {
+    return actionableWaitlistCount === 0 && scopedReplacementPressure >= 3
+      ? "This centre looks steady overall, though upcoming enrolment changes currently have no actionable waitlist cover. Worth keeping an eye on, but it is not urgent."
+      : "This centre looks steady at the moment. Keep it on the watchlist, but it does not need to be treated as urgent.";
+  }
+
+  if (getUrgencyBand(row, windowKey) === "Moderate") {
+    return actionableWaitlistCount === 0 && scopedReplacementPressure >= 3
+      ? "Worth a closer look: upcoming enrolment changes have no actionable waitlist cover, though the centre is not in the urgent range."
+      : "This centre is worth a light watch, but nothing looks especially concerning right now.";
+  }
+
   if (actionableWaitlistCount === 0 && scopedReplacementPressure >= 3) {
     return "The main watch-out is upcoming enrolment changes with no actionable waitlist cover. This centre should be prioritised for campaign planning and early enquiry generation.";
-  }
-
-  if (row.urgencyBand === "Stable") {
-    return "This centre looks steady at the moment. Keep it on the watchlist, but it does not need to be treated as urgent.";
-  }
-
-  if (row.urgencyBand === "Moderate" && actionableWaitlistCount < 20 && scopedReplacementPressure < 3) {
-    return "This centre is worth a light watch, but nothing looks especially concerning right now.";
   }
 
   if (actionableWaitlistCount >= 60) {
@@ -472,20 +495,22 @@ function buildOverviewStatement(row: AnalyticsRow, windowKey: WindowKey) {
   return "Nothing urgent stands out right now. Keep this centre on the watchlist and respond to suitable enquiries as availability changes.";
 }
 
-function buildStatusLead(row: AnalyticsRow, reasonText: string | null) {
-  if (row.urgencyBand === "Critical") {
+function buildStatusLead(row: AnalyticsRow, reasonText: string | null, windowKey: WindowKey) {
+  const band = getUrgencyBand(row, windowKey);
+
+  if (band === "Critical") {
     return reasonText
       ? `${row.serviceName} needs priority attention mainly because ${reasonText}.`
       : `${row.serviceName} needs priority attention.`;
   }
 
-  if (row.urgencyBand === "High") {
+  if (band === "High") {
     return reasonText
       ? `${row.serviceName} needs a closer look because ${reasonText}.`
       : `${row.serviceName} needs a closer look.`;
   }
 
-  if (row.urgencyBand === "Moderate") {
+  if (band === "Moderate") {
     return reasonText
       ? `${row.serviceName} is in a moderate watch range because ${reasonText}.`
       : `${row.serviceName} is in a moderate watch range.`;
@@ -539,16 +564,10 @@ function buildOpeningNarrative(row: AnalyticsRow, windowKey: WindowKey) {
           ? `${phrases[0]} and ${phrases[1]}`
           : `${phrases[0]}, ${phrases[1]}, and ${phrases[2]}`;
 
-  const statusLead =
-    actionableWaitlistCount === 0 && scopedReplacementPressure >= 3
-      ? reasonText
-        ? `${row.serviceName} needs priority attention because ${reasonText}.`
-        : `${row.serviceName} needs priority attention.`
-      : actionableWaitlistCount <= 3 && scopedReplacementPressure >= 3
-        ? reasonText
-          ? `${row.serviceName} needs priority attention because ${reasonText}.`
-          : `${row.serviceName} needs priority attention.`
-      : buildStatusLead(row, reasonText);
+  // The band is the only thing that may claim urgency. A centre's raw numbers
+  // must never promote its wording above its band, or a bottom-ranked centre
+  // ends up described as a priority.
+  const statusLead = buildStatusLead(row, reasonText, windowKey);
 
   return `${statusLead} ${overview}:`;
 }
@@ -2141,6 +2160,8 @@ function renderAiChatScript() {
         const sendButton = shell.querySelector("[data-ai-chat-send]");
         const chatHistory = [];
         const maxHistoryMessages = 8;
+        const compactedHistory = [];
+        const maxCompactedLines = 10;
 
         if (!(messages instanceof HTMLElement) || !(promptInput instanceof HTMLTextAreaElement) || !(sendButton instanceof HTMLButtonElement)) {
           return;
@@ -2176,8 +2197,32 @@ function renderAiChatScript() {
           chatHistory.push({ role: "assistant", content: answer });
 
           if (chatHistory.length > maxHistoryMessages) {
-            chatHistory.splice(0, chatHistory.length - maxHistoryMessages);
+            const removed = chatHistory.splice(0, chatHistory.length - maxHistoryMessages);
+            for (const message of removed) {
+              const content = String(message.content || "").replace(/\\s+/g, " ").trim();
+              if (content) {
+                compactedHistory.push((message.role === "user" ? "User" : "Assistant") + ": " + (content.length > 260 ? content.slice(0, 257).trim() + "..." : content));
+              }
+            }
+
+            if (compactedHistory.length > maxCompactedLines) {
+              compactedHistory.splice(0, compactedHistory.length - maxCompactedLines);
+            }
           }
+        }
+
+        function buildSubmittedHistory() {
+          if (compactedHistory.length === 0) {
+            return chatHistory;
+          }
+
+          return [
+            {
+              role: "user",
+              content: "Earlier compact conversation memory:\\n" + compactedHistory.join("\\n"),
+            },
+            ...chatHistory,
+          ];
         }
 
         function parseStreamEvent(rawEvent) {
@@ -2268,7 +2313,7 @@ function renderAiChatScript() {
               },
               body: JSON.stringify({
                 prompt,
-                messages: chatHistory,
+                messages: buildSubmittedHistory(),
                 centreKey: shell.dataset.centreKey || null,
                 windowKey: shell.dataset.windowKey || null,
               }),
@@ -2548,6 +2593,59 @@ function renderMetaRecommendations(
         })
         .join("")}
     </ul>
+  `;
+}
+
+function renderNotesPanel(notes: MetaRecommendationNoteView[]) {
+  return `
+    <div class="notes-panel">
+      <div class="meta-ads-table-wrap">
+        <table class="meta-ads-table meta-ads-table--latest-notes">
+        <thead>
+          <tr>
+            <th>Timestamp</th>
+            <th>Centre</th>
+            <th>Recommendation</th>
+            <th>Note</th>
+            <th class="meta-ads-table__actions">Edit</th>
+          </tr>
+        </thead>
+        <tbody data-latest-meta-notes-body>
+          ${
+            notes.length === 0
+              ? `<tr><td colspan="5" class="meta-ads-table__empty">No notes have been recorded yet.</td></tr>`
+              : notes
+                .map(
+                  (note) => `
+                <tr data-latest-meta-note-row data-meta-note-id="${note.id}">
+                  <td data-latest-meta-note-timestamp>${formatTimestamp(note.submittedAt)}</td>
+                  <td>${escapeHtml(note.centreName || "-")}</td>
+                  <td>${escapeHtml(note.heading || "-")}</td>
+                  <td class="meta-ads-latest-notes__text">
+                    <p data-latest-meta-note-text>${escapeHtml(note.text)}</p>
+                    <textarea data-latest-meta-note-input rows="3" hidden>${escapeHtml(note.text)}</textarea>
+                    <span data-latest-meta-note-status role="status"></span>
+                  </td>
+                  <td class="meta-ads-table__actions">
+                    <button type="button" data-latest-meta-note-edit title="Edit note" aria-label="Edit note">
+                      <i class="bi bi-pencil ui-icon" aria-hidden="true"></i>
+                    </button>
+                    <button type="button" data-latest-meta-note-save title="Save note" aria-label="Save note" hidden>
+                      <i class="bi bi-check-lg ui-icon" aria-hidden="true"></i>
+                    </button>
+                    <button type="button" data-latest-meta-note-cancel title="Cancel edit" aria-label="Cancel edit" hidden>
+                      <i class="bi bi-x-lg ui-icon" aria-hidden="true"></i>
+                    </button>
+                  </td>
+                </tr>
+              `,
+                )
+                .join("")
+          }
+        </tbody>
+        </table>
+      </div>
+    </div>
   `;
 }
 
@@ -3549,15 +3647,52 @@ function renderBreakoutScript() {
     <script>
       (() => {
         const storageKey = "marketing-helper-ai.last-output-screen-index";
+        const analyticsScrollKey = "marketing-helper-ai.analytics-table-scroll-top";
         const campaignEmailTemplate = ${serializeJsonForScript(META_CAMPAIGN_EMAIL_TEMPLATE)};
         const followUpEmailTemplate = ${serializeJsonForScript(META_FOLLOW_UP_EMAIL_TEMPLATE)};
 
-        function keepSelectedAnalyticsRowVisible() {
-          const selectedRow = document.querySelector(".analytics-table__row--selected");
-          const scrollContainer = selectedRow?.closest(".analytics-table-wrap");
+        function getAnalyticsScrollContainer() {
+          const container = document.querySelector(".analytics-table-wrap");
 
-          if (selectedRow instanceof HTMLElement && scrollContainer instanceof HTMLElement) {
-            selectedRow.scrollIntoView({ block: "center", inline: "nearest" });
+          return container instanceof HTMLElement ? container : null;
+        }
+
+        // Selecting a centre reloads /app, so the table would otherwise come
+        // back scrolled to the top. Remember where the user was and put them
+        // straight back there rather than moving the row under their cursor.
+        function rememberAnalyticsScrollTop() {
+          const scrollContainer = getAnalyticsScrollContainer();
+
+          if (!scrollContainer) {
+            return;
+          }
+
+          try {
+            sessionStorage.setItem(analyticsScrollKey, String(scrollContainer.scrollTop));
+          } catch (error) {}
+        }
+
+        function restoreAnalyticsScrollTop() {
+          const scrollContainer = getAnalyticsScrollContainer();
+
+          if (!scrollContainer) {
+            return;
+          }
+
+          let stored = null;
+
+          try {
+            stored = sessionStorage.getItem(analyticsScrollKey);
+          } catch (error) {}
+
+          if (stored === null) {
+            return;
+          }
+
+          const scrollTop = Number.parseFloat(stored);
+
+          if (Number.isFinite(scrollTop)) {
+            scrollContainer.scrollTop = scrollTop;
           }
         }
 
@@ -3910,6 +4045,111 @@ function renderBreakoutScript() {
           if (restoreButton instanceof HTMLButtonElement) {
             restoreButton.hidden = !isDeleted;
           }
+        }
+
+        function setLatestMetaNoteEditing(row, isEditing) {
+          const text = row.querySelector("[data-latest-meta-note-text]");
+          const input = row.querySelector("[data-latest-meta-note-input]");
+          const editButton = row.querySelector("[data-latest-meta-note-edit]");
+          const saveButton = row.querySelector("[data-latest-meta-note-save]");
+          const cancelButton = row.querySelector("[data-latest-meta-note-cancel]");
+          const status = row.querySelector("[data-latest-meta-note-status]");
+
+          if (text instanceof HTMLElement) {
+            text.hidden = isEditing;
+          }
+
+          if (input instanceof HTMLTextAreaElement) {
+            input.hidden = !isEditing;
+            if (isEditing) {
+              input.value = text?.textContent || "";
+              input.focus();
+            }
+          }
+
+          if (editButton instanceof HTMLButtonElement) {
+            editButton.hidden = isEditing;
+          }
+
+          if (saveButton instanceof HTMLButtonElement) {
+            saveButton.hidden = !isEditing;
+          }
+
+          if (cancelButton instanceof HTMLButtonElement) {
+            cancelButton.hidden = !isEditing;
+          }
+
+          if (status instanceof HTMLElement) {
+            status.textContent = "";
+          }
+        }
+
+        function syncMetaNoteText(id, text) {
+          for (const item of document.querySelectorAll('[data-meta-note-id="' + CSS.escape(String(id)) + '"]')) {
+            const inlineText = item.querySelector(":scope > span");
+
+            if (inlineText instanceof HTMLElement) {
+              inlineText.textContent = text;
+            }
+          }
+
+          const latestRow = document.querySelector('[data-latest-meta-note-row][data-meta-note-id="' + CSS.escape(String(id)) + '"]');
+          const latestText = latestRow?.querySelector("[data-latest-meta-note-text]");
+          const latestInput = latestRow?.querySelector("[data-latest-meta-note-input]");
+
+          if (latestText instanceof HTMLElement) {
+            latestText.textContent = text;
+          }
+
+          if (latestInput instanceof HTMLTextAreaElement) {
+            latestInput.value = text;
+          }
+        }
+
+        async function saveLatestMetaNote(row) {
+          const id = row.getAttribute("data-meta-note-id") || "";
+          const input = row.querySelector("[data-latest-meta-note-input]");
+          const status = row.querySelector("[data-latest-meta-note-status]");
+
+          if (!(input instanceof HTMLTextAreaElement) || !id) {
+            return;
+          }
+
+          const text = input.value.trim();
+
+          if (!text) {
+            if (status instanceof HTMLElement) {
+              status.textContent = "Enter note text before saving.";
+            }
+            return;
+          }
+
+          const response = await fetch("/api/meta-recommendation-notes/" + encodeURIComponent(id), {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ text }),
+          });
+
+          if (!response.ok) {
+            if (status instanceof HTMLElement) {
+              status.textContent = "Could not save note.";
+            }
+            return;
+          }
+
+          const payload = await response.json();
+          const updatedText = String(payload.note?.text || text);
+
+          syncMetaNoteText(id, updatedText);
+          setLatestMetaNoteEditing(row, false);
+
+          if (status instanceof HTMLElement) {
+            status.textContent = "Saved";
+          }
+
+          await loadMetaHistoryPage(1);
         }
 
         async function saveMetaNote(notification, textInput) {
@@ -4707,6 +4947,7 @@ function renderBreakoutScript() {
 
               if (response.ok) {
                 setMetaNoteDeletedState(note, true);
+                document.querySelector('[data-latest-meta-note-row][data-meta-note-id="' + CSS.escape(String(id)) + '"]')?.remove();
               }
             }
 
@@ -4730,6 +4971,45 @@ function renderBreakoutScript() {
               if (response.ok) {
                 setMetaNoteDeletedState(note, false);
               }
+            }
+
+            return;
+          }
+
+          const latestNoteEditButton = target.closest("[data-latest-meta-note-edit]");
+
+          if (latestNoteEditButton instanceof HTMLButtonElement) {
+            event.preventDefault();
+            const row = latestNoteEditButton.closest("[data-latest-meta-note-row]");
+
+            if (row instanceof HTMLTableRowElement) {
+              setLatestMetaNoteEditing(row, true);
+            }
+
+            return;
+          }
+
+          const latestNoteCancelButton = target.closest("[data-latest-meta-note-cancel]");
+
+          if (latestNoteCancelButton instanceof HTMLButtonElement) {
+            event.preventDefault();
+            const row = latestNoteCancelButton.closest("[data-latest-meta-note-row]");
+
+            if (row instanceof HTMLTableRowElement) {
+              setLatestMetaNoteEditing(row, false);
+            }
+
+            return;
+          }
+
+          const latestNoteSaveButton = target.closest("[data-latest-meta-note-save]");
+
+          if (latestNoteSaveButton instanceof HTMLButtonElement) {
+            event.preventDefault();
+            const row = latestNoteSaveButton.closest("[data-latest-meta-note-row]");
+
+            if (row instanceof HTMLTableRowElement) {
+              await saveLatestMetaNote(row);
             }
 
             return;
@@ -4834,6 +5114,7 @@ function renderBreakoutScript() {
 
             if (href) {
               selectAnalyticsRow(row);
+              rememberAnalyticsScrollTop();
               let openerNavigated = false;
 
               try {
@@ -4900,7 +5181,7 @@ function renderBreakoutScript() {
           }
         });
 
-        keepSelectedAnalyticsRowVisible();
+        restoreAnalyticsScrollTop();
         void loadMetaHistoryPage(1);
         setFullscreenButtonState();
       })();
@@ -5167,6 +5448,8 @@ export function renderAppShell(
             <span>source ${snapshotSet?.source ?? "none"}</span>
             <span>${snapshotSet ? formatTimestamp(snapshotSet.createdAt) : "pending"}</span>
           `
+        : panel.id === "notes"
+          ? `<span>${options.metaRecommendationNotes?.length ?? 0} active notes</span>`
         : panel.id === "meta-ads"
           ? `<span>${options.metaAdsDashboardData?.latestPullAt ? `last Meta pull ${formatTimestamp(options.metaAdsDashboardData.latestPullAt)}` : "no pull yet"}</span>`
           : panel.id === "waitlist"
@@ -5177,6 +5460,8 @@ export function renderAppShell(
     children:
       panel.id === "analytics"
         ? renderAnalyticsTable(snapshotSet, selectedCentreKey, selectedWindowKey, serviceSort, options.centreContacts ?? [], options.metaAdsDashboardData)
+        : panel.id === "notes"
+          ? renderNotesPanel(options.metaRecommendationNotes ?? [])
         : panel.id === "waitlist"
           ? renderWaitlistQualityPanel(
               waitlistSnapshotSet,

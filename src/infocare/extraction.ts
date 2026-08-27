@@ -45,6 +45,7 @@ type ChildListRequest = {
 
 type LicenseListRequest = {
   centreKey: number;
+  dateRange: ExtractionDateRange;
 };
 
 type BookingListRequest = {
@@ -151,6 +152,8 @@ export async function fetchCentreLicenseList(
 ) {
   const response = await client.request("get_license_list", {
     centre_key: request.centreKey,
+    start_date: request.dateRange.startDate,
+    end_date: request.dateRange.endDate,
   });
   const parsed = parseInfocareLicenseListResponse(response);
 
@@ -199,6 +202,9 @@ export async function extractCentreBundle(
   const licenses = await fetchCentreLicenseList(
     {
       centreKey: centre.centreKey,
+      // A week-wide range guarantees at least one open weekday; a single date
+      // can land on a weekend/closure where every capacity reads 0.
+      dateRange: weeklyDateRange,
     },
     client,
   );

@@ -1,4 +1,6 @@
 import type { JobDescriptionListItem, JdTitleProfileView, JdCentreProfileView } from "../../storage/jd-store.js";
+import { formatNzDisplayDate } from "./jd-date.js";
+import { formatJdLocationDisplay } from "./jd-email.js";
 
 function escapeHtml(value: string) {
   return value
@@ -7,13 +9,6 @@ function escapeHtml(value: string) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
-}
-
-function formatDate(iso: string | null): string {
-  if (!iso) return "";
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return "";
-  return date.toLocaleDateString("en-NZ", { day: "2-digit", month: "2-digit", year: "numeric" });
 }
 
 export type JdListPanelOptions = {
@@ -28,11 +23,11 @@ function renderJdRow(jd: JobDescriptionListItem): string {
     <article class="jd-list__row" data-jd-id="${jd.id}">
       <a class="jd-list__main" href="${href}">
         <span class="jd-list__title">${escapeHtml(jd.jobTitle)}</span>
-        <span class="jd-list__meta">${escapeHtml(jd.locationDisplay)} · ${escapeHtml(jd.positionType)}</span>
+        <span class="jd-list__meta">${escapeHtml(formatJdLocationDisplay(jd.locationDisplay))} · ${escapeHtml(jd.positionType)}</span>
       </a>
       <div class="jd-list__badges">
-        ${jd.dateAdvertised ? `<span class="jd-list__badge">Advertised ${escapeHtml(formatDate(jd.dateAdvertised))}</span>` : ""}
-        ${jd.closingAt ? `<span class="jd-list__badge">Closes ${escapeHtml(formatDate(jd.closingAt))}</span>` : ""}
+        ${jd.dateAdvertised ? `<span class="jd-list__badge">Advertised ${escapeHtml(formatNzDisplayDate(jd.dateAdvertised))}</span>` : ""}
+        ${jd.closingAt ? `<span class="jd-list__badge">Closes ${escapeHtml(formatNzDisplayDate(jd.closingAt))}</span>` : ""}
       </div>
       <div class="jd-list__actions">
         <a class="jd-list__link" href="/jd?panel=jd-blurb&jd=${jd.id}" title="Website blurb"><i class="bi bi-file-earmark-richtext ui-icon" aria-hidden="true"></i></a>
@@ -54,7 +49,6 @@ export function renderJdListPanel(options: JdListPanelOptions): string {
     .join("");
 
   return `
-    <a class="jd-back-link" href="/jd?panel=jd-settings"><i class="bi bi-gear ui-icon" aria-hidden="true"></i><span>Settings</span></a>
     <div class="jd-list" data-jd-list>
       <form class="jd-list__create" data-jd-create>
         <label>
@@ -71,7 +65,11 @@ export function renderJdListPanel(options: JdListPanelOptions): string {
             ${locationOptions}
           </select>
         </label>
-        <button type="submit"><i class="bi bi-plus-lg ui-icon" aria-hidden="true"></i><span>New Job Description</span></button>
+        <button type="submit" data-jd-create-submit><i class="bi bi-plus-lg ui-icon" aria-hidden="true"></i><span>New Job Description</span></button>
+        <div class="jd-list__create-busy" data-jd-create-busy role="status" aria-live="polite" hidden>
+          <span class="jd-list__create-spinner" aria-hidden="true"></span>
+          <span>Generating job description intro...</span>
+        </div>
       </form>
       <div class="jd-list__rows">
         ${rows || `<p class="jd-list__empty">No job descriptions yet. Create one above.</p>`}

@@ -1,6 +1,7 @@
 import type { CentreExtractionBundle } from "../infocare/extraction.js";
 import type { ServiceAnalyticsSnapshot, UrgencyBand, WindowScopedCounts } from "../infocare/models.js";
 import { WINDOW_OPTIONS } from "./windows.js";
+import { estimateActionableWaitlistCount } from "./waitlist-profile.js";
 import type { ManualCentreCapacity } from "../storage/analytics-store.js";
 
 type CentreCapacitySource = {
@@ -267,42 +268,85 @@ function calculateReplacementPressureCountsByWindow(
 }
 
 export function determineUrgencyBand(urgencyScore: number): UrgencyBand {
-  if (urgencyScore >= 75) {
+  if (urgencyScore >= 70) {
     return "Critical";
   }
 
-  if (urgencyScore >= 50) {
+  if (urgencyScore >= 45) {
     return "High";
   }
 
-  if (urgencyScore >= 25) {
+  if (urgencyScore >= 20) {
     return "Moderate";
   }
 
   return "Stable";
 }
 
-function calculateScaledUrgencyScore(rankIndex: number, total: number) {
-  if (total <= 1) {
-    return MAX_URGENCY_SCORE;
-  }
+// A shortfall only counts as material once it reaches this share of the
+// centre's own licensed capacity, so a 20-place and a 45-place centre are
+// judged on the same footing.
+const MATERIAL_SHORTFALL_CAPACITY_SHARE = 0.1;
 
-  const percentile = (total - 1 - rankIndex) / (total - 1);
+// The share of a centre's places that can sit empty before occupancy alone is
+// the problem. At or beyond this, empty seats score full marks on their own.
+const MATERIAL_UNDER_OCCUPANCY_SHARE = 0.25;
 
-  return Math.round(percentile * MAX_URGENCY_SCORE);
+type UrgencyScoreInput = {
+  licensedCapacity: number;
+  availablePlaces: number;
+  scopedLeavingCount: number;
+  actionableWaitlist: number;
+};
+
+/**
+ * Absolute 0-100 measure of how much enrolment pressure a centre is under.
+ *
+ * This is a real measurement, not a ranking: every centre can score low in a
+ * healthy week, and every centre can score high in a bad one. Nothing here
+ * depends on how other centres are doing.
+ */
+export function calculateUrgencyScore(input: UrgencyScoreInput) {
+  const capacity = Math.max(input.licensedCapacity, 1);
+  const materialPlaces = Math.max(capacity * MATERIAL_SHORTFALL_CAPACITY_SHARE, 1);
+
+  // Cover: the actionable waitlist (the "5" of 5/17) against how many children
+  // are leaving inside the selected window. 5 actionable against 10 leaving is
+  // not covered; the full waitlist total is deliberately ignored.
+  const uncoveredLeavers = Math.max(input.scopedLeavingCount - input.actionableWaitlist, 0);
+  const uncoveredScore = Math.min(uncoveredLeavers / materialPlaces, 1) * 45;
+
+  // Empty places measured against the centre's own size. A centre sitting at
+  // 60% occupancy is in trouble regardless of how few children are leaving,
+  // and a small centre feels each empty place far more than a large one.
+  const emptyShare = Math.min(input.availablePlaces / capacity, 1);
+  const emptySeatScore = Math.min(emptyShare / MATERIAL_UNDER_OCCUPANCY_SHARE, 1) * 40;
+
+  // No actionable waitlist at all means nothing absorbs the next departure,
+  // however quiet the centre looks today.
+  const noResilienceScore = input.actionableWaitlist === 0 ? 15 : 0;
+
+  return Math.round(
+    Math.min(uncoveredScore + emptySeatScore + noResilienceScore, MAX_URGENCY_SCORE),
+  );
 }
 
 function resolveLicensedCapacity(
   bundle: CentreExtractionBundle,
   manualCapacityMap: Map<number, ManualCentreCapacity>,
 ): CentreCapacitySource | null {
-  const firstLicense = bundle.licenses[0];
+  // Infocare returns one licence row per day, and closed days read 0. The
+  // centre's licensed capacity is the largest of those, not the first row.
+  const bestLicense = bundle.licenses.reduce<(typeof bundle.licenses)[number] | undefined>(
+    (best, license) => (license.max_children > (best?.max_children ?? 0) ? license : best),
+    undefined,
+  );
 
-  if (firstLicense?.max_children && firstLicense.max_children > 0) {
+  if (bestLicense?.max_children && bestLicense.max_children > 0) {
     return {
-      licensedCapacity: firstLicense.max_children,
-      maxU2: firstLicense.max_u2,
-      maxO2: firstLicense.max_o2,
+      licensedCapacity: bestLicense.max_children,
+      maxU2: bestLicense.max_u2,
+      maxO2: bestLicense.max_o2,
       source: "api",
     };
   }
@@ -449,14 +493,16 @@ export function computeServiceAnalyticsSnapshot(
   const enrolmentRatio = clampRatio(enrolledCount / licensedCapacity);
   const availablePlaces = Math.max(licensedCapacity - enrolledCount, 0);
   const waitlistCoverRatio = waitlistCount / Math.max(replacementPressure, 1);
-  const dualAgeRangeBonus =
-    (capacitySource?.maxU2 ?? 0) > 0 && (capacitySource?.maxO2 ?? 0) > 0 ? 8 : 0;
-  const urgencyScore =
-    availablePlaces * 5 +
-    waitlistCount * 7 +
-    replacementPressure * 6 +
-    (waitlistCoverRatio < 1 ? 12 : 0) +
-    dualAgeRangeBonus;
+  const urgencyScore = calculateUrgencyScore({
+    licensedCapacity,
+    availablePlaces,
+    scopedLeavingCount: knownLeavingCount,
+    actionableWaitlist: estimateActionableWaitlistCount({
+      waitlistCount,
+      waitlistUnder2Count,
+      licensedUnder2Capacity: capacitySource?.maxU2 ?? null,
+    }),
+  });
 
   return {
     centreKey: bundle.centre.centreKey,
@@ -488,8 +534,6 @@ export function computeServiceAnalyticsSnapshot(
     replacementPressureCountsByWindow,
     replacementPressure,
     waitlistCoverRatio,
-    urgencyScore,
-    urgencyBand: determineUrgencyBand(urgencyScore),
   };
 }
 
@@ -536,20 +580,14 @@ export function computeAnalyticsSnapshots(
     });
   }
 
-  computed.sort(
-    (left, right) =>
-      right.snapshot.urgencyScore - left.snapshot.urgencyScore ||
-      left.snapshot.serviceName.localeCompare(right.snapshot.serviceName),
+  // Stored in name order. Urgency ranking happens at read time against the
+  // window on screen, so there is no score to sort by here. This previously
+  // sorted by urgency and then overwrote each score with a rank percentile,
+  // which forced a fixed number of Critical and Stable centres every week no
+  // matter how the centres were actually doing.
+  computed.sort((left, right) =>
+    left.snapshot.serviceName.localeCompare(right.snapshot.serviceName),
   );
-
-  const totalSnapshots = computed.length;
-
-  for (const [index, entry] of computed.entries()) {
-    const scaledUrgencyScore = calculateScaledUrgencyScore(index, totalSnapshots);
-
-    entry.snapshot.urgencyScore = scaledUrgencyScore;
-    entry.snapshot.urgencyBand = determineUrgencyBand(scaledUrgencyScore);
-  }
 
   return {
     snapshots: computed.map((entry) => entry.snapshot),

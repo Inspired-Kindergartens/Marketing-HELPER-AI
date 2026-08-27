@@ -143,6 +143,11 @@ export function renderGeneralChatPage(data: GeneralChatPageData) {
         <div class="general-chat-messages" data-chat-messages>${renderMessages(data)}</div>
         <form class="general-chat-composer" data-chat-composer>
           <textarea name="prompt" placeholder="Ask for help with anything..." ${selectedId == null ? "disabled" : ""}></textarea>
+          <label class="general-chat-file-button" title="Attach document" aria-label="Attach document">
+            <i class="bi bi-paperclip" aria-hidden="true"></i>
+            <input type="file" name="document" accept=".pdf,.txt,.md,.csv,.json,.xml,.yml,.yaml,.log,.rtf,application/pdf,text/*,application/json,application/xml" ${selectedId == null ? "disabled" : ""} />
+          </label>
+          <span class="general-chat-file-name" data-chat-file-name></span>
           <button type="submit" ${selectedId == null ? "disabled" : ""} title="Send" aria-label="Send"><i class="bi bi-send" aria-hidden="true"></i></button>
         </form>
       </section>
@@ -374,24 +379,45 @@ export function renderGeneralChatPage(data: GeneralChatPageData) {
           composer.requestSubmit();
         });
 
+        var fileInput = composer ? composer.querySelector('input[type="file"][name="document"]') : null;
+        var fileName = document.querySelector("[data-chat-file-name]");
+        fileInput?.addEventListener("change", function (event) {
+          var input = event.currentTarget;
+          var file = input.files && input.files[0] ? input.files[0] : null;
+          if (fileName) fileName.textContent = file ? file.name : "";
+        });
+
         composer?.addEventListener("submit", function (event) {
           event.preventDefault();
           if (!selectedConversation) return;
           var input = composer.querySelector("textarea");
           var button = composer.querySelector("button");
+          var file = fileInput && fileInput.files && fileInput.files[0] ? fileInput.files[0] : null;
           var prompt = input.value.trim();
-          if (!prompt) return;
+          if (!prompt && !file) return;
           input.value = "";
           input.disabled = true;
           button.disabled = true;
-          pendingUserRow = appendMessage("user", prompt);
+          if (fileInput) fileInput.disabled = true;
+          pendingUserRow = appendMessage("user", file ? (prompt || "Read this document.") + "\\n\\nAttached document: " + file.name : prompt);
           pendingAssistantRow = appendMessage("assistant", "Beep Beep is thinking", "pending");
           var sourceText = "";
+          var requestBody = null;
+          var requestHeaders = {};
+
+          if (file) {
+            requestBody = new FormData();
+            requestBody.append("prompt", prompt);
+            requestBody.append("document", file);
+          } else {
+            requestHeaders["Content-Type"] = "application/json";
+            requestBody = JSON.stringify({ prompt: prompt });
+          }
 
           fetch("/api/general-chat/conversations/" + selectedConversation + "/stream", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ prompt: prompt }),
+            headers: requestHeaders,
+            body: requestBody,
           }).then(function (response) {
             if (!response.ok || !response.body) throw new Error("Chat request failed.");
             var reader = response.body.getReader();
@@ -443,6 +469,11 @@ export function renderGeneralChatPage(data: GeneralChatPageData) {
           }).finally(function () {
             input.disabled = false;
             button.disabled = false;
+            if (fileInput) {
+              fileInput.value = "";
+              fileInput.disabled = false;
+            }
+            if (fileName) fileName.textContent = "";
             input.focus();
           });
         });

@@ -59,10 +59,32 @@ export const infocareChildResponseSchema = infocareEnvelopeSchema.extend({
   child: infocareChildSchema,
 });
 
+export const infocareContactSchema = z
+  .object({
+    contact_key: z.coerce.number().int(),
+    family_key: z.coerce.number().int().optional(),
+    first_name: z.string().optional(),
+    last_name: z.string().optional(),
+    relationship: z.string().optional(),
+    primary_caregiver: z.boolean().optional(),
+    emergency_contact: z.boolean().optional(),
+    collection_permitted: z.boolean().optional(),
+    email: z.string().optional(),
+    daytime_telephone: z.string().optional(),
+    evening_telephone: z.string().optional(),
+    mobile: z.string().optional(),
+  })
+  .passthrough();
+
+export const infocareContactListResponseSchema = infocareEnvelopeSchema.extend({
+  contact_list: z.array(infocareContactSchema).optional(),
+});
+
 export const infocareLicenseSchema = z
   .object({
     centre_key: z.coerce.number().int().optional(),
     license_number: z.coerce.number().int().optional(),
+    date: isoDateSchema.optional(),
     max_children: z.coerce.number().int(),
     max_u2: z.coerce.number().int().optional(),
     max_o2: z.coerce.number().int().optional(),
@@ -71,7 +93,7 @@ export const infocareLicenseSchema = z
 
 export const infocareLicenseListResponseSchema = infocareEnvelopeSchema.extend({
   license_list: z.array(infocareLicenseSchema).optional(),
-  day_list: z.array(z.unknown()).optional(),
+  day_list: z.array(infocareLicenseSchema).optional(),
 });
 
 export const infocareBookingSchema = z
@@ -136,8 +158,6 @@ export const serviceAnalyticsSnapshotSchema = z.object({
   replacementPressureCountsByWindow: windowScopedCountsSchema.optional(),
   replacementPressure: z.number().int(),
   waitlistCoverRatio: z.number(),
-  urgencyScore: z.number(),
-  urgencyBand: urgencyBandSchema,
 });
 
 export const infocareChildListCategorySchema = z.enum([
@@ -153,6 +173,8 @@ export type InfocareCentreListResponse = z.infer<typeof infocareCentreListRespon
 export type InfocareChild = z.infer<typeof infocareChildSchema>;
 export type InfocareChildListResponse = z.infer<typeof infocareChildListResponseSchema>;
 export type InfocareChildResponse = z.infer<typeof infocareChildResponseSchema>;
+export type InfocareContact = z.infer<typeof infocareContactSchema>;
+export type InfocareContactListResponse = z.infer<typeof infocareContactListResponseSchema>;
 export type InfocareLicense = z.infer<typeof infocareLicenseSchema>;
 export type InfocareBooking = z.infer<typeof infocareBookingSchema>;
 export type InfocareBookingListResponse = z.infer<typeof infocareBookingListResponseSchema>;
@@ -175,12 +197,25 @@ export function parseInfocareChildResponse(value: unknown) {
   return infocareChildResponseSchema.parse(value);
 }
 
-export function parseInfocareLicenseListResponse(value: unknown) {
-  const parsed = infocareLicenseListResponseSchema.parse(value);
+export function parseInfocareContactListResponse(value: unknown) {
+  const parsed = infocareContactListResponseSchema.parse(value);
 
   return {
     ...parsed,
-    license_list: parsed.license_list ?? [],
+    contact_list: parsed.contact_list ?? [],
+  };
+}
+
+export function parseInfocareLicenseListResponse(value: unknown) {
+  const parsed = infocareLicenseListResponseSchema.parse(value);
+
+  // The live API returns per-day licence rows under `day_list`; `license_list`
+  // is only ever seen in fixtures. Prefer whichever is populated.
+  const licenses = parsed.day_list?.length ? parsed.day_list : parsed.license_list ?? [];
+
+  return {
+    ...parsed,
+    license_list: licenses,
   };
 }
 

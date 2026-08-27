@@ -1,4 +1,6 @@
 import type { JobDescriptionView, JdBlurbVersion } from "../../storage/jd-store.js";
+import { NZ_TIME_ZONE } from "./jd-date.js";
+import { buildJdWebsitePageTitle } from "./jd-email.js";
 
 function escapeHtml(value: string) {
   return value
@@ -12,7 +14,7 @@ function escapeHtml(value: string) {
 function formatTimestamp(iso: string): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return "";
-  return date.toLocaleString("en-NZ", { day: "numeric", month: "short", year: "numeric", hour: "numeric", minute: "2-digit" });
+  return date.toLocaleString("en-NZ", { timeZone: NZ_TIME_ZONE, day: "numeric", month: "short", year: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
 export type JdBlurbPanelOptions = {
@@ -42,7 +44,6 @@ export function renderJdBlurbPanel(options: JdBlurbPanelOptions): string {
     .join("");
 
   return `
-    <a class="jd-back-link" href="/jd?panel=jd-editor&jd=${jd.id}"><i class="bi bi-arrow-left ui-icon" aria-hidden="true"></i><span>Back to ${escapeHtml(jd.jobTitle)} - ${escapeHtml(jd.locationDisplay)}</span></a>
     <div class="jd-blurb" data-jd-blurb data-jd-id="${jd.id}">
       <div class="jd-blurb__toolbar" data-blurb-toolbar>
         <button type="button" data-blurb-cmd="formatBlock" data-blurb-value="H1" title="Heading 1"><i class="bi bi-type-h1 ui-icon" aria-hidden="true"></i></button>
@@ -55,6 +56,7 @@ export function renderJdBlurbPanel(options: JdBlurbPanelOptions): string {
         <button type="button" data-blurb-cmd="createLink" title="Hyperlink"><i class="bi bi-link-45deg ui-icon" aria-hidden="true"></i></button>
         <button type="button" class="jd-blurb__generate" data-blurb-generate><i class="bi bi-stars ui-icon" aria-hidden="true"></i><span>Generate with AI</span></button>
         <button type="button" class="jd-blurb__copy" data-blurb-copy><i class="bi bi-clipboard ui-icon" aria-hidden="true"></i><span>Copy to clipboard</span></button>
+        <button type="button" class="jd-blurb__copy" data-blurb-copy-title data-page-title="${escapeHtml(buildJdWebsitePageTitle(jd))}"><i class="bi bi-clipboard ui-icon" aria-hidden="true"></i><span>Copy Website Page Title</span></button>
       </div>
 
       <div class="jd-blurb__editor" data-blurb-editor contenteditable="true">${jd.blurbHtml ?? "<p>No blurb yet — a first draft may still be generating in the background (usually under a minute), or click Generate with AI.</p>"}</div>
@@ -270,6 +272,13 @@ export function renderJdBlurbPanel(options: JdBlurbPanelOptions): string {
               .catch(function() { window.alert("Restore failed. Please try again."); });
           });
         });
+
+        var copyTitleBtn = root.querySelector("[data-blurb-copy-title]");
+        if (copyTitleBtn) {
+          copyTitleBtn.addEventListener("click", function() {
+            navigator.clipboard.writeText(copyTitleBtn.getAttribute("data-page-title") || "");
+          });
+        }
 
         var copyBtn = root.querySelector("[data-blurb-copy]");
         if (copyBtn) {

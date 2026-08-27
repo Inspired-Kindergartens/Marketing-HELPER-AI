@@ -2,7 +2,7 @@ import type { AiChatMessage } from "./client.js";
 import { sanitizeChatHistory, type AiChatHistoryMessageInput } from "./chat.js";
 import type { FormstackDashboardData } from "../storage/formstack-store.js";
 import type { MailchimpDashboardData } from "../storage/mailchimp-store.js";
-import type { PostmarkDashboardData } from "../storage/postmark-store.js";
+import type { PostmarkDashboardData, PostmarkMessageView } from "../storage/postmark-store.js";
 
 export type CommsAiContextInput = {
   mailchimp: MailchimpDashboardData | null;
@@ -70,6 +70,7 @@ export function buildCommsSystemPrompt() {
   return [
     "You are Beep Beep, the assistant inside the Online Communications dashboard.",
     "Answer only from the supplied Postmark, Mailchimp and Formstack dashboard context.",
+    "If local communications grounding says the app has already queried stored webhook/database records, treat that grounding as available evidence and do not respond with a generic email-system access refusal.",
     "Do not imply individual conversion attribution between email activity and form submissions.",
     "Postmark values are webhook events received by this application, not a full historical mailbox export.",
     "Panui Mailchimp campaigns are organisation-wide staff newsletters and are not attributable to individual centres.",
@@ -82,16 +83,83 @@ export function buildCommsAiChatMessages(
   context: CommsAiDashboardContext,
   prompt: string,
   history: AiChatHistoryMessageInput[] | undefined,
+  extraGrounding?: string | null,
 ): AiChatMessage[] {
-  return [
+  const messages: AiChatMessage[] = [
     { role: "system", content: buildCommsSystemPrompt() },
     {
       role: "user",
       content: `Current Communications dashboard context JSON:\n${JSON.stringify(context)}\nUse only this context as evidence.`,
     },
-    ...sanitizeChatHistory(history),
-    { role: "user", content: prompt },
   ];
+
+  if (extraGrounding?.trim()) {
+    messages.push({
+      role: "user",
+      content: extraGrounding.trim(),
+    });
+  }
+
+  messages.push(...sanitizeChatHistory(history), { role: "user", content: prompt });
+
+  return messages;
+}
+
+export function isLocalCommunicationsPrompt(prompt: string) {
+  return /\b(email|emails|e-mail|webmail|postmark|webhook|message|messages|sent|delivered|opened|bounced|traffic|communication|communications)\b/i.test(prompt);
+}
+
+function compactPostmarkMessage(message: PostmarkMessageView) {
+  return {
+    messageId: message.messageId,
+    recipient: message.recipient,
+    tag: message.tag,
+    centreKey: message.centreKey,
+    centreName: message.centreName,
+    category: message.category,
+    latestOccurredAt: message.latestOccurredAt,
+    delivered: message.delivered,
+    opened: message.opened,
+    clicked: message.clicked,
+    bounced: message.bounced,
+  };
+}
+
+export function buildLocalCommunicationsGrounding(input: {
+  prompt: string;
+  postmark: PostmarkDashboardData;
+  centreName?: string | null;
+}) {
+  return [
+    "Local communications database grounding:",
+    "The app has already queried stored Postmark webhook/export records from the local database for this question. Do not say you cannot access email systems.",
+    "Use this evidence to answer the user's exact request. If the user asks whether there are recent emails to a centre, answer directly with the count and newest matching activity.",
+    "Postmark webhook data is event traffic captured by this app, not a full mailbox search.",
+    `Requested centre: ${input.centreName ?? "not specifically resolved"}`,
+    `User prompt: ${input.prompt}`,
+    JSON.stringify({
+      latestReceivedAt: input.postmark.latestReceivedAt,
+      delivered: input.postmark.delivered,
+      opened: input.postmark.opened,
+      clicked: input.postmark.clicked,
+      bounced: input.postmark.bounced,
+      relevantMessageCount: input.postmark.relevantMessageCount,
+      centreMessageCount: input.postmark.centreMessageCount,
+      officeStaffMessageCount: input.postmark.officeStaffMessageCount,
+      recentMessages: input.postmark.recentMessages.map(compactPostmarkMessage),
+      centreActivity: input.postmark.centreActivity,
+      webhookCheck: input.postmark.webhookCheck
+        ? {
+            status: input.postmark.webhookCheck.status,
+            message: input.postmark.webhookCheck.message,
+            latestOccurredAt: input.postmark.webhookCheck.latestOccurredAt,
+            latestReceivedAt: input.postmark.webhookCheck.latestReceivedAt,
+            eventsLast24h: input.postmark.webhookCheck.eventsLast24h,
+            eventsLast48h: input.postmark.webhookCheck.eventsLast48h,
+          }
+        : null,
+    }),
+  ].join("\n");
 }
 
 export function buildBuiltinCommsAnswer(context: CommsAiDashboardContext, prompt: string) {
