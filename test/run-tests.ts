@@ -15,3 +15,4 @@ import "./postmark-centre-match.test.js";
 import "./task-store.test.js";
 import "./tasks-app-shell.test.js";
 import "./waitlist-report.test.js";
+import "./wiki-store.test.js";

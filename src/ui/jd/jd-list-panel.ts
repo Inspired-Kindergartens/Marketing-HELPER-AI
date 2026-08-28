@@ -42,7 +42,10 @@ function renderJdRow(jd: JobDescriptionListItem): string {
 export function renderJdListPanel(options: JdListPanelOptions): string {
   const rows = options.jobDescriptions.map(renderJdRow).join("");
   const titleOptions = options.titleProfiles
-    .map((profile) => `<option value="${profile.id}">${escapeHtml(profile.jobTitle)}</option>`)
+    .map(
+      (profile) =>
+        `<option value="${profile.id}" data-centre-specific="${profile.isCentreSpecific ? "true" : "false"}">${escapeHtml(profile.jobTitle)}</option>`,
+    )
     .join("");
   const locationOptions = options.centreProfiles
     .map((centre) => `<option value="${centre.centreKey}">${escapeHtml(centre.locationDisplay)}</option>`)
@@ -58,7 +61,7 @@ export function renderJdListPanel(options: JdListPanelOptions): string {
             ${titleOptions}
           </select>
         </label>
-        <label>
+        <label data-jd-location-field>
           <span>Location</span>
           <select name="centreKey" required>
             <option value="" disabled selected>Select a kindergarten</option>
@@ -71,6 +74,34 @@ export function renderJdListPanel(options: JdListPanelOptions): string {
           <span>Generating job description intro...</span>
         </div>
       </form>
+      <script>
+        (function() {
+          // Org-wide roles (e.g. office staff) are not based at a kindergarten,
+          // so the Location step is hidden and not required for them.
+          var form = document.querySelector("[data-jd-create]");
+          if (!form) return;
+          var titleSelect = form.querySelector('[name="jobTitleProfileId"]');
+          var locationField = form.querySelector("[data-jd-location-field]");
+          var locationSelect = form.querySelector('[name="centreKey"]');
+          if (!titleSelect || !locationField || !locationSelect) return;
+
+          function syncLocationVisibility() {
+            var option = titleSelect.options[titleSelect.selectedIndex];
+            var centreSpecific = !option || option.getAttribute("data-centre-specific") !== "false";
+            locationField.hidden = !centreSpecific;
+            locationSelect.disabled = !centreSpecific;
+            if (centreSpecific) {
+              locationSelect.setAttribute("required", "required");
+            } else {
+              locationSelect.removeAttribute("required");
+              locationSelect.value = "";
+            }
+          }
+
+          titleSelect.addEventListener("change", syncLocationVisibility);
+          syncLocationVisibility();
+        })();
+      </script>
       <div class="jd-list__rows">
         ${rows || `<p class="jd-list__empty">No job descriptions yet. Create one above.</p>`}
       </div>

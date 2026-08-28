@@ -43,18 +43,15 @@ function escapeHtml(value: string) {
 }
 
 function renderPanelActions(panelId: string, options: JdAppShellOptions): string | undefined {
-  if (panelId === "jd-list") {
-    return `
-      <a class="panel-action-link" href="/jd?panel=jd-settings"><i class="bi bi-gear ui-icon" aria-hidden="true"></i><span>Settings</span></a>
-    `;
-  }
-
+  // The list and settings panels sit side by side on /jd, so neither needs a
+  // link to the other. Only the editor and blurb - which replace the whole
+  // view - carry a way back, and that goes to /jd itself.
   if (panelId === "jd-editor" && options.editor.jobDescription) {
     const jd = options.editor.jobDescription;
     const emailHref = buildJdGenerateEmailHref(jd);
 
     return `
-      <a class="panel-action-link" href="/jd?panel=jd-list"><i class="bi bi-arrow-left ui-icon" aria-hidden="true"></i><span>Back to Job Descriptions</span></a>
+      <a class="panel-action-link" href="/jd"><i class="bi bi-arrow-left ui-icon" aria-hidden="true"></i><span>Back to Job Descriptions</span></a>
       <a class="panel-action-link" href="/jd?panel=jd-blurb&jd=${jd.id}"><i class="bi bi-file-earmark-richtext ui-icon" aria-hidden="true"></i><span>Website blurb for this JD</span></a>
       <a class="panel-action-link" href="${escapeHtml(emailHref)}"><i class="bi bi-envelope-plus ui-icon" aria-hidden="true"></i><span>Generate Email</span></a>
     `;
@@ -65,12 +62,6 @@ function renderPanelActions(panelId: string, options: JdAppShellOptions): string
 
     return `
       <a class="panel-action-link" href="/jd?panel=jd-editor&jd=${jd.id}"><i class="bi bi-arrow-left ui-icon" aria-hidden="true"></i><span>Back to ${escapeHtml(jd.jobTitle)} - ${escapeHtml(formatJdLocationDisplay(jd.locationDisplay))}</span></a>
-    `;
-  }
-
-  if (panelId === "jd-settings") {
-    return `
-      <a class="panel-action-link" href="/jd?panel=jd-list"><i class="bi bi-arrow-left ui-icon" aria-hidden="true"></i><span>Back to Job Descriptions</span></a>
     `;
   }
 
@@ -312,6 +303,32 @@ function renderJdScript(): string {
             post("/api/jd/settings/title", formData(form));
             return;
           }
+          if (form.hasAttribute("data-jd-global-settings")) {
+            event.preventDefault();
+            post("/api/jd/settings/global", formData(form));
+            return;
+          }
+          if (form.hasAttribute("data-jd-title-create")) {
+            event.preventDefault();
+            var createStatus = document.querySelector("[data-jd-title-create-status]");
+            fetch("/api/jd/settings/title/create", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(formData(form)),
+            })
+              .then(function (response) { return response.json(); })
+              .then(function (payload) {
+                if (payload && payload.error) {
+                  if (createStatus) createStatus.textContent = payload.error;
+                  return;
+                }
+                window.location.reload();
+              })
+              .catch(function () {
+                if (createStatus) createStatus.textContent = "Could not add the job type. Please try again.";
+              });
+            return;
+          }
           if (form.hasAttribute("data-jd-knowledge-doc")) {
             event.preventDefault();
             post("/api/jd/settings/knowledge-doc", formData(form));
@@ -373,12 +390,24 @@ function renderJdScript(): string {
 export function renderJdAppShell(options: JdAppShellOptions): string {
   const focusPanelId = resolveJdFocusPanelId(options.focusPanelId);
 
-  const panelContent = PANEL_DEFINITIONS.map((panel) => ({
+  // JD Editor and Website Blurb both need a selected job description. Without
+  // one they render nothing but a "select a job description" placeholder, so
+  // on the bare /jd list view they are left out of the accordion entirely
+  // rather than sitting there as sections that can never be filled in.
+  const hasSelectedJd = options.editor.jobDescription != null || options.blurb.jobDescription != null;
+  const visiblePanels = PANEL_DEFINITIONS.filter(
+    (panel) => hasSelectedJd || (panel.id !== "jd-editor" && panel.id !== "jd-blurb"),
+  );
+
+  const panelContent = visiblePanels.map((panel) => ({
     id: panel.id,
     title: panel.title,
     className: panel.className,
     actions: renderPanelActions(panel.id, options),
     children: renderPanelContent(panel.id, options),
+    // Settings is a reference/maintenance panel, so it sits in the right-hand
+    // column beside the main list rather than in the left accordion.
+    sidePanel: panel.id === "jd-settings",
   }));
   const layout = renderLayout({ panels: panelContent, focusPanelId });
 
@@ -399,6 +428,7 @@ export function renderJdAppShell(options: JdAppShellOptions): string {
       <a class="nav-rail__item" href="/tasks" aria-label="Tasks" title="Tasks"><i class="bi bi-check2-square" aria-hidden="true"></i></a>
       <a class="nav-rail__item" href="/comms" aria-label="Online Communications dashboard" title="Online Communications"><i class="bi bi-envelope-paper" aria-hidden="true"></i></a>
       <a class="nav-rail__item nav-rail__item--current" href="/jd" aria-label="Job Descriptions" title="Job Descriptions" aria-current="page"><i class="bi bi-file-earmark-person" aria-hidden="true"></i></a>
+      <a class="nav-rail__item" href="/wiki" aria-label="Things To Know" title="Things To Know"><i class="bi bi-journal-bookmark" aria-hidden="true"></i></a>
     </aside>
     ${layout}
     ${renderJdScript()}

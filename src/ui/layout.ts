@@ -7,6 +7,10 @@ type LayoutPanel = {
   className?: string;
   meta?: string;
   actions?: string;
+  // Render this panel in the right-hand column instead of the left accordion.
+  // The dashboard's chat panel opts in via its panel--chat class; other pages
+  // (e.g. /jd Settings) set this flag explicitly.
+  sidePanel?: boolean;
 };
 
 type LayoutOptions = {
@@ -51,8 +55,9 @@ export function renderLayout({ panels, focusPanelId }: LayoutOptions) {
     `;
   }
 
-  const chatPanel = panels.find((panel) => panel.className?.includes("panel--chat"));
-  const leftPanels = panels.filter((panel) => !panel.className?.includes("panel--chat"));
+  const isSidePanel = (panel: LayoutPanel) => panel.sidePanel === true || panel.className?.includes("panel--chat") === true;
+  const chatPanel = panels.find(isSidePanel);
+  const leftPanels = panels.filter((panel) => !isSidePanel(panel));
   const activeAccordionPanelId = leftPanels[0]?.id ?? "";
 
   return `

@@ -789,6 +789,15 @@ model JdAgreement {
 // and the non-standard "extras" used by the administrator/professional
 // layouts (position hours, reports-to, remuneration text, etc). One row per
 // dropdown entry in the JD "Job Title" field.
+// Single-row store for JD settings that apply across every job description
+// (id is pinned to 1). Currently the "Last Reviewed by" acronym printed in the
+// PDF footer's Last Updated By row.
+model JdGlobalSetting {
+  id                   Int      @id @default(1)
+  lastReviewedByAcronym String  @default("")
+  updatedAt            DateTime @updatedAt
+}
+
 model JdTitleProfile {
   id                  Int              @id @default(autoincrement())
   jobTitle            String           @unique
@@ -796,6 +805,7 @@ model JdTitleProfile {
   jobCategory         String
   payScaleKey         String?
   layoutVariant       String           @default("standard") // standard | administrator | professional
+  isCentreSpecific    Boolean          @default(true) // false for org-wide roles (e.g. office staff) that are not tied to a kindergarten
   defaultPositionType String           @default("Full Time")
   agreementText       String           @default("Kindergarten Teachers Collective Agreement")
   qualificationsText  String
@@ -891,4 +901,38 @@ model JdKnowledgeDoc {
 
   @@unique([kind, centreKey, label])
   @@index([kind, centreKey])
+}
+
+// "Things To Know": a hand-maintained marketing wiki. Each article is one
+// topic, grouped into a category and tagged for retrieval. The AI chats pull
+// the highest-scoring articles in as grounding rather than sending the whole
+// wiki, so this can grow well past the model's context window.
+model WikiArticle {
+  id          Int      @id @default(autoincrement())
+  title       String
+  category    String   @default("General")
+  tags        String   @default("") // comma-separated, lower-cased on write
+  summary     String   @default("") // one-line gist, always sent in the AI index
+  contentHtml String   @default("")
+  isPinned    Boolean  @default(false) // pinned articles are always sent to the AI
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([category, title])
+  @@index([updatedAt(sort: Desc)])
+}
+
+// Wiki categories. Held in the database rather than in code so they can be
+// renamed and deleted from the UI. The AI must file each article under exactly
+// one of these; `isProtected` marks the fallback (General) that cannot be
+// deleted, so an article always has somewhere to live.
+model WikiCategory {
+  id          Int      @id @default(autoincrement())
+  name        String   @unique
+  sortOrder   Int      @default(0)
+  isProtected Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([sortOrder, name])
 }

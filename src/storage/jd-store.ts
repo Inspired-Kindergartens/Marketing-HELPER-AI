@@ -46,6 +46,8 @@ export type JdTitleProfileView = {
   qualificationsText: string;
   roleSections: RoleSection[];
   extras: JdTitleExtras | null;
+  // false for org-wide roles (e.g. office staff) not tied to a kindergarten.
+  isCentreSpecific: boolean;
 };
 
 export type JdCentreProfileView = {
@@ -241,6 +243,7 @@ function toTitleProfileView(row: {
   qualificationsText: string;
   roleSections: unknown;
   extras: unknown;
+  isCentreSpecific: boolean;
 }): JdTitleProfileView {
   return {
     id: row.id,
@@ -254,6 +257,7 @@ function toTitleProfileView(row: {
     qualificationsText: row.qualificationsText,
     roleSections: (row.roleSections as RoleSection[]) ?? [],
     extras: (row.extras as JdTitleExtras | null) ?? null,
+    isCentreSpecific: row.isCentreSpecific,
   };
 }
 
@@ -278,6 +282,8 @@ export type JdTitleProfileInput = {
   qualificationsText: string;
   roleSections: RoleSection[];
   extras?: JdTitleExtras | null;
+  // false for org-wide roles (e.g. office staff) with no kindergarten.
+  isCentreSpecific?: boolean;
 };
 
 export async function upsertTitleProfile(input: JdTitleProfileInput): Promise<number> {
@@ -293,6 +299,7 @@ export async function upsertTitleProfile(input: JdTitleProfileInput): Promise<nu
     qualificationsText: input.qualificationsText,
     roleSections: toJsonInput(input.roleSections as object),
     extras: toJsonInput(input.extras ?? null),
+    isCentreSpecific: input.isCentreSpecific ?? true,
   };
   const row = await prisma.jdTitleProfile.upsert({
     where: { jobTitle },
@@ -305,21 +312,68 @@ export async function upsertTitleProfile(input: JdTitleProfileInput): Promise<nu
 
 // --- Centre profiles ---------------------------------------------------------
 
+// Most centres have no saved JdCentreProfile yet, so Settings would show them
+// as blank rows. Fall back to the earliest Job Description written for that
+// centre, which is where the original website intro paragraph and the Senior
+// Teacher were first captured. This only prefills the form for editing -
+// nothing is written back until the user saves the row.
+type CentreFallback = { introParagraph: string; seniorTeacherName: string; seniorTeacherAcronym: string };
+
+async function listCentreFallbacks(centreKeys: number[]): Promise<Map<number, CentreFallback>> {
+  if (centreKeys.length === 0) return new Map();
+
+  const rows = await prisma.jobDescription.findMany({
+    where: { centreKey: { in: centreKeys } },
+    // Oldest first so the first JD written for a centre wins.
+    orderBy: { createdAt: "asc" },
+    select: {
+      centreKey: true,
+      introParagraph: true,
+      seniorTeacherName: true,
+      // A JD stores the centre's Senior Teacher acronym as reviewedByAcronym
+      // (see createJobDescription, which copies it from the centre profile).
+      reviewedByAcronym: true,
+    },
+  });
+
+  const fallbacks = new Map<number, CentreFallback>();
+  for (const row of rows) {
+    if (row.centreKey == null) continue;
+    const current = fallbacks.get(row.centreKey) ?? {
+      introParagraph: "",
+      seniorTeacherName: "",
+      seniorTeacherAcronym: "",
+    };
+    // Keep the first non-empty value seen per field, so a later JD can supply
+    // something the earliest one left blank.
+    if (!current.introParagraph) current.introParagraph = row.introParagraph ?? "";
+    if (!current.seniorTeacherName) current.seniorTeacherName = row.seniorTeacherName ?? "";
+    if (!current.seniorTeacherAcronym) current.seniorTeacherAcronym = row.reviewedByAcronym ?? "";
+    fallbacks.set(row.centreKey, current);
+  }
+  return fallbacks;
+}
+
 export async function listCentreProfiles(): Promise<JdCentreProfileView[]> {
   const rows = await prisma.centreReference.findMany({
     where: { openStatus: "Open", ignored: false },
     orderBy: { name: "asc" },
     select: { centreKey: true, name: true, jdCentreProfile: true },
   });
-  return rows.map((row) => ({
-    centreKey: row.centreKey,
-    centreName: row.name,
-    locationDisplay: row.jdCentreProfile?.locationDisplay ?? defaultLocationDisplay(row.name),
-    introParagraph: row.jdCentreProfile?.introParagraph ?? "",
-    seniorTeacherName: row.jdCentreProfile?.seniorTeacherName ?? "",
-    seniorTeacherAcronym: row.jdCentreProfile?.seniorTeacherAcronym ?? "",
-    isEnviroschool: row.jdCentreProfile?.isEnviroschool ?? false,
-  }));
+  const fallbacks = await listCentreFallbacks(rows.map((row) => row.centreKey));
+
+  return rows.map((row) => {
+    const fallback = fallbacks.get(row.centreKey);
+    return {
+      centreKey: row.centreKey,
+      centreName: row.name,
+      locationDisplay: row.jdCentreProfile?.locationDisplay ?? defaultLocationDisplay(row.name),
+      introParagraph: row.jdCentreProfile?.introParagraph || fallback?.introParagraph || "",
+      seniorTeacherName: row.jdCentreProfile?.seniorTeacherName || fallback?.seniorTeacherName || "",
+      seniorTeacherAcronym: row.jdCentreProfile?.seniorTeacherAcronym || fallback?.seniorTeacherAcronym || "",
+      isEnviroschool: row.jdCentreProfile?.isEnviroschool ?? false,
+    };
+  });
 }
 
 export async function getCentreProfile(centreKey: number): Promise<JdCentreProfileView | null> {
@@ -362,6 +416,28 @@ export async function upsertCentreProfile(
     where: { centreKey },
     update: data,
     create: { centreKey, ...data },
+  });
+}
+
+// --- Global JD settings ------------------------------------------------------
+
+// Settings that apply to every job description rather than a single centre or
+// title. Stored as a single pinned row (id 1).
+export type JdGlobalSettingsView = {
+  lastReviewedByAcronym: string;
+};
+
+export async function getGlobalSettings(): Promise<JdGlobalSettingsView> {
+  const row = await prisma.jdGlobalSetting.findUnique({ where: { id: 1 } });
+  return { lastReviewedByAcronym: row?.lastReviewedByAcronym ?? "" };
+}
+
+export async function updateGlobalSettings(input: { lastReviewedByAcronym?: string | null }): Promise<void> {
+  const lastReviewedByAcronym = input.lastReviewedByAcronym?.trim() ?? "";
+  await prisma.jdGlobalSetting.upsert({
+    where: { id: 1 },
+    update: { lastReviewedByAcronym },
+    create: { id: 1, lastReviewedByAcronym },
   });
 }
 
@@ -537,7 +613,10 @@ export async function createJobDescription(input: CreateJobDescriptionInput): Pr
       seniorTeacherName: centreProfile.seniorTeacherName,
       reviewedByAcronym: centreProfile.seniorTeacherAcronym,
       approvedByAcronym: "PM",
-      lastUpdatedByAcronym: emptyToNull(input.lastUpdatedByAcronym) ?? "",
+      // Falls back to the global "Last Reviewed by" setting so the PDF footer's
+      // Last Updated By row is populated rather than printing blank.
+      lastUpdatedByAcronym:
+        emptyToNull(input.lastUpdatedByAcronym) ?? (await getGlobalSettings()).lastReviewedByAcronym,
     },
     select: { id: true },
   });

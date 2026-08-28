@@ -4,6 +4,7 @@ import test from "node:test";
 import { renderJdAppShell, resolveJdFocusPanelId, VALID_JD_PANEL_IDS } from "../src/ui/jd-app-shell.js";
 import { renderJdListPanel } from "../src/ui/jd/jd-list-panel.js";
 import { renderJdEditorPanel } from "../src/ui/jd/jd-editor-panel.js";
+import { renderJdSettingsPanel } from "../src/ui/jd/jd-settings-panel.js";
 import { renderJdBlurbPanel } from "../src/ui/jd/jd-blurb-panel.js";
 import { buildJdEmailText, buildJdWebsitePageTitle } from "../src/ui/jd/jd-email.js";
 import {
@@ -30,6 +31,7 @@ function buildTitleProfile(overrides: Partial<JdTitleProfileView> = {}): JdTitle
     qualificationsText: "A Diploma of Teaching ECE (or equivalent) is a minimum.",
     roleSections: [],
     extras: null,
+    isCentreSpecific: true,
     ...overrides,
   };
 }
@@ -137,6 +139,7 @@ test("JD create flow opens the new editor after the server returns the generated
       titleProfiles: [],
       knowledgeDocs: [],
       agreementStatus: { latest: null, expired: false, expiringSoon: false, daysUntilExpiry: null },
+      globalSettings: { lastReviewedByAcronym: "" },
     },
   });
 
@@ -200,6 +203,7 @@ test("JD back link title-cases the location and collapses the duplicated Kinderg
       titleProfiles: [],
       knowledgeDocs: [],
       agreementStatus: { latest: null, expired: false, expiringSoon: false, daysUntilExpiry: null },
+      globalSettings: { lastReviewedByAcronym: "" },
     },
   });
 
@@ -290,16 +294,17 @@ test("JD editor navigation renders in the panel header actions", () => {
       titleProfiles: [],
       knowledgeDocs: [],
       agreementStatus: { latest: null, expired: false, expiringSoon: false, daysUntilExpiry: null },
+      globalSettings: { lastReviewedByAcronym: "" },
     },
   });
 
   assert.match(
     html,
-    /<div class="panel__actions">[\s\S]*class="panel-action-link" href="\/jd\?panel=jd-list"[\s\S]*Back to Job Descriptions[\s\S]*class="panel-action-link" href="\/jd\?panel=jd-blurb&jd=1"[\s\S]*Website blurb for this JD/,
+    /<div class="panel__actions">[\s\S]*class="panel-action-link" href="\/jd"[\s\S]*Back to Job Descriptions[\s\S]*class="panel-action-link" href="\/jd\?panel=jd-blurb&jd=1"[\s\S]*Website blurb for this JD/,
   );
 });
 
-test("JD list, blurb, and settings navigation render in panel header actions", () => {
+test("JD list and settings panels carry no cross-navigation, and back links target /jd", () => {
   const jd = buildJobDescription({
     id: 17,
     jobTitle: "Teacher",
@@ -315,26 +320,52 @@ test("JD list, blurb, and settings navigation render in panel header actions", (
       titleProfiles: [],
       knowledgeDocs: [],
       agreementStatus: { latest: null, expired: false, expiringSoon: false, daysUntilExpiry: null },
+      globalSettings: { lastReviewedByAcronym: "" },
     },
   };
 
   const listHtml = renderJdAppShell({ ...baseOptions, focusPanelId: "jd-list" });
   const blurbHtml = renderJdAppShell({ ...baseOptions, focusPanelId: "jd-blurb" });
   const settingsHtml = renderJdAppShell({ ...baseOptions, focusPanelId: "jd-settings" });
+  const editorHtml = renderJdAppShell({ ...baseOptions, focusPanelId: "jd-editor" });
 
+  // List and settings sit side by side on /jd, so neither links to the other.
+  assert.doesNotMatch(listHtml, /panel-action-link/);
+  assert.doesNotMatch(settingsHtml, /panel-action-link/);
+
+  // The editor and blurb replace the whole view, so they keep a way back.
   assert.match(
-    listHtml,
-    /<div class="panel__actions">[\s\S]*class="panel-action-link" href="\/jd\?panel=jd-settings"[\s\S]*Settings/,
+    editorHtml,
+    /<div class="panel__actions">[\s\S]*class="panel-action-link" href="\/jd"[\s\S]*Back to Job Descriptions/,
   );
   assert.match(
     blurbHtml,
     /<div class="panel__actions">[\s\S]*class="panel-action-link" href="\/jd\?panel=jd-editor&jd=17"[\s\S]*Back to Teacher - Gwen Rogers Kindergarten/,
   );
-  assert.match(
-    settingsHtml,
-    /<div class="panel__actions">[\s\S]*class="panel-action-link" href="\/jd\?panel=jd-list"[\s\S]*Back to Job Descriptions/,
+
+  // Nothing anywhere points back at the old ?panel=jd-list route.
+  assert.doesNotMatch(
+    `${listHtml}
+${blurbHtml}
+${settingsHtml}
+${editorHtml}`,
+    /panel=jd-list/,
   );
-  assert.doesNotMatch(`${listHtml}\n${blurbHtml}\n${settingsHtml}`, /class="jd-back-link"/);
+  assert.doesNotMatch(`${listHtml}
+${blurbHtml}
+${settingsHtml}`, /class="jd-back-link"/);
+});
+
+test("JD panel bodies scroll outside focus mode so the list and settings are reachable", () => {
+  const css = readFileSync("src/ui/app.css", "utf8");
+
+  // The scroll rules must not be scoped to .panel--focus, or the two-column
+  // /jd view clips the list and settings panels with no way to scroll them.
+  assert.match(
+    css,
+    /\.panel--jd-list \.panel__body,\s*\.panel--jd-editor \.panel__body,\s*\.panel--jd-blurb \.panel__body,\s*\.panel--jd-settings \.panel__body \{\s*overflow: auto;/,
+  );
+  assert.doesNotMatch(css, /\.panel--jd-settings\.panel--focus \.panel__body \{\s*overflow: auto;/);
 });
 
 test("JD website page title states position type once, pairs Kaiako only for teaching roles, and carries the advertised month", () => {
@@ -382,6 +413,43 @@ test("JD blurb panel offers a Copy Website Page Title action carrying the page t
   assert.match(html, /<span>Copy to clipboard<\/span>/);
 });
 
+test("JD settings exposes Last Reviewed by and per-title centre-specific controls", () => {
+  const html = renderJdSettingsPanel({
+    centreProfiles: [],
+    titleProfiles: [
+      buildTitleProfile({ id: 1, jobTitle: "Teacher", isCentreSpecific: true }),
+      buildTitleProfile({ id: 2, jobTitle: "Office Administrator", isCentreSpecific: false }),
+    ],
+    knowledgeDocs: [],
+    agreementStatus: { latest: null, expired: false, expiringSoon: false, daysUntilExpiry: null },
+    globalSettings: { lastReviewedByAcronym: "VVR" },
+  });
+
+  assert.match(html, /name="lastReviewedByAcronym" value="VVR"/);
+  assert.match(html, /data-jd-global-settings/);
+  // The centre-specific box reflects each title's stored value.
+  assert.match(html, /value="Teacher"[\s\S]*?name="isCentreSpecific" checked/);
+  assert.match(html, /value="Office Administrator"[\s\S]*?name="isCentreSpecific"\s*\/>/);
+  // Adding a new job type.
+  assert.match(html, /data-jd-title-create/);
+  assert.match(html, /<span>Add job type<\/span>/);
+});
+
+test("JD create form marks which titles are centre specific so Location can be hidden", () => {
+  const html = renderJdListPanel({
+    jobDescriptions: [],
+    titleProfiles: [
+      buildTitleProfile({ id: 1, jobTitle: "Teacher", isCentreSpecific: true }),
+      buildTitleProfile({ id: 2, jobTitle: "Office Administrator", isCentreSpecific: false }),
+    ],
+    centreProfiles: [buildCentreProfile()],
+  });
+
+  assert.match(html, /<option value="1" data-centre-specific="true">Teacher<\/option>/);
+  assert.match(html, /<option value="2" data-centre-specific="false">Office Administrator<\/option>/);
+  assert.match(html, /data-jd-location-field/);
+});
+
 test("JD editor Generate Email action opens a corrected mailto draft", () => {
   const html = renderJdAppShell({
     focusPanelId: "jd-editor",
@@ -401,6 +469,7 @@ test("JD editor Generate Email action opens a corrected mailto draft", () => {
       titleProfiles: [],
       knowledgeDocs: [],
       agreementStatus: { latest: null, expired: false, expiringSoon: false, daysUntilExpiry: null },
+      globalSettings: { lastReviewedByAcronym: "" },
     },
   });
   const hrefMatch = /href="([^"]+)"[^>]*>\s*<i class="bi bi-envelope-plus[\s\S]*?<span>Generate Email<\/span>/.exec(html);
@@ -459,6 +528,7 @@ test("JD editor date fields are text-editable with native picker buttons", () =>
       titleProfiles: [],
       knowledgeDocs: [],
       agreementStatus: { latest: null, expired: false, expiringSoon: false, daysUntilExpiry: null },
+      globalSettings: { lastReviewedByAcronym: "" },
     },
   });
   const css = readFileSync("src/ui/app.css", "utf8");
@@ -703,6 +773,7 @@ test("JD app shell wires the nav-rail JD link and titles the page", () => {
       titleProfiles: [],
       knowledgeDocs: [],
       agreementStatus: { latest: null, expired: false, expiringSoon: false, daysUntilExpiry: null },
+      globalSettings: { lastReviewedByAcronym: "" },
     },
   });
 

@@ -1,5 +1,5 @@
 import type { JdCentreProfileView, JdTitleProfileView, JdKnowledgeDocView } from "../../storage/jd-store.js";
-import type { AgreementStatus } from "../../storage/jd-store.js";
+import type { AgreementStatus, JdGlobalSettingsView } from "../../storage/jd-store.js";
 
 function escapeHtml(value: string) {
   return value
@@ -21,6 +21,7 @@ export type JdSettingsPanelOptions = {
   titleProfiles: JdTitleProfileView[];
   knowledgeDocs: JdKnowledgeDocView[];
   agreementStatus: AgreementStatus;
+  globalSettings: JdGlobalSettingsView;
 };
 
 function renderCentreProfileRow(centre: JdCentreProfileView): string {
@@ -62,7 +63,11 @@ function renderTitleProfileRow(profile: JdTitleProfileView): string {
           <span>Qualifications text</span>
           <textarea name="qualificationsText">${escapeHtml(profile.qualificationsText)}</textarea>
         </label>
-        <p class="jd-settings__hint">Role sections are edited per job description in the JD Editor panel; this text seeds new job descriptions of this title.</p>
+        <label class="jd-settings__checkbox-label">
+          <input type="checkbox" name="isCentreSpecific" ${profile.isCentreSpecific ? "checked" : ""} />
+          <span>Centre specific</span>
+        </label>
+        <p class="jd-settings__hint">Role sections are edited per job description in the JD Editor panel; this text seeds new job descriptions of this title. Untick <strong>Centre specific</strong> for org-wide roles (e.g. office staff) that are not based at a kindergarten - those skip the Location step.</p>
         <button type="submit"><i class="bi bi-save ui-icon" aria-hidden="true"></i><span>Save</span></button>
       </form>
     </details>
@@ -115,8 +120,36 @@ export function renderJdSettingsPanel(options: JdSettingsPanelOptions): string {
       </section>
 
       <section class="jd-settings__section">
+        <h3>Document defaults</h3>
+        <form class="jd-settings__global" data-jd-global-settings>
+          <label>
+            <span>Last Reviewed by</span>
+            <input type="text" name="lastReviewedByAcronym" value="${escapeHtml(options.globalSettings.lastReviewedByAcronym)}" placeholder="e.g. VVR" />
+          </label>
+          <p class="jd-settings__hint">Acronym printed in the <strong>Last Updated By</strong> row of every job description PDF footer.</p>
+          <button type="submit"><i class="bi bi-save ui-icon" aria-hidden="true"></i><span>Save</span></button>
+        </form>
+      </section>
+
+      <section class="jd-settings__section">
         <h3>Job title profiles</h3>
         <div class="jd-settings__title-list">${titleRows}</div>
+        <form class="jd-settings__title-create" data-jd-title-create>
+          <label>
+            <span>New job title</span>
+            <input type="text" name="jobTitle" placeholder="e.g. Senior Teacher" required />
+          </label>
+          <label>
+            <span>Job category</span>
+            <input type="text" name="jobCategory" placeholder="e.g. Education" required />
+          </label>
+          <label class="jd-settings__checkbox-label">
+            <input type="checkbox" name="isCentreSpecific" checked />
+            <span>Centre specific</span>
+          </label>
+          <button type="submit"><i class="bi bi-plus-lg ui-icon" aria-hidden="true"></i><span>Add job type</span></button>
+        </form>
+        <p data-jd-title-create-status class="jd-settings__ktca-status"></p>
       </section>
 
       <section class="jd-settings__section">

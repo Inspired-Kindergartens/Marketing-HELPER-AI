@@ -178,6 +178,8 @@ import {
   duplicateJobDescription,
   listTitleProfiles,
   listCentreProfiles,
+  getGlobalSettings,
+  updateGlobalSettings,
   upsertCentreProfile,
   upsertTitleProfile,
   saveBlurb,
@@ -195,6 +197,25 @@ import {
 import { renderJdAppShell, resolveJdFocusPanelId } from "./ui/jd-app-shell.js";
 import { buildImmovableBoilerplateHtml, buildJdBlurbChatMessages, buildJdIntroChatMessages } from "./ai/jd-context.js";
 import { generateJdPdfBuffer, jdPdfAssetUrl, jdPdfFilename } from "./ui/jd/jd-pdf.js";
+import {
+  applyWikiTagging,
+  buildWikiChatGrounding,
+  createWikiArticle,
+  createWikiCategory,
+  deleteWikiArticle,
+  deleteWikiCategory,
+  duplicateWikiArticle,
+  getWikiArticle,
+  listWikiArticles,
+  listWikiCategories,
+  listWikiCategoriesWithCounts,
+  renameWikiCategory,
+  updateWikiArticle,
+  wikiHtmlToPlainText,
+} from "./storage/wiki-store.js";
+import { buildWikiTaggingChatMessages, parseWikiTaggingResponse } from "./ai/wiki-context.js";
+import { ensureAiRunning, isAiReady } from "./ai/runtime.js";
+import { renderWikiAppShell, resolveWikiFocusPanelId } from "./ui/wiki-app-shell.js";
 
 loadDotenv({ override: true });
 
@@ -1164,6 +1185,9 @@ app.post("/contacts/upload", async (request, reply) => {
 });
 
 app.get<{ Querystring: { conversation?: string; group?: string } }>("/chat", async (request, reply) => {
+  // Every AI-dependent page warms the local runtime the same way.
+  void ensureAiRunning(aiConfig, app.log);
+
   const conversationId = Number.parseInt(String(request.query?.conversation ?? ""), 10);
   const groupId = Number.parseInt(String(request.query?.group ?? ""), 10);
   const data = await getGeneralChatPageData({
@@ -1359,7 +1383,10 @@ app.post<{ Params: { id: string }; Body: { prompt?: string } }>(
         return;
       }
 
-      const messages = await buildGeneralChatMessages(conversationId, centreReferences, liveGrounding);
+      const groundingWithWiki = streamInput.hasDocument
+        ? liveGrounding
+        : await withWikiGrounding(prompt, liveGrounding);
+      const messages = await buildGeneralChatMessages(conversationId, centreReferences, groundingWithWiki);
 
       for await (const chunk of streamLocalChat(aiConfig, messages)) {
         answer += chunk;
@@ -1393,6 +1420,7 @@ app.post<{ Params: { id: string }; Body: { prompt?: string } }>(
 
 app.get<{ Querystring: { centre?: string; window?: string; panel?: string; sort?: string; waitlistSection?: string; googleAnalyticsSection?: string; gaRange?: string; gaFrom?: string; gaTo?: string; gaFromMonth?: string; gaFromYear?: string; gaToMonth?: string; gaToYear?: string; metaRefreshed?: string; integrationError?: string } }>("/app", async (request, reply) => {
   void tickWeeklySnapshotRefresh(app.log);
+  void ensureAiRunning(aiConfig, app.log);
 
   const latestSnapshotSet = await readLatestAnalyticsSnapshotSet();
   const centre = Number.parseInt(String(request.query?.centre ?? ""), 10);
@@ -1785,6 +1813,7 @@ app.get<{ Querystring: { panel?: string; jd?: string } }>("/jd", async (request,
     listCentreProfiles(),
     getAgreementStatus(),
   ]);
+  const globalSettings = await getGlobalSettings();
 
   const selectedJd = selectedJdId != null ? await getJobDescription(selectedJdId) : null;
   const genericDoc = await getGenericKnowledgeDoc();
@@ -1800,7 +1829,7 @@ app.get<{ Querystring: { panel?: string; jd?: string } }>("/jd", async (request,
       list: { jobDescriptions, titleProfiles, centreProfiles },
       editor: { jobDescription: selectedJd, titleProfiles, centreProfiles },
       blurb: { jobDescription: selectedJd, boilerplateHtml, versions: blurbVersions },
-      settings: { centreProfiles, titleProfiles, knowledgeDocs: genericDoc ? [genericDoc, ...knowledgeDocs] : knowledgeDocs, agreementStatus },
+      settings: { centreProfiles, titleProfiles, knowledgeDocs: genericDoc ? [genericDoc, ...knowledgeDocs] : knowledgeDocs, agreementStatus, globalSettings },
     }),
   );
 });
@@ -1808,9 +1837,22 @@ app.get<{ Querystring: { panel?: string; jd?: string } }>("/jd", async (request,
 app.post<{ Body: { jobTitleProfileId?: string; centreKey?: string } }>("/api/jd", async (request, reply) => {
   const jobTitleProfileId = parsePositiveInt(request.body?.jobTitleProfileId);
   const centreKey = parsePositiveInt(request.body?.centreKey);
-  if (jobTitleProfileId == null || centreKey == null) {
+  if (jobTitleProfileId == null) {
     reply.code(400);
-    return { error: "A job title and location are required." };
+    return { error: "A job title is required." };
+  }
+  if (centreKey == null) {
+    // Non-centre-specific titles hide the Location step, but creating a JD
+    // still needs a centre for the intro paragraph, Senior Teacher and PDF
+    // footer. Say so plainly rather than failing with a generic message.
+    const profile = (await listTitleProfiles()).find((row) => row.id === jobTitleProfileId);
+    reply.code(400);
+    return {
+      error:
+        profile && !profile.isCentreSpecific
+          ? `"${profile.jobTitle}" is not centre specific. Creating job descriptions for org-wide roles is not supported yet - tick "Centre specific" in Settings to use it for now.`
+          : "A job title and location are required.",
+    };
   }
   try {
     const id = await createJobDescription({ jobTitleProfileId, centreKey });
@@ -2106,7 +2148,7 @@ app.post<{ Params: { centreKey: string }; Body: Record<string, unknown> }>(
   },
 );
 
-app.post<{ Body: { jobTitle?: string; qualificationsText?: string } }>(
+app.post<{ Body: { jobTitle?: string; qualificationsText?: string; isCentreSpecific?: unknown } }>(
   "/api/jd/settings/title",
   async (request, reply) => {
     const jobTitle = String(request.body?.jobTitle ?? "").trim();
@@ -2119,9 +2161,51 @@ app.post<{ Body: { jobTitle?: string; qualificationsText?: string } }>(
       reply.code(404);
       return { error: "Unknown job title profile." };
     }
+    const rawCentreSpecific = request.body?.isCentreSpecific;
     await upsertTitleProfile({
       ...existing,
       qualificationsText: request.body?.qualificationsText ?? existing.qualificationsText,
+      // An unchecked checkbox is simply absent from the submitted form, so a
+      // missing value means false rather than "leave unchanged".
+      isCentreSpecific: rawCentreSpecific === "on" || rawCentreSpecific === true,
+    });
+    return { ok: true };
+  },
+);
+
+app.post<{ Body: { lastReviewedByAcronym?: string } }>(
+  "/api/jd/settings/global",
+  async (request) => {
+    await updateGlobalSettings({ lastReviewedByAcronym: request.body?.lastReviewedByAcronym ?? "" });
+    return { ok: true };
+  },
+);
+
+app.post<{ Body: { jobTitle?: string; jobCategory?: string; isCentreSpecific?: unknown } }>(
+  "/api/jd/settings/title/create",
+  async (request, reply) => {
+    const jobTitle = String(request.body?.jobTitle ?? "").trim();
+    const jobCategory = String(request.body?.jobCategory ?? "").trim();
+    if (!jobTitle || !jobCategory) {
+      reply.code(400);
+      return { error: "Job title and job category are required." };
+    }
+
+    const profiles = await listTitleProfiles();
+    if (profiles.some((profile) => profile.jobTitle.toLowerCase() === jobTitle.toLowerCase())) {
+      reply.code(409);
+      return { error: `"${jobTitle}" already exists.` };
+    }
+
+    const rawCentreSpecific = request.body?.isCentreSpecific;
+    await upsertTitleProfile({
+      jobTitle,
+      jobCategory,
+      // Append to the end of the existing ordering.
+      sortOrder: profiles.reduce((max, profile) => Math.max(max, profile.sortOrder), 0) + 1,
+      qualificationsText: "",
+      roleSections: [],
+      isCentreSpecific: rawCentreSpecific === "on" || rawCentreSpecific === true,
     });
     return { ok: true };
   },
@@ -2159,6 +2243,251 @@ app.post("/api/jd/settings/ktca-import", async (request, reply) => {
     ok: true,
     message: "KTCA PDF received. Automatic rate extraction isn't available yet — update pay scales manually below.",
   };
+});
+
+// Both AI chats ground on the wiki. The retrieval picks the articles matching
+// the prompt and appends them to whatever grounding the caller already had
+// (e.g. a live Infocare read), so the two sources travel as one extra message.
+async function withWikiGrounding(prompt: string, existingGrounding: string | null): Promise<string | null> {
+  try {
+    const wiki = await buildWikiChatGrounding(prompt);
+    if (!wiki) return existingGrounding;
+    return existingGrounding?.trim() ? [existingGrounding.trim(), "", wiki.text].join("\n") : wiki.text;
+  } catch (error) {
+    // The wiki is an enhancement: if the lookup fails the chat still answers.
+    app.log.warn({ error }, "Wiki grounding unavailable");
+    return existingGrounding;
+  }
+}
+
+// --- Things To Know (marketing wiki) -----------------------------------------
+// Same shape as the JD section: one page route that renders the shell, plus
+// JSON POST mutations that the delegated client script reloads on.
+
+app.get<{ Querystring: { panel?: string; article?: string; q?: string } }>(
+  "/wiki",
+  async (request, reply) => {
+    // Warm the local AI in the background so tag generation is available
+    // shortly after the page loads. Unawaited: the page must never block on it.
+    void ensureAiRunning(aiConfig, app.log);
+
+    const selectedArticleId = parsePositiveInt(request.query?.article);
+    const search = String(request.query?.q ?? "").trim();
+    // Selecting an article opens it for reading; editing is an explicit step.
+    const focusPanelId =
+      resolveWikiFocusPanelId(request.query?.panel) ?? (selectedArticleId != null ? "wiki-article" : null);
+
+    const [articles, categories] = await Promise.all([
+      listWikiArticles(search),
+      listWikiCategoriesWithCounts(),
+    ]);
+    const selectedArticle = selectedArticleId != null ? await getWikiArticle(selectedArticleId) : null;
+    const isEditing = focusPanelId === "wiki-editor";
+
+    return reply.type("text/html; charset=utf-8").send(
+      renderWikiAppShell({
+        focusPanelId,
+        list: { articles, search, categories },
+        article: { article: isEditing ? null : selectedArticle },
+        editor: {
+          article: isEditing ? selectedArticle : null,
+          categories: categories.map((category) => category.name),
+        },
+      }),
+    );
+  },
+);
+
+// Lets any AI-dependent page show a live "starting local AI" state instead of
+// silently failing while Ollama warms up.
+app.get("/api/ai/status", async () => {
+  const ready = await isAiReady(aiConfig);
+  return { ready, provider: aiConfig.AI_PROVIDER, model: aiConfig.AI_CHAT_MODEL };
+});
+
+// Reads an article, asks the local model for a category and tags, and writes
+// them back. Used by the editor's Regenerate button and by the background pass
+// that runs after an untagged article gains content.
+async function runWikiTagging(id: number): Promise<{ category: string; tags: string[] } | null> {
+  const article = await getWikiArticle(id);
+  if (!article) return null;
+
+  // The model may only file an article under a category that currently exists.
+  const categories = await listWikiCategories();
+  const raw = await runLocalChat(
+    aiConfig,
+    buildWikiTaggingChatMessages({
+      title: article.title,
+      bodyText: wikiHtmlToPlainText(article.contentHtml),
+      categories,
+    }),
+  );
+  const result = parseWikiTaggingResponse(raw, categories);
+  await applyWikiTagging(id, result);
+  return result;
+}
+
+// The background pass competes with anything else using the model (a chat
+// turn, a bulk seed), and a busy Ollama makes runLocalChat time out. Retry with
+// a backoff so a transient clash leaves the article tagged rather than silently
+// untagged, and give up quietly once the user can still press Regenerate.
+async function runWikiTaggingWithRetry(id: number): Promise<void> {
+  const delaysMs = [0, 30_000, 120_000];
+
+  for (const [attempt, waitMs] of delaysMs.entries()) {
+    if (waitMs > 0) await new Promise((resolve) => setTimeout(resolve, waitMs));
+
+    try {
+      const article = await getWikiArticle(id);
+      // Deleted, or tagged in the meantime (e.g. the user pressed Regenerate).
+      if (!article || article.tags.length > 0) return;
+
+      await runWikiTagging(id);
+      return;
+    } catch (error) {
+      app.log.warn(
+        { error, articleId: id, attempt: attempt + 1 },
+        "Background wiki tagging attempt failed",
+      );
+    }
+  }
+
+  app.log.warn({ articleId: id }, "Background wiki tagging gave up; use Regenerate tags");
+}
+
+app.post<{ Params: { id: string } }>("/api/wiki/:id/generate-tags", async (request, reply) => {
+  const id = parsePositiveInt(request.params.id);
+  if (id == null) {
+    reply.code(400);
+    return { error: "Valid article id is required." };
+  }
+
+  await ensureAiRunning(aiConfig, app.log);
+
+  try {
+    const result = await runWikiTagging(id);
+    if (!result) {
+      reply.code(404);
+      return { error: "That article no longer exists." };
+    }
+    return { ok: true, ...result };
+  } catch (error) {
+    const statusCode = error instanceof AiClientError ? error.statusCode : 502;
+    reply.code(statusCode);
+    return {
+      error: error instanceof Error ? error.message : "Could not generate tags.",
+    };
+  }
+});
+
+app.post<{ Body: Record<string, unknown> }>("/api/wiki", async (request, reply) => {
+  const title = String(request.body?.title ?? "").trim();
+  if (!title) {
+    reply.code(400);
+    return { error: "An article title is required." };
+  }
+  const id = await createWikiArticle({ ...request.body, title });
+  return reply.code(201).send({ ok: true, id });
+});
+
+app.post<{ Params: { id: string }; Body: Record<string, unknown> }>("/api/wiki/:id", async (request, reply) => {
+  const id = parsePositiveInt(request.params.id);
+  if (id == null) {
+    reply.code(400);
+    return { error: "Valid article id is required." };
+  }
+  const before = await getWikiArticle(id);
+  if (before == null) {
+    reply.code(404);
+    return { error: "That article no longer exists." };
+  }
+  await updateWikiArticle(id, request.body ?? {});
+
+  // An article that has gained content but has never been tagged gets a
+  // background pass, so the user never has to think about tagging. Unawaited so
+  // the save returns immediately; the row polls for the result.
+  const gainedContent = String(request.body?.contentHtml ?? "").trim().length > 0;
+  if (before.tags.length === 0 && gainedContent) {
+    void runWikiTaggingWithRetry(id);
+  }
+
+  return { ok: true };
+});
+
+app.post<{ Params: { id: string }; Body: { isPinned?: unknown } }>("/api/wiki/:id/pin", async (request, reply) => {
+  const id = parsePositiveInt(request.params.id);
+  if (id == null) {
+    reply.code(400);
+    return { error: "Valid article id is required." };
+  }
+  await updateWikiArticle(id, { isPinned: request.body?.isPinned === true });
+  return { ok: true };
+});
+
+app.post<{ Params: { id: string } }>("/api/wiki/:id/duplicate", async (request, reply) => {
+  const id = parsePositiveInt(request.params.id);
+  if (id == null) {
+    reply.code(400);
+    return { error: "Valid article id is required." };
+  }
+  const newId = await duplicateWikiArticle(id);
+  if (newId == null) {
+    reply.code(404);
+    return { error: "That article no longer exists." };
+  }
+  return { ok: true, id: newId };
+});
+
+app.post<{ Params: { id: string } }>("/api/wiki/:id/delete", async (request, reply) => {
+  const id = parsePositiveInt(request.params.id);
+  if (id == null) {
+    reply.code(400);
+    return { error: "Valid article id is required." };
+  }
+  await deleteWikiArticle(id);
+  return { ok: true };
+});
+
+// Categories are global: renaming re-files every article under the old name,
+// and deleting moves them to the default rather than destroying them.
+app.post<{ Body: { name?: string } }>("/api/wiki/categories", async (request, reply) => {
+  const result = await createWikiCategory(request.body?.name);
+  if ("error" in result) {
+    reply.code(400);
+    return result;
+  }
+  return { ok: true, id: result.id };
+});
+
+app.post<{ Params: { id: string }; Body: { name?: string } }>(
+  "/api/wiki/categories/:id",
+  async (request, reply) => {
+    const id = parsePositiveInt(request.params.id);
+    if (id == null) {
+      reply.code(400);
+      return { error: "Valid category id is required." };
+    }
+    const result = await renameWikiCategory(id, request.body?.name);
+    if ("error" in result) {
+      reply.code(400);
+      return result;
+    }
+    return { ok: true };
+  },
+);
+
+app.post<{ Params: { id: string } }>("/api/wiki/categories/:id/delete", async (request, reply) => {
+  const id = parsePositiveInt(request.params.id);
+  if (id == null) {
+    reply.code(400);
+    return { error: "Valid category id is required." };
+  }
+  const result = await deleteWikiCategory(id);
+  if ("error" in result) {
+    reply.code(400);
+    return result;
+  }
+  return { ok: true, moved: result.moved };
 });
 
 // All mutations are JSON POSTs (matching the existing notes/notifications
@@ -3202,7 +3531,14 @@ app.post<{
   try {
     const answer = await runLocalChat(
       aiConfig,
-      buildAiChatMessages(buildDashboardSystemPrompt(), context, prompt, request.body?.messages, memory, liveGrounding),
+      buildAiChatMessages(
+        buildDashboardSystemPrompt(),
+        context,
+        prompt,
+        request.body?.messages,
+        memory,
+        await withWikiGrounding(prompt, liveGrounding),
+      ),
     );
 
     return {
@@ -3342,7 +3678,7 @@ app.post<{
     prompt,
     request.body?.messages,
     memory,
-    liveGrounding,
+    await withWikiGrounding(prompt, liveGrounding),
   );
   const deterministicAnswer = buildDeterministicChatAnswer(context, prompt);
 
