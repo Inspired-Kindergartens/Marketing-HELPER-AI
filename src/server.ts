@@ -212,6 +212,8 @@ import {
   renameWikiCategory,
   updateWikiArticle,
   wikiHtmlToPlainText,
+  setWikiArticleArchived,
+  countArchivedWikiArticles,
 } from "./storage/wiki-store.js";
 import { buildWikiTaggingChatMessages, parseWikiTaggingResponse } from "./ai/wiki-context.js";
 import { ensureAiRunning, isAiReady } from "./ai/runtime.js";
@@ -2264,7 +2266,7 @@ async function withWikiGrounding(prompt: string, existingGrounding: string | nul
 // Same shape as the JD section: one page route that renders the shell, plus
 // JSON POST mutations that the delegated client script reloads on.
 
-app.get<{ Querystring: { panel?: string; article?: string; q?: string } }>(
+app.get<{ Querystring: { panel?: string; article?: string; q?: string; archived?: string } }>(
   "/wiki",
   async (request, reply) => {
     // Warm the local AI in the background so tag generation is available
@@ -2273,13 +2275,17 @@ app.get<{ Querystring: { panel?: string; article?: string; q?: string } }>(
 
     const selectedArticleId = parsePositiveInt(request.query?.article);
     const search = String(request.query?.q ?? "").trim();
+    // The archive is a separate shelf rather than a filter mixed into the list,
+    // so an archived article can never be mistaken for a current one.
+    const showArchived = String(request.query?.archived ?? "") === "1";
     // Selecting an article opens it for reading; editing is an explicit step.
     const focusPanelId =
       resolveWikiFocusPanelId(request.query?.panel) ?? (selectedArticleId != null ? "wiki-article" : null);
 
-    const [articles, categories] = await Promise.all([
-      listWikiArticles(search),
+    const [articles, categories, archivedCount] = await Promise.all([
+      listWikiArticles(search, { archived: showArchived }),
       listWikiCategoriesWithCounts(),
+      countArchivedWikiArticles(),
     ]);
     const selectedArticle = selectedArticleId != null ? await getWikiArticle(selectedArticleId) : null;
     const isEditing = focusPanelId === "wiki-editor";
@@ -2287,7 +2293,7 @@ app.get<{ Querystring: { panel?: string; article?: string; q?: string } }>(
     return reply.type("text/html; charset=utf-8").send(
       renderWikiAppShell({
         focusPanelId,
-        list: { articles, search, categories },
+        list: { articles, search, categories, showArchived, archivedCount },
         article: { article: isEditing ? null : selectedArticle },
         editor: {
           article: isEditing ? selectedArticle : null,
@@ -2308,7 +2314,7 @@ app.get("/api/ai/status", async () => {
 // Reads an article, asks the local model for a category and tags, and writes
 // them back. Used by the editor's Regenerate button and by the background pass
 // that runs after an untagged article gains content.
-async function runWikiTagging(id: number): Promise<{ category: string; tags: string[] } | null> {
+async function runWikiTagging(id: number): Promise<{ category: string; tags: string[]; summary: string } | null> {
   const article = await getWikiArticle(id);
   if (!article) return null;
 
@@ -2324,8 +2330,61 @@ async function runWikiTagging(id: number): Promise<{ category: string; tags: str
   );
   const result = parseWikiTaggingResponse(raw, categories);
   await applyWikiTagging(id, result);
-  return result;
+  // applyWikiTagging refuses to move a hand-filed article, so report the
+  // category that is actually stored rather than the one the model suggested.
+  return article.isCategoryLocked ? { ...result, category: article.category } : result;
 }
+
+/**
+ * Called when the user finishes editing. Regenerates the category, tags, and
+ * one-line summary when the article has no summary yet, or when its content has
+ * changed since the last generation - so leaving the editor is enough and the
+ * user never has to think about keeping the summary current.
+ */
+app.post<{
+  Params: { id: string };
+  Body: { contentChanged?: unknown; article?: Record<string, unknown> };
+}>("/api/wiki/:id/finish-editing", async (request, reply) => {
+  const id = parsePositiveInt(request.params.id);
+  if (id == null) {
+    reply.code(400);
+    return { error: "Valid article id is required." };
+  }
+
+  // The editor sends its final state with this call, so the save and the
+  // summary cannot race each other.
+  if (request.body?.article) {
+    await updateWikiArticle(id, request.body.article);
+  }
+
+  const article = await getWikiArticle(id);
+  if (!article) {
+    reply.code(404);
+    return { error: "That article no longer exists." };
+  }
+
+  const contentChanged = request.body?.contentChanged === true;
+  const needsSummary = article.summary.trim().length === 0;
+  const hasBody = wikiHtmlToPlainText(article.contentHtml).trim().length > 0;
+
+  if (!hasBody || (!needsSummary && !contentChanged)) {
+    return { ok: true, queued: false };
+  }
+
+  // Summarising takes tens of seconds on a local model. It runs in the
+  // background and the user goes straight back to the article; the new summary
+  // is there next time the page is loaded.
+  void (async () => {
+    try {
+      await ensureAiRunning(aiConfig, app.log);
+      await runWikiTagging(id);
+    } catch (error) {
+      app.log.warn({ error, articleId: id }, "Background summary generation failed");
+    }
+  })();
+
+  return { ok: true, queued: true };
+});
 
 // The background pass competes with anything else using the model (a chat
 // turn, a bulk seed), and a busy Ollama makes runLocalChat time out. Retry with
@@ -2437,6 +2496,23 @@ app.post<{ Params: { id: string } }>("/api/wiki/:id/duplicate", async (request, 
   }
   return { ok: true, id: newId };
 });
+
+app.post<{ Params: { id: string }; Body: { isArchived?: unknown } }>(
+  "/api/wiki/:id/archive",
+  async (request, reply) => {
+    const id = parsePositiveInt(request.params.id);
+    if (id == null) {
+      reply.code(400);
+      return { error: "Valid article id is required." };
+    }
+    const found = await setWikiArticleArchived(id, request.body?.isArchived !== false);
+    if (!found) {
+      reply.code(404);
+      return { error: "That article no longer exists." };
+    }
+    return { ok: true };
+  },
+);
 
 app.post<{ Params: { id: string } }>("/api/wiki/:id/delete", async (request, reply) => {
   const id = parsePositiveInt(request.params.id);

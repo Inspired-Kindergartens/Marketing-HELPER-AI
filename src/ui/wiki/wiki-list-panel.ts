@@ -19,6 +19,9 @@ export type WikiListPanelOptions = {
   articles: WikiArticleListItem[];
   search: string;
   categories: WikiCategoryView[];
+  // Whether the archive shelf is being shown instead of the live wiki.
+  showArchived: boolean;
+  archivedCount: number;
 };
 
 function renderArticleRow(article: WikiArticleListItem): string {
@@ -45,8 +48,13 @@ function renderArticleRow(article: WikiArticleListItem): string {
       </a>
       <div class="wiki-list__badges">${tags}</div>
       <div class="wiki-list__actions">
-        <button type="button" class="wiki-list__button" data-wiki-action="pin" data-wiki-id="${article.id}" title="${article.isPinned ? "Unpin from AI chat" : "Pin to AI chat"}" aria-pressed="${article.isPinned ? "true" : "false"}"><i class="bi ${article.isPinned ? "bi-pin-angle-fill" : "bi-pin-angle"} ui-icon" aria-hidden="true"></i></button>
+        ${
+          article.isArchived
+            ? `<button type="button" class="wiki-list__button" data-wiki-action="restore" data-wiki-id="${article.id}" title="Restore to the wiki"><i class="bi bi-arrow-counterclockwise ui-icon" aria-hidden="true"></i></button>`
+            : `<button type="button" class="wiki-list__button" data-wiki-action="pin" data-wiki-id="${article.id}" title="${article.isPinned ? "Unpin from AI chat" : "Pin to AI chat"}" aria-pressed="${article.isPinned ? "true" : "false"}"><i class="bi ${article.isPinned ? "bi-pin-angle-fill" : "bi-pin-angle"} ui-icon" aria-hidden="true"></i></button>
         <button type="button" class="wiki-list__button" data-wiki-action="duplicate" data-wiki-id="${article.id}" title="Duplicate"><i class="bi bi-copy ui-icon" aria-hidden="true"></i></button>
+        <button type="button" class="wiki-list__button" data-wiki-action="archive" data-wiki-id="${article.id}" title="Archive"><i class="bi bi-archive ui-icon" aria-hidden="true"></i></button>`
+        }
         <button type="button" class="wiki-list__button wiki-list__button--danger" data-wiki-action="delete" data-wiki-id="${article.id}" title="Delete"><i class="bi bi-trash3 ui-icon" aria-hidden="true"></i></button>
       </div>
     </article>
@@ -131,20 +139,34 @@ function renderCategoriesDialog(categories: WikiCategoryView[]): string {
 
 export function renderWikiListPanel(options: WikiListPanelOptions): string {
   const emptyMessage = options.search
-    ? `<p class="wiki-list__empty">No articles match "${escapeHtml(options.search)}".</p>`
-    : `<p class="wiki-list__empty">No articles yet. Use Add to write the first thing worth knowing.</p>`;
+    ? `<p class="wiki-list__empty">No ${options.showArchived ? "archived " : ""}articles match "${escapeHtml(options.search)}".</p>`
+    : options.showArchived
+      ? `<p class="wiki-list__empty">Nothing is archived. Archiving an article takes it off the wiki and out of AI chat without deleting it.</p>`
+      : `<p class="wiki-list__empty">No articles yet. Use Add to write the first thing worth knowing.</p>`;
+
+  // The archive is only worth a way in once something is on it; on the archive
+  // itself the same button is the way back.
+  const archiveToggle = options.showArchived
+    ? `<a class="wiki-list__add" href="/wiki"><i class="bi bi-arrow-left ui-icon" aria-hidden="true"></i><span>Back to the wiki</span></a>`
+    : options.archivedCount > 0
+      ? `<a class="wiki-list__add" href="/wiki?archived=1"><i class="bi bi-archive ui-icon" aria-hidden="true"></i><span>Archived (${options.archivedCount})</span></a>`
+      : "";
 
   return `
     <div class="wiki-list" data-wiki-list>
       <p class="wiki-list__ai-status" data-wiki-ai-status role="status" aria-live="polite" hidden>Starting local AI… tag generation will be available shortly.</p>
 
+      ${options.showArchived ? `<p class="wiki-list__archive-note">Archived articles are hidden from the wiki and are never sent to AI chat. Restore one to put it back.</p>` : ""}
+
       <div class="wiki-list__header">
         <form class="wiki-list__search" data-wiki-search method="get" action="/wiki">
           <i class="bi bi-search ui-icon" aria-hidden="true"></i>
-          <input type="search" name="q" value="${escapeHtml(options.search)}" placeholder="Search the wiki" aria-label="Search the wiki" />
+          ${options.showArchived ? `<input type="hidden" name="archived" value="1" />` : ""}
+          <input type="search" name="q" value="${escapeHtml(options.search)}" placeholder="${options.showArchived ? "Search the archive" : "Search the wiki"}" aria-label="${options.showArchived ? "Search the archive" : "Search the wiki"}" />
         </form>
-        <button type="button" class="wiki-list__add" data-wiki-categories><i class="bi bi-tags ui-icon" aria-hidden="true"></i><span>Categories</span></button>
-        <button type="button" class="wiki-list__add" data-wiki-add><i class="bi bi-plus-lg ui-icon" aria-hidden="true"></i><span>Add</span></button>
+        ${archiveToggle}
+        ${options.showArchived ? "" : `<button type="button" class="wiki-list__add" data-wiki-categories><i class="bi bi-tags ui-icon" aria-hidden="true"></i><span>Categories</span></button>
+        <button type="button" class="wiki-list__add" data-wiki-add><i class="bi bi-plus-lg ui-icon" aria-hidden="true"></i><span>Add</span></button>`}
       </div>
 
       <div class="wiki-list__rows">

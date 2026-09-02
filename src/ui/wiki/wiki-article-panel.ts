@@ -48,17 +48,28 @@ export function renderWikiArticlePanel(options: WikiArticlePanelOptions): string
           </h2>
           ${article.summary ? `<p class="wiki-article__summary">${escapeHtml(article.summary)}</p>` : ""}
         </div>
-        <a class="wiki-article__edit" href="/wiki?panel=wiki-editor&article=${article.id}">
-          <i class="bi bi-pencil ui-icon" aria-hidden="true"></i><span>Edit</span>
-        </a>
+        <div class="wiki-article__actions">
+          <button type="button" class="wiki-article__copy" data-wiki-copy><i class="bi bi-clipboard ui-icon" aria-hidden="true"></i><span>Copy to clipboard</span></button>
+          ${
+            article.isArchived
+              ? `<button type="button" class="wiki-article__edit" data-wiki-action="restore" data-wiki-id="${article.id}"><i class="bi bi-arrow-counterclockwise ui-icon" aria-hidden="true"></i><span>Restore</span></button>`
+              : `<button type="button" class="wiki-article__edit" data-wiki-action="archive" data-wiki-id="${article.id}"><i class="bi bi-archive ui-icon" aria-hidden="true"></i><span>Archive</span></button>`
+          }
+          <button type="button" class="wiki-article__edit wiki-article__edit--danger" data-wiki-action="delete" data-wiki-id="${article.id}"><i class="bi bi-trash3 ui-icon" aria-hidden="true"></i><span>Delete</span></button>
+          <a class="wiki-article__edit" href="/wiki?panel=wiki-editor&article=${article.id}">
+            <i class="bi bi-pencil ui-icon" aria-hidden="true"></i><span>Edit</span>
+          </a>
+        </div>
       </header>
+
+      ${article.isArchived ? `<p class="wiki-article__archived-note"><i class="bi bi-archive ui-icon" aria-hidden="true"></i><span>Archived — hidden from the wiki and never sent to AI chat.</span></p>` : ""}
 
       <p class="wiki-article__meta">
         <span class="wiki-article__category">${escapeHtml(article.category)}</span>
         <span>Updated ${escapeHtml(formatTimestamp(article.updatedAt))}</span>
       </p>
 
-      <div class="wiki-article__body">
+      <div class="wiki-article__body" data-wiki-article-body>
         ${article.contentHtml || `<p class="wiki-article__blank">This article has no content yet. Use Edit to write it.</p>`}
       </div>
 

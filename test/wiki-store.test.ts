@@ -14,11 +14,14 @@ import { renderWikiAppShell, resolveWikiFocusPanelId } from "../src/ui/wiki-app-
 import { renderLandingPage } from "../src/ui/landing-page.js";
 import { ensureAiRunning, isAiReady } from "../src/ai/runtime.js";
 import { renderWikiRichText } from "../src/ui/wiki/wiki-rich-text.js";
+import { sanitizeJdBlurbHtml } from "../src/storage/jd-sanitize-html.js";
+import { readFileSync } from "node:fs";
 import {
   DEFAULT_WIKI_CATEGORIES,
   buildWikiTaggingChatMessages,
   parseWikiTaggingResponse,
   resolveWikiCategory,
+  stripMetaOpener,
 } from "../src/ai/wiki-context.js";
 
 function buildRow(overrides: Partial<WikiArticleRow> = {}): WikiArticleRow {
@@ -30,6 +33,8 @@ function buildRow(overrides: Partial<WikiArticleRow> = {}): WikiArticleRow {
     summary: "How we set daily spend on Meta campaigns.",
     contentHtml: "<p>Daily spend starts at twenty dollars per centre.</p>",
     isPinned: false,
+    isArchived: false,
+    isCategoryLocked: false,
     updatedAt: new Date("2026-08-01T00:00:00.000Z"),
     ...overrides,
   };
@@ -444,7 +449,10 @@ test("the reader and the editor are never both shown at once", () => {
     editor: { article: null, categories: [] },
   });
 
-  assert.doesNotMatch(reading, /contenteditable/);
+  // No editable surface renders in the reader (a mention in a script comment
+  // is not one, so match the attribute as it would actually appear).
+  assert.doesNotMatch(reading, /contenteditable="true"/);
+  assert.doesNotMatch(reading, /wiki-editor__content/);
   assert.match(reading, /wiki-article__edit/);
 });
 
@@ -595,4 +603,413 @@ test("with no categories at all the fallback is still usable", () => {
 test("a list without General falls back to its first category", () => {
   // Guarantees an article always gets a category that actually exists.
   assert.equal(resolveWikiCategory("Nonsense", ["Photography", "Open Days"]), "Photography");
+});
+
+// --- Bullet lists ------------------------------------------------------------
+
+test("the editor offers indent controls so bullets can be nested", () => {
+  const html = renderWikiRichText({ contentAttribute: "data-wiki-content", html: "<p></p>" });
+
+  assert.match(html, /data-wiki-cmd="insertUnorderedList"/);
+  assert.match(html, /data-wiki-cmd="indent"/);
+  assert.match(html, /data-wiki-cmd="outdent"/);
+});
+
+test("nested lists survive sanitising, so indented bullets persist", () => {
+  const nested = "<ul><li>Top<ul><li>Nested</li></ul></li><li>Second</li></ul>";
+
+  assert.equal(sanitizeJdBlurbHtml(nested), nested);
+});
+
+test("a blockquote wrapper is stripped without losing the list inside it", () => {
+  // execCommand("indent") can wrap a top-level list in a blockquote, which is
+  // not on the allow-list; the bullets must still survive.
+  assert.equal(sanitizeJdBlurbHtml("<blockquote><ul><li>x</li></ul></blockquote>"), "<ul><li>x</li></ul>");
+});
+
+test("rich-text surfaces restore the list indent the global reset removes", () => {
+  const css = readFileSync(new URL("../src/ui/app.css", import.meta.url), "utf8");
+
+  // `ul, ol { padding: 0 }` near the top of app.css would otherwise leave
+  // bullets flush left with their markers clipped.
+  for (const selector of [".wiki-editor__content ul", ".wiki-article__body ul", ".jd-blurb__editor ul"]) {
+    const index = css.indexOf(`${selector},`);
+    assert.notEqual(index, -1, `${selector} should have list styling`);
+  }
+  assert.match(css, /padding-left: 1\.6em;\n  list-style-position: outside;/);
+});
+
+// --- Entity handling on save -------------------------------------------------
+
+test("a non-breaking space is stored as a space, not as literal &nbsp; text", () => {
+  // contenteditable inserts &nbsp; constantly. Escaping the & turned it into
+  // visible "&nbsp;" markup in the saved article.
+  assert.equal(sanitizeJdBlurbHtml("<p>Hello&nbsp;world</p>"), "<p>Hello world</p>");
+});
+
+test("punctuation entities become their characters", () => {
+  assert.equal(sanitizeJdBlurbHtml("<p>it&rsquo;s &mdash; fine</p>"), "<p>it’s — fine</p>");
+  assert.equal(sanitizeJdBlurbHtml("<p>&#8212; and &#x2014;</p>"), "<p>— and —</p>");
+});
+
+test("a real ampersand still round-trips as one ampersand", () => {
+  assert.equal(sanitizeJdBlurbHtml("<p>Tom &amp; Jerry</p>"), "<p>Tom &amp; Jerry</p>");
+  assert.equal(sanitizeJdBlurbHtml("<p>Fish & Chips</p>"), "<p>Fish &amp; Chips</p>");
+});
+
+test("saving repeatedly does not compound the escaping", () => {
+  // The original bug grew on every save: &nbsp; -> &amp;nbsp; -> &amp;amp;nbsp;
+  for (const input of [
+    "<p>Hello&nbsp;world</p>",
+    "<p>Tom &amp; Jerry</p>",
+    "<p>5 &lt; 10</p>",
+    "<p>it&rsquo;s</p>",
+  ]) {
+    const once = sanitizeJdBlurbHtml(input);
+    assert.equal(sanitizeJdBlurbHtml(once), once, `not idempotent for ${input}`);
+  }
+});
+
+test("an unknown entity is left visible rather than silently dropped", () => {
+  assert.equal(sanitizeJdBlurbHtml("<p>&zzz; stays</p>"), "<p>&amp;zzz; stays</p>");
+});
+
+test("decoding entities does not let script markup through", () => {
+  // Numeric entities decode to < and >, so they must be re-escaped, not trusted.
+  for (const input of [
+    "&lt;script&gt;alert(1)&lt;/script&gt;",
+    "&#60;script&#62;alert(1)&#60;/script&#62;",
+    "<p>&#x3C;script&#x3E;alert(1)&#x3C;/script&#x3E;</p>",
+  ]) {
+    const out = sanitizeJdBlurbHtml(input);
+    assert.doesNotMatch(out, /<script/i, `script survived for ${input}`);
+  }
+});
+
+test("a numeric non-breaking space is normalised like the named one", () => {
+  assert.equal(sanitizeJdBlurbHtml("<p>a&#160;b</p>"), "<p>a b</p>");
+  assert.equal(sanitizeJdBlurbHtml("<p>a&#xA0;b</p>"), "<p>a b</p>");
+});
+
+// --- Inline emphasis ---------------------------------------------------------
+
+test("bold survives saving, whichever tag the browser produced", () => {
+  // execCommand("bold") emits <b> in most browsers, not <strong>; allow-listing
+  // only <strong> silently stripped every bold run on save.
+  assert.equal(sanitizeJdBlurbHtml("<p><b>Bold</b> text</p>"), "<p><strong>Bold</strong> text</p>");
+  assert.equal(sanitizeJdBlurbHtml("<p><strong>Bold</strong></p>"), "<p><strong>Bold</strong></p>");
+  assert.equal(sanitizeJdBlurbHtml("<p><B>Upper</B></p>"), "<p><strong>Upper</strong></p>");
+});
+
+test("italic, underline and strikethrough survive saving", () => {
+  assert.equal(sanitizeJdBlurbHtml("<p><i>It</i></p>"), "<p><em>It</em></p>");
+  assert.equal(sanitizeJdBlurbHtml("<p><em>It</em></p>"), "<p><em>It</em></p>");
+  assert.equal(sanitizeJdBlurbHtml("<p><u>U</u></p>"), "<p><u>U</u></p>");
+  assert.equal(sanitizeJdBlurbHtml("<p><strike>S</strike></p>"), "<p><s>S</s></p>");
+});
+
+test("nested emphasis keeps both levels", () => {
+  assert.equal(sanitizeJdBlurbHtml("<p><b><i>Both</i></b></p>"), "<p><strong><em>Both</em></strong></p>");
+});
+
+test("emphasis normalising is idempotent across repeated saves", () => {
+  const once = sanitizeJdBlurbHtml("<p><b>Bold</b> and <i>italic</i></p>");
+  assert.equal(sanitizeJdBlurbHtml(once), once);
+});
+
+test("the editor offers bold, italic and underline controls", () => {
+  const html = renderWikiRichText({ contentAttribute: "data-wiki-content", html: "<p></p>" });
+
+  assert.match(html, /data-wiki-cmd="bold"/);
+  assert.match(html, /data-wiki-cmd="italic"/);
+  assert.match(html, /data-wiki-cmd="underline"/);
+});
+
+test("bold is given a visible weight rather than inheriting the reset", () => {
+  const css = readFileSync(new URL("../src/ui/app.css", import.meta.url), "utf8");
+
+  assert.match(css, /\.wiki-editor__content strong,/);
+  assert.match(css, /\.wiki-article__body strong,/);
+});
+
+test("allowing presentational tags does not let dangerous ones through", () => {
+  for (const input of ["<script>bad</script>", '<p onclick="x">safe</p>', "<img src=x onerror=alert(1)>"]) {
+    const out = sanitizeJdBlurbHtml(input);
+    assert.doesNotMatch(out, /<script|onclick|onerror|<img/i);
+  }
+});
+
+// --- Copy to clipboard -------------------------------------------------------
+
+test("the reader offers copy alongside edit", () => {
+  const html = renderWikiArticlePanel({
+    article: {
+      id: 3,
+      title: "A",
+      category: "General",
+      tags: [],
+      summary: "",
+      contentHtml: "<p><strong>Bold</strong></p>",
+      isPinned: false,
+      updatedAt: "2026-08-28T00:00:00.000Z",
+    },
+  });
+
+  assert.match(html, /data-wiki-copy/);
+  // The copy handler needs a marked body to read from in the reader.
+  assert.match(html, /data-wiki-article-body/);
+});
+
+test("copy sends a full HTML document, not a bare fragment", () => {
+  const shell = renderWikiAppShell({
+    list: { articles: [], search: "", categories: [] },
+    article: { article: null },
+    editor: { article: null, categories: [] },
+  });
+
+  // Copying a real selection is what carries formatting across browsers; the
+  // async clipboard API is only the fallback.
+  assert.match(shell, /document\.execCommand\("copy"\)/);
+  assert.match(shell, /"text\/html"/);
+  assert.match(shell, /"text\/plain"/);
+  assert.ok(
+    shell.indexOf("selectionCopy()") < shell.indexOf("navigator.clipboard"),
+    "the selection route should be tried before the async clipboard API",
+  );
+});
+
+test("copy inlines emphasis as style attributes so it survives pasting", () => {
+  const shell = renderWikiAppShell({
+    list: { articles: [], search: "", categories: [] },
+    article: { article: null },
+    editor: { article: null, categories: [] },
+  });
+
+  assert.match(shell, /font-weight:700/);
+  assert.match(shell, /font-style:italic/);
+  assert.match(shell, /text-decoration:underline/);
+  assert.match(shell, /padding-left:28px/);
+  // Headings need explicit sizes or they paste as ordinary body text.
+  assert.match(shell, /H1: "font-size:22pt/);
+  assert.match(shell, /H2: "font-size:16pt/);
+});
+
+test("copy falls back to a real selection rather than dropping to plain text", () => {
+  const shell = renderWikiAppShell({
+    list: { articles: [], search: "", categories: [] },
+    article: { article: null },
+    editor: { article: null, categories: [] },
+  });
+
+  // writeText would silently discard the formatting.
+  assert.match(shell, /document\.execCommand\("copy"\)/);
+  assert.doesNotMatch(shell, /navigator\.clipboard\.writeText/);
+  // The holder must be laid out; a zero-size off-screen element copies nothing.
+  assert.match(shell, /width:1px; height:1px/);
+});
+
+// --- Summary generation ------------------------------------------------------
+
+test("the AI is asked for a one-line summary alongside category and tags", () => {
+  const messages = buildWikiTaggingChatMessages({
+    title: "Meta budget",
+    bodyText: "Twenty a day.",
+    categories: ["Advertising"],
+  });
+
+  assert.match(messages[0].content, /"summary"/);
+  assert.match(messages[0].content, /ONE plain sentence/);
+  // A summary that describes the document rather than its content is useless
+  // as AI grounding.
+  assert.match(messages[0].content, /NEVER begin the summary with/);
+});
+
+test("a generated summary is parsed out of the reply", () => {
+  const result = parseWikiTaggingResponse(
+    '{"category":"Advertising","tags":["meta"],"summary":"Meta campaigns start at $20 per day per centre."}',
+    ["Advertising"],
+  );
+
+  assert.equal(result.summary, "Meta campaigns start at $20 per day per centre.");
+});
+
+test("a multi-line summary is flattened to one line", () => {
+  const json = JSON.stringify({
+    category: "General",
+    tags: ["x"],
+    summary: "First line.\n\nSecond line.",
+  });
+  const result = parseWikiTaggingResponse(json, ["General"]);
+
+  assert.equal(result.summary, "First line. Second line.");
+});
+
+test("a missing summary parses as empty rather than throwing", () => {
+  assert.equal(parseWikiTaggingResponse('{"category":"General","tags":[]}', ["General"]).summary, "");
+  assert.equal(parseWikiTaggingResponse("nonsense", ["General"]).summary, "");
+});
+
+test("finishing editing returns to the article without waiting on the summary", () => {
+  const shell = renderWikiAppShell({
+    focusPanelId: "wiki-editor",
+    list: { articles: [], search: "", categories: [] },
+    article: { article: null },
+    editor: {
+      article: {
+        id: 4,
+        title: "A",
+        category: "General",
+        tags: [],
+        summary: "",
+        contentHtml: "<p>Body.</p>",
+        isPinned: false,
+        updatedAt: "2026-08-28T00:00:00.000Z",
+      },
+      categories: ["General"],
+    },
+  });
+
+  assert.match(shell, /data-wiki-done-editing/);
+  assert.match(shell, /\/finish-editing/);
+  // Leaving the editor must not wait on the model: navigation is not chained
+  // off the request, and keepalive lets it finish after the page is gone.
+  assert.match(shell, /keepalive: true/);
+  assert.ok(
+    shell.indexOf("/finish-editing") < shell.indexOf("window.location.href = target"),
+    "navigation should be issued without awaiting the summary",
+  );
+  assert.doesNotMatch(shell, /Summarising\.\.\./);
+  // The edits ride along with the request, so the save cannot race the summary.
+  assert.match(shell, /article: payload/);
+  // Only regenerate when the body actually moved on.
+  assert.match(shell, /contentChanged: contentChanged/);
+});
+
+test("the summary field says the AI writes it", () => {
+  const html = renderWikiEditorPanel({
+    article: {
+      id: 1,
+      title: "A",
+      category: "General",
+      tags: [],
+      summary: "",
+      contentHtml: "<p>x</p>",
+      isPinned: false,
+      updatedAt: "2026-08-28T00:00:00.000Z",
+    },
+    categories: ["General"],
+  });
+
+  assert.match(html, /written by AI when you finish editing/);
+});
+
+test("a summary that describes the document is rewritten to state the fact", () => {
+  // Local models keep writing "The article outlines..." however firmly the
+  // prompt forbids it, so the opener is stripped after the fact.
+  assert.equal(
+    stripMetaOpener("The article outlines the job application process using Formstack."),
+    "The job application process using Formstack.",
+  );
+  assert.equal(
+    stripMetaOpener("This document explains the photography policy."),
+    "The photography policy.",
+  );
+  assert.equal(stripMetaOpener("This article describes how enrolment works."), "How enrolment works.");
+});
+
+test("a summary that already states the fact is left alone", () => {
+  const good = "Job applications come in through Formstack and are kept for 90 days.";
+
+  assert.equal(stripMetaOpener(good), good);
+  assert.equal(stripMetaOpener("Marketing must not use images of real children."), "Marketing must not use images of real children.");
+});
+
+test("stripping the opener is applied to generated summaries", () => {
+  const json = JSON.stringify({
+    category: "General",
+    tags: ["x"],
+    summary: "The article outlines the retention policy.",
+  });
+
+  assert.equal(parseWikiTaggingResponse(json, ["General"]).summary, "The retention policy.");
+});
+
+test("the prompt shows the model what a wrong summary looks like", () => {
+  const messages = buildWikiTaggingChatMessages({ title: "A", bodyText: "B", categories: ["General"] });
+
+  assert.match(messages[0].content, /NEVER begin the summary with/);
+  assert.match(messages[0].content, /WRONG: "The article outlines/);
+  assert.match(messages[0].content, /RIGHT: "Job applications come in through Formstack/);
+});
+
+test("regenerating updates the summary field, not just tags", () => {
+  const shell = renderWikiAppShell({
+    list: { articles: [], search: "", categories: [] },
+    article: { article: null },
+    editor: { article: null, categories: [] },
+  });
+
+  assert.match(shell, /input\[name="summary"\]/);
+  assert.match(shell, /payload\.summary/);
+});
+
+test("the editor only sends a category the user actually chose", () => {
+  const shell = renderWikiAppShell({
+    list: { articles: [], search: "", categories: [] },
+    article: { article: null },
+    editor: { article: null, categories: [] },
+  });
+
+  // Sending a category locks it against the AI, so an untouched select must not
+  // be part of the autosave payload.
+  assert.match(shell, /categoryTouched = true/);
+  assert.match(shell, /if \(!categoryTouched\) delete payload\.category;/);
+});
+
+test("the editor says who owns the category", () => {
+  const article = {
+    id: 7,
+    title: "Meta ads budget rules",
+    category: "Advertising",
+    tags: ["meta"],
+    summary: "How we set daily spend.",
+    contentHtml: "<p>Twenty a day.</p>",
+    isPinned: false,
+    updatedAt: "2026-08-01T00:00:00.000Z",
+  };
+  const categories = ["Advertising", "General"];
+
+  const unlocked = renderWikiEditorPanel({
+    article: { ...article, isCategoryLocked: false },
+    categories,
+  });
+  const locked = renderWikiEditorPanel({
+    article: { ...article, isCategoryLocked: true },
+    categories,
+  });
+
+  assert.match(unlocked, /set by AI until you choose one/);
+  assert.match(locked, /set by you — the AI will not change it/);
+});
+
+test("copy repairs lists nested directly inside a list", () => {
+  const shell = renderWikiAppShell({
+    list: { articles: [], search: "", categories: [] },
+    article: { article: null },
+    editor: { article: null, categories: [] },
+  });
+
+  // contenteditable produces <ul><ul>, which is invalid and pastes flat.
+  assert.match(shell, /ul > ul, ul > ol, ol > ul, ol > ol/);
+  assert.match(shell, /previous\.appendChild\(list\)/);
+});
+
+test("copy wraps loose text so it does not merge with the next block", () => {
+  const shell = renderWikiAppShell({
+    list: { articles: [], search: "", categories: [] },
+    article: { article: null },
+    editor: { article: null, categories: [] },
+  });
+
+  assert.match(shell, /nodeType !== 3/);
 });

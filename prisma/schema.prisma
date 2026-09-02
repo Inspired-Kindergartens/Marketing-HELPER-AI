@@ -915,11 +915,16 @@ model WikiArticle {
   summary     String   @default("") // one-line gist, always sent in the AI index
   contentHtml String   @default("")
   isPinned    Boolean  @default(false) // pinned articles are always sent to the AI
+  isArchived  Boolean  @default(false) // hidden from the list and never sent to the AI
+  // Set once the user picks a category by hand. The AI tagging pass then leaves
+  // the category alone forever, so a filing decision is never overwritten.
+  isCategoryLocked Boolean @default(false)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
   @@index([category, title])
   @@index([updatedAt(sort: Desc)])
+  @@index([isArchived])
 }
 
 // Wiki categories. Held in the database rather than in code so they can be

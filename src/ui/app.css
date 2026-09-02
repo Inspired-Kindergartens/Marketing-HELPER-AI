@@ -5758,6 +5758,17 @@ body.readme-body {
   border-color: var(--color-wait-long);
 }
 
+/* The archive shelf: a note above the list, and the same row treatment with
+   an unmistakable "not live" tint on the title. */
+.wiki-list__archive-note {
+  margin: 0;
+  border: 1px solid var(--color-border-muted);
+  background: var(--color-panel-inset);
+  color: var(--color-muted);
+  padding: 8px 10px;
+  font-size: var(--font-size-small);
+}
+
 .wiki-list__empty,
 .wiki-editor--empty p {
   color: var(--color-empty);
@@ -6147,14 +6158,36 @@ body.readme-body {
   gap: 8px;
   padding: 8px 16px;
   border: 1px solid var(--color-border);
+  background: transparent;
   color: var(--color-text);
+  font: inherit;
   text-decoration: none;
   white-space: nowrap;
+  cursor: pointer;
 }
 
 .wiki-article__edit:hover {
   color: var(--color-active);
   border-color: var(--color-active);
+}
+
+/* Archive and Delete sit beside Edit, so they are the same control; only
+   Delete is tinted, because only Delete cannot be undone. */
+.wiki-article__edit--danger:hover {
+  color: var(--color-wait-long);
+  border-color: var(--color-wait-long);
+}
+
+.wiki-article__archived-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  border: 1px solid var(--color-border-muted);
+  background: var(--color-panel-inset);
+  color: var(--color-muted);
+  padding: 8px 10px;
+  font-size: var(--font-size-small);
 }
 
 .wiki-article__meta {
@@ -6340,4 +6373,109 @@ body.readme-body {
   min-height: 1.2em;
   color: var(--color-ghost);
   font-size: var(--font-size-small);
+}
+
+/* The global `ul, ol { padding: 0 }` reset near the top of this file strips the
+   indent browsers use to make room for bullet and number markers. Rich-text
+   surfaces have to put it back, or authored lists render flush left with their
+   markers clipped. */
+
+.wiki-editor__content ul,
+.wiki-editor__content ol,
+.wiki-article__body ul,
+.wiki-article__body ol,
+.jd-blurb__editor ul,
+.jd-blurb__editor ol,
+.jd-blurb__boilerplate ul,
+.jd-blurb__boilerplate ol {
+  padding-left: 1.6em;
+  list-style-position: outside;
+}
+
+.wiki-editor__content ul,
+.wiki-article__body ul,
+.jd-blurb__editor ul,
+.jd-blurb__boilerplate ul {
+  list-style-type: disc;
+}
+
+.wiki-editor__content ol,
+.wiki-article__body ol,
+.jd-blurb__editor ol,
+.jd-blurb__boilerplate ol {
+  list-style-type: decimal;
+}
+
+/* Nested lists sit closer to their parent item than a top-level list does. */
+.wiki-editor__content li > ul,
+.wiki-editor__content li > ol,
+.wiki-article__body li > ul,
+.wiki-article__body li > ol,
+.jd-blurb__editor li > ul,
+.jd-blurb__editor li > ol {
+  margin: 0.2em 0;
+}
+
+.wiki-editor__content li,
+.wiki-article__body li,
+.jd-blurb__editor li,
+.jd-blurb__boilerplate li {
+  margin-bottom: 0.25em;
+}
+
+/* Inline emphasis in rich text. The sanitiser normalises <b>/<i> to
+   <strong>/<em>, so these are the tags that reach the page. Bold needs an
+   explicit weight because the surrounding panel styles reset it. */
+
+.wiki-editor__content strong,
+.wiki-article__body strong,
+.jd-blurb__editor strong,
+.jd-blurb__boilerplate strong {
+  font-weight: var(--font-weight-strong);
+  color: var(--color-text-strong) !important;
+}
+
+.wiki-editor__content em,
+.wiki-article__body em,
+.jd-blurb__editor em,
+.jd-blurb__boilerplate em {
+  font-style: italic;
+}
+
+.wiki-editor__content u,
+.wiki-article__body u,
+.jd-blurb__editor u {
+  text-decoration: underline;
+}
+
+.wiki-editor__content s,
+.wiki-article__body s,
+.jd-blurb__editor s {
+  text-decoration: line-through;
+  color: var(--color-muted) !important;
+}
+
+.wiki-article__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+
+.wiki-article__copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border: 1px solid var(--color-border);
+  background: transparent;
+  color: var(--color-text);
+  font: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.wiki-article__copy:hover {
+  color: var(--color-active);
+  border-color: var(--color-active);
 }

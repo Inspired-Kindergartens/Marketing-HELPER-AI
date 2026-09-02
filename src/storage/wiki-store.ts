@@ -11,6 +11,10 @@ export type WikiArticleView = {
   summary: string;
   contentHtml: string;
   isPinned: boolean;
+  isArchived: boolean;
+  // True once the user filed the article by hand. The AI tagging pass then
+  // leaves the category alone, so their filing decision stands.
+  isCategoryLocked: boolean;
   updatedAt: string;
 };
 
@@ -55,6 +59,8 @@ export type WikiArticleRow = {
   summary: string;
   contentHtml: string;
   isPinned: boolean;
+  isArchived: boolean;
+  isCategoryLocked: boolean;
   updatedAt: Date;
 };
 
@@ -67,6 +73,8 @@ function toArticleView(row: WikiArticleRow): WikiArticleView {
     summary: row.summary,
     contentHtml: row.contentHtml,
     isPinned: row.isPinned,
+    isArchived: row.isArchived,
+    isCategoryLocked: row.isCategoryLocked,
     updatedAt: row.updatedAt.toISOString(),
   };
 }
@@ -78,6 +86,8 @@ const LIST_SELECT = {
   tags: true,
   summary: true,
   isPinned: true,
+  isArchived: true,
+  isCategoryLocked: true,
   updatedAt: true,
 } as const;
 
@@ -89,27 +99,46 @@ function toListItem(row: Omit<WikiArticleRow, "contentHtml">): WikiArticleListIt
     tags: splitTags(row.tags),
     summary: row.summary,
     isPinned: row.isPinned,
+    isArchived: row.isArchived,
+    isCategoryLocked: row.isCategoryLocked,
     updatedAt: row.updatedAt.toISOString(),
   };
 }
 
-export async function listWikiArticles(search?: string | null): Promise<WikiArticleListItem[]> {
+/**
+ * Lists the wiki. Archived articles are held back by default so retiring an
+ * article gets it out of the way without destroying it; `archived: true` shows
+ * that shelf instead, which is the only way back to one.
+ */
+export async function listWikiArticles(
+  search?: string | null,
+  options: { archived?: boolean } = {},
+): Promise<WikiArticleListItem[]> {
   const term = String(search ?? "").trim();
   const rows = await prisma.wikiArticle.findMany({
-    where: term
-      ? {
-          OR: [
-            { title: { contains: term, mode: "insensitive" } },
-            { summary: { contains: term, mode: "insensitive" } },
-            { tags: { contains: term.toLowerCase() } },
-            { contentHtml: { contains: term, mode: "insensitive" } },
-          ],
-        }
-      : undefined,
+    where: {
+      isArchived: options.archived === true,
+      ...(term
+        ? {
+            OR: [
+              { title: { contains: term, mode: "insensitive" } },
+              { summary: { contains: term, mode: "insensitive" } },
+              { tags: { contains: term.toLowerCase() } },
+              { contentHtml: { contains: term, mode: "insensitive" } },
+            ],
+          }
+        : {}),
+    },
     orderBy: [{ isPinned: "desc" }, { category: "asc" }, { title: "asc" }],
     select: LIST_SELECT,
   });
   return rows.map(toListItem);
+}
+
+// How many articles sit on the archive shelf, so the list can offer a way in
+// only when there is something there.
+export async function countArchivedWikiArticles(): Promise<number> {
+  return prisma.wikiArticle.count({ where: { isArchived: true } });
 }
 
 // --- Categories -----------------------------------------------------------
@@ -134,7 +163,9 @@ export async function listWikiCategories(): Promise<string[]> {
 export async function listWikiCategoriesWithCounts(): Promise<WikiCategoryView[]> {
   const [rows, grouped] = await Promise.all([
     prisma.wikiCategory.findMany({ orderBy: CATEGORY_ORDER }),
-    prisma.wikiArticle.groupBy({ by: ["category"], _count: { _all: true } }),
+    // Archived articles are off the shelf, so they do not count towards a
+    // category's size in the management modal.
+    prisma.wikiArticle.groupBy({ by: ["category"], where: { isArchived: false }, _count: { _all: true } }),
   ]);
   const counts = new Map(grouped.map((row) => [row.category, row._count._all]));
   return rows.map((row) => ({
@@ -248,9 +279,14 @@ export async function createWikiArticle(input: WikiArticleInput): Promise<number
 // send a single field without clearing the rest of the article.
 export async function updateWikiArticle(id: number, input: WikiArticleInput): Promise<void> {
   const full = buildWriteData(input);
-  const data: Partial<ReturnType<typeof buildWriteData>> = {};
+  const data: Partial<ReturnType<typeof buildWriteData>> & { isCategoryLocked?: boolean } = {};
   if (input.title !== undefined) data.title = full.title;
-  if (input.category !== undefined) data.category = full.category;
+  // Any category arriving through this path came from a person (the editor's
+  // select), so writing one locks it against the AI tagging pass for good.
+  if (input.category !== undefined) {
+    data.category = full.category;
+    data.isCategoryLocked = true;
+  }
   if (input.tags !== undefined) data.tags = full.tags;
   if (input.summary !== undefined) data.summary = full.summary;
   if (input.contentHtml !== undefined) data.contentHtml = full.contentHtml;
@@ -263,6 +299,22 @@ export async function deleteWikiArticle(id: number): Promise<void> {
   await prisma.wikiArticle.delete({ where: { id } });
 }
 
+/**
+ * Archives or restores an article. Archiving also unpins it: a pinned article
+ * is sent to the AI on every turn, and something taken off the shelf must not
+ * keep doing that. Restoring leaves it unpinned, so pinning is a deliberate
+ * choice made again.
+ */
+export async function setWikiArticleArchived(id: number, isArchived: boolean): Promise<boolean> {
+  const existing = await prisma.wikiArticle.findUnique({ where: { id }, select: { id: true } });
+  if (!existing) return false;
+  await prisma.wikiArticle.update({
+    where: { id },
+    data: isArchived ? { isArchived: true, isPinned: false } : { isArchived: false },
+  });
+  return true;
+}
+
 export async function duplicateWikiArticle(id: number): Promise<number | null> {
   const source = await prisma.wikiArticle.findUnique({ where: { id } });
   if (!source) return null;
@@ -270,10 +322,16 @@ export async function duplicateWikiArticle(id: number): Promise<number | null> {
     data: {
       title: `${source.title} (copy)`.slice(0, 200),
       category: source.category,
+      // A copy inherits the original's filing, lock included, so duplicating a
+      // hand-filed article does not hand it back to the AI.
+      isCategoryLocked: source.isCategoryLocked,
       tags: source.tags,
       summary: source.summary,
       contentHtml: source.contentHtml,
       isPinned: false,
+      // A copy is made to be worked on, so it starts on the live shelf even
+      // when the article it came from is archived.
+      isArchived: false,
     },
     select: { id: true },
   });
@@ -282,15 +340,28 @@ export async function duplicateWikiArticle(id: number): Promise<number | null> {
 
 // Writes the AI-assigned category and tags. Separate from updateWikiArticle so
 // a background tagging pass can never clobber body text the user is editing at
-// the same moment.
+// the same moment, and so it can skip the category once the user has filed the
+// article by hand.
 export async function applyWikiTagging(
   id: number,
-  input: { category: string; tags: readonly string[] },
+  input: { category: string; tags: readonly string[]; summary?: string },
 ): Promise<void> {
-  await prisma.wikiArticle.update({
+  const existing = await prisma.wikiArticle.findUnique({
     where: { id },
-    data: { category: input.category, tags: normalizeWikiTags(input.tags.join(",")) },
+    select: { isCategoryLocked: true },
   });
+  if (!existing) return;
+
+  const data: { category?: string; tags: string; summary?: string } = {
+    tags: normalizeWikiTags(input.tags.join(",")),
+  };
+  // A category the user set by hand is theirs. Tags and summary still refresh.
+  if (!existing.isCategoryLocked) data.category = input.category;
+  // An empty generation must not wipe a summary the user wrote by hand.
+  const summary = String(input.summary ?? "").trim();
+  if (summary) data.summary = summary.slice(0, 400);
+
+  await prisma.wikiArticle.update({ where: { id }, data });
 }
 
 // --- AI grounding ---------------------------------------------------------
@@ -452,6 +523,9 @@ export function selectWikiGrounding(rows: readonly WikiArticleRow[], prompt: str
 // ordering happens in selectWikiGrounding.
 export async function buildWikiChatGrounding(prompt: string): Promise<WikiGrounding | null> {
   const rows = await prisma.wikiArticle.findMany({
+    // Archiving an article is the user saying it is no longer current, so it
+    // must not reach the AI even as an index entry.
+    where: { isArchived: false },
     orderBy: [{ isPinned: "desc" }, { updatedAt: "desc" }],
   });
   return selectWikiGrounding(rows, prompt);

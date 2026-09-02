@@ -23,6 +23,7 @@ export const WIKI_FALLBACK_CATEGORY = "General";
 const MAX_TAGGING_BODY_CHARS = 6000;
 const MIN_TAGS = 3;
 const MAX_TAGS = 8;
+const MAX_SUMMARY_CHARS = 400;
 
 export function buildWikiTaggingSystemPrompt(categories: readonly string[]): string {
   const list = categories.length ? categories : DEFAULT_WIKI_CATEGORIES;
@@ -30,14 +31,23 @@ export function buildWikiTaggingSystemPrompt(categories: readonly string[]): str
   return [
     "You classify articles in a marketing knowledge base for Inspired Kindergartens, a New Zealand ECE kindergarten association.",
     "Reply with ONE JSON object and nothing else. No prose, no explanation, no code fences.",
-    'Shape: {"category": "<one category>", "tags": ["<tag>", ...]}',
+    'Shape: {"category": "<one category>", "tags": ["<tag>", ...], "summary": "<one sentence>"}',
     "",
     "The category MUST be copied verbatim from this list:",
     list.map((category) => `- ${category}`).join("\n"),
     "",
     `Give between ${MIN_TAGS} and ${MAX_TAGS} tags.`,
     "Tags are short lower-case noun phrases naming the subjects the article actually covers, so a reader can find it later.",
-    "Base the category and tags only on the supplied text. Never invent subjects the text does not discuss.",
+    "",
+    "The summary is ONE plain sentence, under 200 characters, stating the fact or rule itself.",
+    "NEVER begin the summary with: The article, This article, The document, This document, The page, It, or any phrase referring to the text as a thing.",
+    "Start with the subject. Write it as if stating the rule to a colleague.",
+    'WRONG: "The article outlines the job application process using Formstack."',
+    'RIGHT: "Job applications come in through Formstack and are kept for 90 days."',
+    'WRONG: "This document explains the photography policy."',
+    'RIGHT: "Marketing must not use images of real children; all child imagery is AI-generated."',
+    "",
+    "Base the category, tags, and summary only on the supplied text. Never invent anything the text does not say.",
   ].join("\n");
 }
 
@@ -90,9 +100,28 @@ export function resolveWikiCategory(value: unknown, categories: readonly string[
   return contained ?? fallback;
 }
 
+// Local models keep opening summaries with "The article outlines..." however
+// firmly the prompt forbids it. Strip that opener and keep the substance, so a
+// summary reads as the fact itself rather than a description of the document.
+const META_OPENER =
+  /^(?:the|this)\s+(?:article|document|page|section|text|wiki(?:\s+article)?)\s+(?:outlines|describes|explains|details|covers|summarises|summarizes|discusses|provides|states|defines|specifies)\s+/i;
+
+export function stripMetaOpener(value: string): string {
+  const text = String(value ?? "").replace(/\s+/g, " ").trim();
+  if (!text) return "";
+
+  const stripped = text.replace(META_OPENER, "");
+  // Nothing matched, or the opener was the whole sentence: keep the original.
+  if (stripped === text || !stripped) return text;
+
+  // Re-capitalise, since the sentence now starts mid-phrase.
+  return stripped.charAt(0).toUpperCase() + stripped.slice(1);
+}
+
 export type WikiTaggingResult = {
   category: string;
   tags: string[];
+  summary: string;
 };
 
 // Local models wrap JSON in prose or fences often enough that we look for the
@@ -112,7 +141,7 @@ function extractJsonObject(raw: string): string | null {
  * the save.
  */
 export function parseWikiTaggingResponse(raw: string, categories: readonly string[] = []): WikiTaggingResult {
-  const fallback: WikiTaggingResult = { category: resolveWikiCategory("", categories), tags: [] };
+  const fallback: WikiTaggingResult = { category: resolveWikiCategory("", categories), tags: [], summary: "" };
   const json = extractJsonObject(String(raw ?? ""));
   if (!json) return fallback;
 
@@ -141,5 +170,9 @@ export function parseWikiTaggingResponse(raw: string, categories: readonly strin
     ),
   ).slice(0, MAX_TAGS);
 
-  return { category: resolveWikiCategory(record.category, categories), tags };
+  // One line only: a model that ignores the instruction and writes a paragraph
+  // gets trimmed to its first sentence rather than filling the field with prose.
+  const summary = stripMetaOpener(String(record.summary ?? "")).slice(0, MAX_SUMMARY_CHARS);
+
+  return { category: resolveWikiCategory(record.category, categories), tags, summary };
 }
