@@ -167,3 +167,54 @@ test("landing page includes a rich clipboard copy action for the RSS feed", () =
   assert.match(html, /data-landing-search-form/);
   assert.match(html, /api\/landing-intelligence\/search-texts/);
 });
+
+test("landing page shows an amber Postmark alert after 3 quiet days", () => {
+  const html = renderLandingPage({
+    postmarkAlert: { level: "amber", daysSinceLastEvent: 3 },
+  });
+
+  assert.match(html, /landing-alert landing-alert--amber/);
+  assert.match(html, /Postmark webhooks look quiet/);
+  assert.match(html, /No Postmark webhook events received for 3 days\./);
+  assert.doesNotMatch(html, /landing-alert--red/);
+});
+
+test("landing page shows a red Postmark alert once events stop for 7 days", () => {
+  const html = renderLandingPage({
+    postmarkAlert: { level: "red", daysSinceLastEvent: 9 },
+  });
+
+  assert.match(html, /landing-alert landing-alert--red/);
+  assert.match(html, /Postmark webhooks have stopped/);
+  assert.match(html, /No Postmark webhook events received for 9 days\./);
+});
+
+test("landing page Postmark alert renders above the header at the top of the page", () => {
+  const html = renderLandingPage({
+    postmarkAlert: { level: "red", daysSinceLastEvent: 8 },
+  });
+
+  assert.ok(html.indexOf("landing-alert") < html.indexOf("landing__header"));
+});
+
+test("landing page Postmark alert words a never-received store without a day count", () => {
+  const html = renderLandingPage({
+    postmarkAlert: { level: "red", daysSinceLastEvent: null },
+  });
+
+  assert.match(html, /No Postmark webhook events have ever been received\./);
+});
+
+test("landing page Postmark alert uses singular day wording at one day", () => {
+  const html = renderLandingPage({
+    postmarkAlert: { level: "amber", daysSinceLastEvent: 1 },
+  });
+
+  assert.match(html, /received for 1 day\./);
+});
+
+test("landing page hides the Postmark alert when webhooks are current", () => {
+  const html = renderLandingPage({ postmarkAlert: null });
+
+  assert.doesNotMatch(html, /landing-alert/);
+});

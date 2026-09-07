@@ -40,8 +40,12 @@ function renderPanelActions(panelId: string, options: WikiAppShellOptions): stri
 
   if (panelId === "wiki-editor" && options.editor.article) {
     const article = options.editor.article;
+    // Save is repeated up here so a long article can be saved without scrolling
+    // to the footer. It carries the same data-wiki-save the footer button does,
+    // so the one delegated handler drives both and they behave identically.
     // Marked so the client can save, refresh the summary, and only then leave.
     return `
+      <button class="panel-action-link" type="button" data-wiki-save><i class="bi bi-save ui-icon" aria-hidden="true"></i><span>Save</span></button>
       <a class="panel-action-link" href="/wiki?panel=wiki-article&article=${article.id}" data-wiki-done-editing data-wiki-id="${article.id}"><i class="bi bi-arrow-left ui-icon" aria-hidden="true"></i><span>Done editing</span></a>
     `;
   }

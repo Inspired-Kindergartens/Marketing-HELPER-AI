@@ -992,6 +992,33 @@ test("the editor says who owns the category", () => {
   assert.match(locked, /set by you — the AI will not change it/);
 });
 
+test("the editor title bar carries a Save alongside the footer one", () => {
+  const editing = renderWikiAppShell({
+    focusPanelId: "wiki-editor",
+    list: { articles: [], search: "", categories: [] },
+    article: { article: null },
+    editor: {
+      article: {
+        id: 7,
+        title: "Meta ads budget rules",
+        category: "Advertising",
+        tags: ["meta"],
+        summary: "How we set daily spend.",
+        contentHtml: "<p>Twenty a day.</p>",
+        isPinned: false,
+        isCategoryLocked: false,
+        updatedAt: "2026-08-01T00:00:00.000Z",
+      },
+      categories: ["Advertising"],
+    },
+  });
+
+  // Both buttons carry the same hook, so the one delegated handler saves either
+  // way and a long article never has to be scrolled to save it.
+  assert.match(editing, /<button class="panel-action-link" type="button" data-wiki-save>/);
+  assert.match(editing, /<button type="button" class="wiki-editor__save" data-wiki-save>/);
+});
+
 test("copy repairs lists nested directly inside a list", () => {
   const shell = renderWikiAppShell({
     list: { articles: [], search: "", categories: [] },

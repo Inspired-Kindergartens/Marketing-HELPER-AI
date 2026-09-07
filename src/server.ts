@@ -117,7 +117,13 @@ import { renderCommsAppShell, VALID_COMMS_PANEL_IDS } from "./ui/comms-app-shell
 import { renderPostmarkMessageList } from "./ui/comms/postmark-panel.js";
 import { ingestPostmarkEvent, isPostmarkSourceIp, verifyBasicAuth } from "./postmark/webhook.js";
 import { readCloudflareSyncConfig, syncPostmarkEventsFromCloudflare } from "./postmark/cloudflare-sync.js";
-import { renderLandingIntelligenceFeed, renderLandingPage } from "./ui/landing-page.js";
+import {
+  POSTMARK_ALERT_AMBER_DAYS,
+  POSTMARK_ALERT_RED_DAYS,
+  renderLandingIntelligenceFeed,
+  renderLandingPage,
+} from "./ui/landing-page.js";
+import type { PostmarkAlert } from "./ui/landing-page.js";
 import {
   addLandingIntelligenceSearchText,
   getLandingIntelligenceFeed,
@@ -1046,16 +1052,57 @@ function renderContactUploadPage(input: {
 </html>`;
 }
 
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+// Landing-page staleness alert for Postmark webhooks, derived from the same
+// webhook check the Comms panel uses so there is one source of truth for when
+// an event last arrived. Amber at 3 days, red at 7; a store that has never
+// received an event is treated as red (nothing is flowing at all).
+async function getPostmarkAlert(now = new Date()): Promise<PostmarkAlert | null> {
+  try {
+    const check = await readPostmarkWebhookCheck(now);
+    if (!check.latestReceivedAt) {
+      return { level: "red", daysSinceLastEvent: null };
+    }
+
+    const daysSinceLastEvent = Math.floor(
+      (now.getTime() - new Date(check.latestReceivedAt).getTime()) / MS_PER_DAY,
+    );
+    if (daysSinceLastEvent >= POSTMARK_ALERT_RED_DAYS) {
+      return { level: "red", daysSinceLastEvent };
+    }
+    if (daysSinceLastEvent >= POSTMARK_ALERT_AMBER_DAYS) {
+      return { level: "amber", daysSinceLastEvent };
+    }
+    return null;
+  } catch (error) {
+    // The landing page must still render if the check fails.
+    app.log.error({ error }, "Postmark landing alert check failed");
+    return null;
+  }
+}
+
 app.get("/", async (_request, reply) => {
   void tickWeeklySnapshotRefresh(app.log);
-  const [reminders, agreementStatus] = await Promise.all([getDueAndOverdueTasks(), getAgreementStatus()]);
+  const [reminders, agreementStatus, postmarkAlert] = await Promise.all([
+    getDueAndOverdueTasks(),
+    getAgreementStatus(),
+    getPostmarkAlert(),
+  ]);
   const ktcaReminder =
     agreementStatus.expired || agreementStatus.expiringSoon
       ? { expired: agreementStatus.expired, daysUntilExpiry: agreementStatus.daysUntilExpiry ?? 0 }
       : null;
   return reply
     .type("text/html; charset=utf-8")
-    .send(renderLandingPage({ reminders, intelligenceFeed: getLandingIntelligenceFeed(), ktcaReminder }));
+    .send(
+      renderLandingPage({
+        reminders,
+        intelligenceFeed: getLandingIntelligenceFeed(),
+        ktcaReminder,
+        postmarkAlert,
+      }),
+    );
 });
 
 app.get("/api/landing-intelligence", async (_request, reply) => {

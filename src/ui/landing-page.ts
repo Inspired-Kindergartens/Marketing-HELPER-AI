@@ -54,6 +54,39 @@ export type KtcaReminder = {
   daysUntilExpiry: number;
 };
 
+// Amber once no Postmark webhook event has arrived for 3 days, red at 7.
+// Webhooks are the only Postmark data source (no server token), and Postmark
+// does not backfill, so a silent gap is unrecoverable — it gets top billing.
+export const POSTMARK_ALERT_AMBER_DAYS = 3;
+export const POSTMARK_ALERT_RED_DAYS = 7;
+
+export type PostmarkAlert = {
+  level: "amber" | "red";
+  // Whole days since the last event arrived; null when none ever has.
+  daysSinceLastEvent: number | null;
+};
+
+function renderPostmarkAlert(alert: PostmarkAlert | null | undefined): string {
+  if (!alert) return "";
+  const detail =
+    alert.daysSinceLastEvent == null
+      ? "No Postmark webhook events have ever been received."
+      : `No Postmark webhook events received for ${alert.daysSinceLastEvent} day${alert.daysSinceLastEvent === 1 ? "" : "s"}.`;
+  const heading =
+    alert.level === "red" ? "Postmark webhooks have stopped" : "Postmark webhooks look quiet";
+  return `
+    <section class="landing-alert landing-alert--${alert.level}" role="alert" aria-label="Postmark webhook alert">
+      <a class="landing-alert__link" href="/comms?panel=postmark">
+        <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+        <span class="landing-alert__body">
+          <span class="landing-alert__heading">${escapeHtml(heading)}</span>
+          <span class="landing-alert__detail">${escapeHtml(detail)} Check the Cloudflare tunnel and the Postmark webhook settings.</span>
+        </span>
+      </a>
+    </section>
+  `;
+}
+
 function renderReminders(reminders: TaskReminderFeed | undefined, ktcaReminder?: KtcaReminder | null): string {
   const taskItems = reminders
     ? [
@@ -200,6 +233,7 @@ export type LandingPageOptions = {
   reminders?: TaskReminderFeed;
   intelligenceFeed?: LandingIntelligenceFeed;
   ktcaReminder?: KtcaReminder | null;
+  postmarkAlert?: PostmarkAlert | null;
 };
 
 export function renderLandingPage(options: LandingPageOptions = {}) {
@@ -255,6 +289,7 @@ export function renderLandingPage(options: LandingPageOptions = {}) {
   </head>
   <body class="landing-body">
     <main class="landing">
+      ${renderPostmarkAlert(options.postmarkAlert)}
       <header class="landing__header">
         <h1 class="landing__title">Marketing Helper AI</h1>
       </header>

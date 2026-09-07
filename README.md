@@ -240,7 +240,7 @@ Optional integrations:
 - `META_USER_ID`, `META_ACCESS_TOKEN`, `META_AD_ACCOUNT_ID`. Generate the token via Graph API Explorer (`developers.facebook.com/tools/explorer`, scopes `ads_read` and `business_management`), then extend it to 60 days in the Access Token Debugger.
 - `GOOGLE_ANALYTICS_PROPERTY_ID`.
 - `GOOGLE_ANALYTICS_OAUTH_PATH`, `GOOGLE_ANALYTICS_TOKEN_PATH`, or `GOOGLE_ANALYTICS_REFRESH_TOKEN`.
-- `POSTMARK_SERVER_TOKEN`, `POSTMARK_WEBHOOK_BASIC_AUTH` - Postmark email send token and the basic-auth password Postmark presents to the live webhook endpoint.
+- `POSTMARK_SERVER_TOKEN`, `POSTMARK_WEBHOOK_BASIC_AUTH` - Postmark email send token and the basic-auth password Postmark presents to the live webhook endpoint. The webhook itself is configured in Postmark by the web host (Blacksheep), not by us — see [Postmark Webhook Alerts](#postmark-webhook-alerts-amber--red).
 - `CLOUDFLARE_SYNC_URL`, `CLOUDFLARE_SYNC_TOKEN` - Cloudflare Worker that buffers Postmark webhook events while the app is offline, and the `X-Sync-Token` used to read from it. See [Postmark Event Sync](#postmark-event-sync).
 
 ## Postmark Event Sync
@@ -260,6 +260,92 @@ When the app starts, and then **once every hour** while it runs, it pulls any ne
 The sync is safe to run repeatedly: ingestion de-duplicates against the existing `PostmarkMessageEvent` rows, and the cursor only moves forward, so an overlapping pull stores nothing twice. A failed pull is logged and retried on the next hourly tick; the cursor means nothing is missed in the meantime. If `CLOUDFLARE_SYNC_URL` or `CLOUDFLARE_SYNC_TOKEN` is unset, the loop logs a warning and stays idle.
 
 A one-off CSV export from Postmark can also be imported via `importPostmarkActivityCsv` in `src/postmark/csv-import.ts`, which writes through the same de-duplicated storage path.
+
+## Postmark Webhook Alerts (amber / red)
+
+The landing page shows a banner at the top when Postmark webhook events stop arriving:
+
+| Alert | Trigger | Meaning |
+| --- | --- | --- |
+| **Amber** — "Postmark webhooks look quiet" | No event received for **3+ days** | Possibly just a quiet period with no email sent. Worth checking. |
+| **Red** — "Postmark webhooks have stopped" | No event received for **7+ days**, or none ever received | Something is almost certainly broken. Act on it. |
+
+No banner appears while events are current. The banner links to the Webmail panel at `/comms?panel=postmark`.
+
+Thresholds are `POSTMARK_ALERT_AMBER_DAYS` / `POSTMARK_ALERT_RED_DAYS` in `src/ui/landing-page.ts`; the level is derived in `getPostmarkAlert()` in `src/server.ts` from the `latestReceivedAt` of `readPostmarkWebhookCheck()`.
+
+**Why this matters:** there is no Postmark server token for this deployment, so webhooks are the *only* source of email event data, and **Postmark does not backfill** — events missed while the webhook is misconfigured are lost permanently (only a manual CSV export can recover them). A red alert is genuinely urgent.
+
+### Access constraint — Postmark changes go through Blacksheep
+
+**We do not have permission to edit the webhook in Postmark ourselves.** The Postmark account is administered by the web host, **Blacksheep**. Any change to the webhook URL, the events subscribed, or the stream it is attached to must be requested from them.
+
+Everything on the Cloudflare side (tunnel, DNS, Worker) is ours and can be changed without them.
+
+### Diagnosing a red alert
+
+Work through these in order — most are ours to fix, and only the last needs Blacksheep.
+
+**1. Is the app actually running and reachable?**
+
+```powershell
+Get-Service Cloudflared              # expect Status = Running
+Invoke-WebRequest http://127.0.0.1:3000/ -UseBasicParsing   # expect HTTP 200
+```
+
+If the service is stopped: `Start-Service Cloudflared`. The tunnel ("Beep Beep", id `37b734c8-4768-480f-a043-b9c978953b0d`, `cloudflared` 2026.5.0) is installed as a Windows service, auto-starts on boot, and is outbound-only — no inbound firewall rule is involved.
+
+**2. Is the public endpoint answering through the tunnel?**
+
+```bash
+curl -i https://webhooks.inspiredkindergartens.net/webhooks/postmark/events
+```
+
+Expected results, from outside the network:
+
+- **401** with no credentials — correct, the endpoint is alive and auth is enforced.
+- **403** with correct credentials but from a non-Postmark IP — also correct; the source-IP allowlist is doing its job.
+- **Connection failure / 502 / 530** — the tunnel or DNS is broken. This is ours to fix in the Cloudflare dashboard: check the tunnel is healthy and the public hostname still maps to `http://127.0.0.1:3000`.
+
+**3. Has the Cloudflare Worker buffer also gone quiet?**
+
+```bash
+curl -H "X-Sync-Token: $CLOUDFLARE_SYNC_TOKEN" \
+  "$CLOUDFLARE_SYNC_URL/api/postmark/events?after_id=0" | head
+```
+
+This distinguishes the two failure modes, because the Worker receives the same webhooks independently of this app:
+
+- **Worker has recent events, local database does not** — the tunnel/live webhook is fine and the *hourly sync* is failing. Check the app log for "Cloudflare Postmark sync failed" and confirm `CLOUDFLARE_SYNC_URL` / `CLOUDFLARE_SYNC_TOKEN` in `.env`. No Blacksheep involvement; the buffered events will ingest once the sync works, and nothing is lost.
+- **Worker is empty too** — Postmark has stopped sending altogether. Continue to step 4.
+
+**4. Confirm email was actually sent.** If no transactional email went out in the alert window, there is nothing wrong — the alert is doing its job on a genuinely quiet period. Verify before escalating.
+
+**5. Escalate to Blacksheep.** If the endpoint answers correctly, the Worker is empty, and mail *was* sent, the webhook configuration in Postmark has been changed, disabled, or moved to another stream.
+
+### What to ask Blacksheep for
+
+Give them all of this — it is what they need to restore the webhook without a follow-up round trip:
+
+> On the **Inspired Kindergartens** Postmark server, under the **Default Transactional Stream** (`outbound`), please confirm/restore the webhook:
+>
+> **URL:** `https://webhooks:<POSTMARK_WEBHOOK_BASIC_AUTH>@webhooks.inspiredkindergartens.net/webhooks/postmark/events`
+>
+> **Events to tick:** Delivery, Bounce, Open, Click
+> (Spam Complaint and Subscription Change are also supported if suppression visibility is wanted.)
+
+**Send the password out-of-band** — it is the `POSTMARK_WEBHOOK_BASIC_AUTH` value in `.env`. Never paste it into a ticket, PR, or email thread alongside the URL.
+
+Ask them to confirm which stream the webhook ended up on. A webhook saved against the wrong stream looks correctly configured in Postmark but sends nothing for transactional mail — a silent failure this alert would keep flagging.
+
+### After it is fixed
+
+1. Trigger one real transactional email.
+2. Watch for the event to arrive — either wait for the hourly sync or restart the app to force an immediate pull.
+3. The landing-page banner clears on its own once an event lands (it is computed per page load, so just refresh).
+4. Any events missed while the webhook was down are **not** recoverable through the Worker if Postmark never sent them. Request a CSV activity export from Blacksheep and import it via `importPostmarkActivityCsv` in `src/postmark/csv-import.ts`.
+
+If the source-IP allowlist is the problem (a 403 in the logs for genuine Postmark traffic), Postmark's sending IPs are hardcoded in `POSTMARK_WEBHOOK_IPS` in `src/postmark/webhook.ts` — currently `3.134.147.250`, `50.31.156.6`, `50.31.156.77`, `18.217.206.57`. If Postmark adds an IP, that set needs updating.
 
 ## Dashboard Panels
 
