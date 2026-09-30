@@ -1,4 +1,10 @@
-import type { JobDescriptionListItem, JdTitleProfileView, JdCentreProfileView } from "../../storage/jd-store.js";
+import {
+  JD_OTHER_LOCATION_DISPLAY,
+  JD_OTHER_LOCATION_KEY,
+  type JobDescriptionListItem,
+  type JdTitleProfileView,
+  type JdCentreProfileView,
+} from "../../storage/jd-store.js";
 import { formatNzDisplayDate } from "./jd-date.js";
 import { formatJdLocationDisplay } from "./jd-email.js";
 
@@ -41,15 +47,22 @@ function renderJdRow(jd: JobDescriptionListItem): string {
 
 export function renderJdListPanel(options: JdListPanelOptions): string {
   const rows = options.jobDescriptions.map(renderJdRow).join("");
+  // Both sets are rendered; the client script hides the ones that don't apply to
+  // the selected location, so the Job Title list differs for "Other".
   const titleOptions = options.titleProfiles
     .map(
       (profile) =>
         `<option value="${profile.id}" data-centre-specific="${profile.isCentreSpecific ? "true" : "false"}">${escapeHtml(profile.jobTitle)}</option>`,
     )
     .join("");
-  const locationOptions = options.centreProfiles
-    .map((centre) => `<option value="${centre.centreKey}">${escapeHtml(centre.locationDisplay)}</option>`)
-    .join("");
+  const locationOptions = [
+    ...options.centreProfiles.map(
+      (centre) =>
+        `<option value="${centre.centreKey}">${escapeHtml(formatJdLocationDisplay(centre.locationDisplay))}</option>`,
+    ),
+    // Org-wide roles that are not based at a kindergarten. Selected by default.
+    `<option value="${JD_OTHER_LOCATION_KEY}" selected>Other (not centre based)</option>`,
+  ].join("");
 
   return `
     <div class="jd-list" data-jd-list>
@@ -64,9 +77,26 @@ export function renderJdListPanel(options: JdListPanelOptions): string {
         <label data-jd-location-field>
           <span>Location</span>
           <select name="centreKey" required>
-            <option value="" disabled selected>Select a kindergarten</option>
+            <option value="" disabled>Select a location</option>
             ${locationOptions}
           </select>
+        </label>
+        <label data-jd-other-location-field hidden>
+          <span>Location name</span>
+          <input
+            type="text"
+            name="locationDisplay"
+            placeholder="${escapeHtml(JD_OTHER_LOCATION_DISPLAY)}"
+          />
+        </label>
+        <label data-jd-other-title-field hidden>
+          <span>Job title (optional override)</span>
+          <input
+            type="text"
+            name="jobTitleOverride"
+            maxlength="200"
+            placeholder="Leave blank to use the selected title"
+          />
         </label>
         <button type="submit" data-jd-create-submit><i class="bi bi-plus-lg ui-icon" aria-hidden="true"></i><span>New Job Description</span></button>
         <div class="jd-list__create-busy" data-jd-create-busy role="status" aria-live="polite" hidden>
@@ -76,30 +106,51 @@ export function renderJdListPanel(options: JdListPanelOptions): string {
       </form>
       <script>
         (function() {
-          // Org-wide roles (e.g. office staff) are not based at a kindergarten,
-          // so the Location step is hidden and not required for them.
+          // Location leads: "Other" (an org-wide role with no kindergarten) is
+          // the default, and the Job Title list is filtered to match — office
+          // titles for "Other", centre titles for a kindergarten. Picking
+          // "Other" also reveals a free-text location name and an optional
+          // job-title override, so a one-off role can be named without first
+          // creating a profile for it.
           var form = document.querySelector("[data-jd-create]");
           if (!form) return;
           var titleSelect = form.querySelector('[name="jobTitleProfileId"]');
-          var locationField = form.querySelector("[data-jd-location-field]");
           var locationSelect = form.querySelector('[name="centreKey"]');
-          if (!titleSelect || !locationField || !locationSelect) return;
+          var otherLocationField = form.querySelector("[data-jd-other-location-field]");
+          var otherTitleField = form.querySelector("[data-jd-other-title-field]");
+          if (!titleSelect || !locationSelect || !otherLocationField || !otherTitleField) return;
+          var OTHER = "${JD_OTHER_LOCATION_KEY}";
 
-          function syncLocationVisibility() {
-            var option = titleSelect.options[titleSelect.selectedIndex];
-            var centreSpecific = !option || option.getAttribute("data-centre-specific") !== "false";
-            locationField.hidden = !centreSpecific;
-            locationSelect.disabled = !centreSpecific;
-            if (centreSpecific) {
-              locationSelect.setAttribute("required", "required");
-            } else {
-              locationSelect.removeAttribute("required");
-              locationSelect.value = "";
+          // The placeholder is the first option; every other one is a profile.
+          var titleOptions = Array.prototype.slice.call(titleSelect.options, 1);
+          var placeholder = titleSelect.options[0];
+
+          function syncTitlesForLocation() {
+            var isOther = locationSelect.value === OTHER;
+            var selected = null;
+
+            titleOptions.forEach(function(option) {
+              var centreSpecific = option.getAttribute("data-centre-specific") !== "false";
+              // Show the titles that belong to the chosen kind of location.
+              var applies = isOther ? !centreSpecific : centreSpecific;
+              option.hidden = !applies;
+              option.disabled = !applies;
+              if (applies && selected === null) selected = option;
+            });
+
+            // If the current pick no longer applies, fall back to the
+            // placeholder so a hidden option can never be submitted.
+            var current = titleSelect.options[titleSelect.selectedIndex];
+            if (!current || current.disabled) {
+              if (placeholder) placeholder.selected = true;
             }
+
+            otherLocationField.hidden = !isOther;
+            otherTitleField.hidden = !isOther;
           }
 
-          titleSelect.addEventListener("change", syncLocationVisibility);
-          syncLocationVisibility();
+          locationSelect.addEventListener("change", syncTitlesForLocation);
+          syncTitlesForLocation();
         })();
       </script>
       <div class="jd-list__rows">

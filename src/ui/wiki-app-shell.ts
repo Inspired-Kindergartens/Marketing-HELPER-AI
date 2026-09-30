@@ -7,6 +7,7 @@ const PANEL_DEFINITIONS = [
   { id: "wiki-list", title: "Things To Know", className: "panel--wiki-list" },
   { id: "wiki-article", title: "Article", className: "panel--wiki-article" },
   { id: "wiki-editor", title: "Edit Article", className: "panel--wiki-editor" },
+  { id: "chat", title: "AI Chat with Beep Beep", className: "panel--chat" },
 ] as const;
 
 const VALID_WIKI_PANEL_IDS = new Set<string>(PANEL_DEFINITIONS.map((panel) => panel.id));
@@ -25,7 +26,112 @@ export type WikiAppShellOptions = {
 function renderPanelContent(panelId: string, options: WikiAppShellOptions): string {
   if (panelId === "wiki-article") return renderWikiArticlePanel(options.article);
   if (panelId === "wiki-editor") return renderWikiEditorPanel(options.editor);
+  if (panelId === "chat") return renderWikiAiChatPanel();
   return renderWikiListPanel(options.list);
+}
+
+// The same chat the dashboard, tasks, and comms sections carry, pointed at the
+// general chat endpoint — the one that already grounds every answer on this
+// wiki, so asking here reads the articles sitting next to it.
+function renderWikiAiChatPanel(): string {
+  return `
+    <div class="chat-shell" data-ai-chat data-ai-chat-endpoint="/api/ai/chat/stream">
+      <div class="chat-shell__messages">
+        <div class="chat-message chat-message--assistant">
+          <span class="chat-message__role">Beep Beep</span>
+          <p class="chat-message__body">Ask anything covered by Things To Know. I read the articles on this page before answering and say which one the answer came from.</p>
+        </div>
+      </div>
+      <div class="chat-shell__composer">
+        <label class="chat-shell__prompt-label" for="wiki-chat-prompt">Prompt</label>
+        <textarea id="wiki-chat-prompt" class="chat-shell__prompt-input" placeholder="Ask about a policy, process, or anything written down here."></textarea>
+        <button class="chat-shell__send" type="button" data-ai-chat-send><i class="bi bi-send ui-icon" aria-hidden="true"></i><span>Send</span></button>
+      </div>
+    </div>
+  `;
+}
+
+// Same streaming client as the Tasks and Communications chats.
+function renderWikiChatScript(): string {
+  return `
+    <script>
+      (function() {
+        var shell = document.querySelector("[data-ai-chat]");
+        if (!shell) return;
+        var input = shell.querySelector(".chat-shell__prompt-input");
+        var button = shell.querySelector("[data-ai-chat-send]");
+        var messages = shell.querySelector(".chat-shell__messages");
+        var history = [];
+        function append(role, text) {
+          var row = document.createElement("div");
+          row.className = "chat-message chat-message--" + role;
+          var title = document.createElement("span");
+          title.className = "chat-message__role";
+          title.textContent = role === "assistant" ? "Beep Beep" : "You";
+          var body = document.createElement("p");
+          body.className = "chat-message__body";
+          body.textContent = text;
+          row.append(title, body);
+          messages.appendChild(row);
+          messages.scrollTop = messages.scrollHeight;
+          return body;
+        }
+        async function send() {
+          var prompt = input.value.trim();
+          if (!prompt || button.disabled) return;
+          append("user", prompt);
+          input.value = "";
+          button.disabled = true;
+          var output = append("assistant", "");
+          var answer = "";
+          try {
+            var response = await fetch(shell.dataset.aiChatEndpoint, {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ prompt: prompt, messages: history }),
+            });
+            if (!response.ok || !response.body) throw new Error("Chat request failed.");
+            var reader = response.body.getReader();
+            var decoder = new TextDecoder();
+            var buffer = "";
+            while (true) {
+              var part = await reader.read();
+              if (part.done) break;
+              buffer += decoder.decode(part.value, { stream: true });
+              var events = buffer.split("\n\n");
+              buffer = events.pop() || "";
+              events.forEach(function(eventText) {
+                var lines = eventText.split("\n");
+                var eventType = lines.find(function(line) { return line.indexOf("event: ") === 0; });
+                var eventData = lines.find(function(line) { return line.indexOf("data: ") === 0; });
+                if (!eventType || !eventData) return;
+                var payload = JSON.parse(eventData.slice(6));
+                if (eventType === "event: chunk") {
+                  answer += payload.chunk;
+                  output.textContent = answer;
+                  messages.scrollTop = messages.scrollHeight;
+                } else if (eventType === "event: error") {
+                  output.textContent = payload.error || "Chat request failed.";
+                }
+              });
+            }
+            history.push({ role: "user", content: prompt }, { role: "assistant", content: answer });
+          } catch (error) {
+            output.textContent = error instanceof Error ? error.message : "Chat request failed.";
+          } finally {
+            button.disabled = false;
+          }
+        }
+        button.addEventListener("click", send);
+        input.addEventListener("keydown", function(event) {
+          if (event.key === "Enter" && !event.shiftKey) {
+            event.preventDefault();
+            send();
+          }
+        });
+      })();
+    </script>
+  `;
 }
 
 function renderPanelActions(panelId: string, options: WikiAppShellOptions): string | undefined {
@@ -397,6 +503,18 @@ function renderWikiScript(): string {
           });
         }
 
+        // Pressing a toolbar button must not take focus off the editor. Without
+        // this the mousedown blurs the contenteditable, which drops the
+        // selection; the click handler's focus() then puts the caret at the
+        // start of the editor, so formatBlock reformats the first block instead
+        // of the one the user was in (clicking Paragraph inside a heading did
+        // nothing). preventDefault on mousedown leaves the caret untouched.
+        document.addEventListener("mousedown", function(event) {
+          if (event.target instanceof Element && event.target.closest("[data-wiki-cmd]")) {
+            event.preventDefault();
+          }
+        });
+
         document.addEventListener("click", function(event) {
           var el = event.target instanceof Element
             ? event.target.closest("[data-wiki-action], [data-wiki-cmd], [data-wiki-save], [data-wiki-copy], [data-wiki-add], [data-wiki-create-cancel], [data-wiki-regenerate], [data-wiki-categories], [data-wiki-categories-close], [data-wiki-category-delete], [data-wiki-done-editing]")
@@ -406,7 +524,9 @@ function renderWikiScript(): string {
           var cmd = el.getAttribute("data-wiki-cmd");
           if (cmd) {
             event.preventDefault();
-            if (content) content.focus();
+            // Only focus when focus really is elsewhere: focusing an already
+            // focused contenteditable is what collapses the caret to the start.
+            if (content && document.activeElement !== content) content.focus();
             if (cmd === "createLink") {
               var url = window.prompt("Link URL");
               if (url) document.execCommand("createLink", false, url);
@@ -688,6 +808,68 @@ function renderWikiScript(): string {
           poll(0);
         })();
 
+        // --- Category reordering ---------------------------------------------
+        // Dragging a category heading moves the whole group. The new order is
+        // posted as a list of ids and persisted to the category sortOrder, so
+        // it survives a reload and drives the grouping on the next render.
+        (function() {
+          var rows = document.querySelector(".wiki-list__rows");
+          if (!rows) return;
+
+          var dragging = null;
+
+          function groups() {
+            return Array.prototype.slice.call(rows.querySelectorAll("[data-wiki-category-order]"));
+          }
+
+          rows.addEventListener("dragstart", function(event) {
+            var group = event.target.closest ? event.target.closest("[data-wiki-category-order]") : null;
+            if (!group) return;
+            dragging = group;
+            group.classList.add("wiki-list__group--dragging");
+            if (event.dataTransfer) {
+              event.dataTransfer.effectAllowed = "move";
+              // Firefox will not start a drag without data set.
+              event.dataTransfer.setData("text/plain", group.dataset.wikiCategoryOrder);
+            }
+          });
+
+          rows.addEventListener("dragover", function(event) {
+            if (!dragging) return;
+            event.preventDefault();
+            if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+
+            var over = event.target.closest ? event.target.closest("[data-wiki-category-order]") : null;
+            if (!over || over === dragging) return;
+
+            // Insert before or after depending on which half is hovered, so the
+            // drop lands where the pointer actually is.
+            var box = over.getBoundingClientRect();
+            var after = event.clientY > box.top + box.height / 2;
+            rows.insertBefore(dragging, after ? over.nextSibling : over);
+          });
+
+          function finish() {
+            if (!dragging) return;
+            dragging.classList.remove("wiki-list__group--dragging");
+            dragging = null;
+
+            var ids = groups().map(function(group) { return Number(group.dataset.wikiCategoryOrder); });
+            fetch("/api/wiki/categories/reorder", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ ids: ids }),
+            }).catch(function() {});
+          }
+
+          rows.addEventListener("drop", function(event) {
+            if (!dragging) return;
+            event.preventDefault();
+            finish();
+          });
+          rows.addEventListener("dragend", finish);
+        })();
+
         // --- Background tagging ---------------------------------------------
         // A newly written article is classified in the background, so any row
         // still showing "Tagging..." polls until its tags land.
@@ -728,6 +910,9 @@ export function renderWikiAppShell(options: WikiAppShellOptions): string {
   const visiblePanels = PANEL_DEFINITIONS.filter((panel) => {
     if (panel.id === "wiki-article") return options.article.article != null;
     if (panel.id === "wiki-editor") return options.editor.article != null;
+    // Focusing one panel hides the rest, chat included: the focus view is a
+    // single panel filling the shell, matching every other section.
+    if (panel.id === "chat") return focusPanelId == null;
     return true;
   });
 
@@ -761,6 +946,7 @@ export function renderWikiAppShell(options: WikiAppShellOptions): string {
     </aside>
     ${layout}
     ${renderWikiScript()}
+    ${renderWikiChatScript()}
   </body>
 </html>`;
 }

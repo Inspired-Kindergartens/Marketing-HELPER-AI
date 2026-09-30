@@ -22,7 +22,9 @@ import { buildAiDashboardContext, buildDashboardSystemPrompt } from "./ai/contex
 import {
   buildLiveInfocareGrounding,
   formatLiveInfocareAnswer,
+  buildUnresolvedLiveInfocareGrounding,
   isLiveInfocarePrompt,
+  resolvePendingLiveInfocarePrompt,
   planLiveInfocareRequest,
   runLiveInfocareRequest,
 } from "./ai/infocare-live.js";
@@ -72,6 +74,7 @@ import {
   getGeneralChatPageData,
   renameGeneralChatGroup,
   updateGeneralChatConversation,
+  readGeneralChatHistory,
 } from "./storage/general-chat-store.js";
 import {
   aggregateGoogleAnalyticsSnapshots,
@@ -141,9 +144,10 @@ import {
   updateTask,
   setTaskStatus,
   deleteTask,
-  startTaskTimer,
-  stopTaskTimer,
-  logTaskTime,
+  addTaskNote,
+  saveTaskNoteDraft,
+  updateTaskNote,
+  deleteTaskNote,
   addChecklistItem,
   updateChecklistItem,
   toggleChecklistItem,
@@ -179,6 +183,7 @@ import {
   listJobDescriptions,
   getJobDescription,
   createJobDescription,
+  JD_OTHER_LOCATION_KEY,
   updateJobDescription,
   deleteJobDescription,
   duplicateJobDescription,
@@ -206,6 +211,7 @@ import { generateJdPdfBuffer, jdPdfAssetUrl, jdPdfFilename } from "./ui/jd/jd-pd
 import {
   applyWikiTagging,
   buildWikiChatGrounding,
+  reorderWikiCategories,
   createWikiArticle,
   createWikiCategory,
   deleteWikiArticle,
@@ -1407,29 +1413,37 @@ app.post<{ Params: { id: string }; Body: { prompt?: string } }>(
       const centreReferences = await readCentreReferences();
       let liveGrounding: string | null = null;
 
-      if (!streamInput.hasDocument && isLiveInfocarePrompt(prompt)) {
-        const memory = await buildGeneralChatMemory(conversationId, centreReferences);
-        const livePlan = planLiveInfocareRequest(prompt, centreReferences, memory.selectedCentreKey);
+      // A bare centre-name reply to a clarifying question still belongs to the
+      // earlier live request, so rebuild that request before deciding.
+      const pendingPrompt = streamInput.hasDocument
+        ? null
+        : resolvePendingLiveInfocarePrompt(prompt, await readGeneralChatHistory(conversationId));
+      const livePrompt = pendingPrompt ?? prompt;
 
+      if (!streamInput.hasDocument && isLiveInfocarePrompt(livePrompt)) {
+        const memory = await buildGeneralChatMemory(conversationId, centreReferences);
+        const livePlan = planLiveInfocareRequest(livePrompt, centreReferences, memory.selectedCentreKey);
+
+        // An unresolved lookup must never end the turn: fall through to the
+        // model with the reason as grounding so it can reason about the name.
         if (!livePlan.intent) {
-          writeEvent("error", { error: livePlan.error ?? "I could not determine which live Infocare data to read." });
+          liveGrounding = buildUnresolvedLiveInfocareGrounding(livePlan.error, centreReferences);
+        } else {
+          const liveResult = await runLiveInfocareRequest(livePlan.intent);
+          answer = formatLiveInfocareAnswer(liveResult, livePrompt);
+          for (const chunk of answer.split(/(\s+)/).filter(Boolean)) {
+            writeEvent("chunk", { chunk });
+          }
+
+          const assistantMessage = await addGeneralChatMessage(conversationId, "assistant", answer);
+          writeEvent("saved", {
+            role: "assistant",
+            messageId: assistantMessage.id,
+            messageCount: assistantMessage.messageCount,
+          });
+          writeEvent("done", { messageCount: assistantMessage.messageCount });
           return;
         }
-
-        const liveResult = await runLiveInfocareRequest(livePlan.intent);
-        answer = formatLiveInfocareAnswer(liveResult, prompt);
-        for (const chunk of answer.split(/(\s+)/).filter(Boolean)) {
-          writeEvent("chunk", { chunk });
-        }
-
-        const assistantMessage = await addGeneralChatMessage(conversationId, "assistant", answer);
-        writeEvent("saved", {
-          role: "assistant",
-          messageId: assistantMessage.id,
-          messageCount: assistantMessage.messageCount,
-        });
-        writeEvent("done", { messageCount: assistantMessage.messageCount });
-        return;
       }
 
       const groundingWithWiki = streamInput.hasDocument
@@ -1747,13 +1761,15 @@ app.get<{ Querystring: { panel?: string; project?: string; task?: string } }>(
     const selectedTaskId = parsePositiveInt(request.query?.task);
     const selectedProjectId = parsePositiveInt(request.query?.project);
 
-    // A ?task= link (e.g. from the landing reminders) implies the detail panel.
-    const focusPanelId =
-      resolveTasksFocusPanelId(request.query?.panel) ??
-      (selectedTaskId != null ? "task-detail" : selectedProjectId != null ? "projects" : null);
+    // Only an explicit ?panel= focuses a single panel. A bare ?task= (a board
+    // card, or a landing reminder) keeps the full accordion so the board stays
+    // visible; the shell opens Task Detail in place for the selected task.
+    const focusPanelId = resolveTasksFocusPanelId(request.query?.panel);
 
     const [tasks, projects, members] = await Promise.all([
-      listTasks(),
+      // The board renders a Done column, so completed tasks must be fetched;
+      // listTasks() hides them by default.
+      listTasks({ includeDone: true }),
       listProjects(),
       listMembers(),
     ]);
@@ -1883,38 +1899,48 @@ app.get<{ Querystring: { panel?: string; jd?: string } }>("/jd", async (request,
   );
 });
 
-app.post<{ Body: { jobTitleProfileId?: string; centreKey?: string } }>("/api/jd", async (request, reply) => {
+app.post<{ Body: { jobTitleProfileId?: string; centreKey?: string; locationDisplay?: string; jobTitleOverride?: string } }>("/api/jd", async (request, reply) => {
   const jobTitleProfileId = parsePositiveInt(request.body?.jobTitleProfileId);
-  const centreKey = parsePositiveInt(request.body?.centreKey);
+  const rawCentreKey = request.body?.centreKey;
+  // "other" = an org-wide role with no kindergarten (see JD_OTHER_LOCATION_KEY).
+  const isOtherLocation = rawCentreKey === JD_OTHER_LOCATION_KEY;
+  const centreKey = isOtherLocation ? null : parsePositiveInt(rawCentreKey);
   if (jobTitleProfileId == null) {
     reply.code(400);
     return { error: "A job title is required." };
   }
-  if (centreKey == null) {
-    // Non-centre-specific titles hide the Location step, but creating a JD
-    // still needs a centre for the intro paragraph, Senior Teacher and PDF
-    // footer. Say so plainly rather than failing with a generic message.
-    const profile = (await listTitleProfiles()).find((row) => row.id === jobTitleProfileId);
+  if (centreKey == null && !isOtherLocation) {
     reply.code(400);
-    return {
-      error:
-        profile && !profile.isCentreSpecific
-          ? `"${profile.jobTitle}" is not centre specific. Creating job descriptions for org-wide roles is not supported yet - tick "Centre specific" in Settings to use it for now.`
-          : "A job title and location are required.",
-    };
+    return { error: "A job title and location are required." };
   }
   try {
-    const id = await createJobDescription({ jobTitleProfileId, centreKey });
+    const id = await createJobDescription({
+      jobTitleProfileId,
+      centreKey,
+      ...(isOtherLocation
+        ? {
+            locationDisplay: request.body?.locationDisplay ?? null,
+            // A free-text title is only offered for "Other", where the role may
+            // not have a profile of its own yet.
+            jobTitleOverride: request.body?.jobTitleOverride ?? null,
+          }
+        : {}),
+    });
     // Kick off the first blurb draft in the background so it's often ready
     // by the time the user opens the blurb panel. Fire-and-forget: a failure
     // here (AI unavailable, timeout) just leaves the blurb empty for the
     // user to generate manually — it must not fail JD creation.
     let introGenerated = false;
 
-    try {
-      introGenerated = (await generateJdIntroParagraphIfEmpty(id)) != null;
-    } catch (error) {
-      app.log.warn({ error, jobDescriptionId: id }, "Automatic JD intro paragraph generation failed");
+    if (centreKey != null) {
+      // The intro paragraph is built from centre knowledge docs, Infocare
+      // enrolment facts and other centres' intros, none of which exist for an
+      // org-wide role - so there is nothing to generate for "Other".
+      try {
+        introGenerated = (await generateJdIntroParagraphIfEmpty(id)) != null;
+      } catch (error) {
+        app.log.warn({ error, jobDescriptionId: id }, "Automatic JD intro paragraph generation failed");
+      }
     }
 
     void generateJdBlurb(id).catch((error) => {
@@ -1939,7 +1965,12 @@ app.post<{ Params: { id: string }; Body: Record<string, unknown> }>("/api/jd/:id
   await updateJobDescription(id, {
     ...(typeof body.jobTitle === "string" ? { jobTitle: body.jobTitle } : {}),
     ...(body.titleProfileId !== undefined ? { titleProfileId: body.titleProfileId ? Number(body.titleProfileId) : null } : {}),
-    ...(body.centreKey !== undefined ? { centreKey: body.centreKey ? Number(body.centreKey) : null } : {}),
+    ...(body.centreKey !== undefined
+      ? {
+          centreKey:
+            body.centreKey && body.centreKey !== JD_OTHER_LOCATION_KEY ? Number(body.centreKey) : null,
+        }
+      : {}),
     ...(typeof body.locationDisplay === "string" ? { locationDisplay: body.locationDisplay } : {}),
     ...(typeof body.positionType === "string" ? { positionType: body.positionType } : {}),
     ...(body.fte !== undefined ? { fte: body.fte ? Number(body.fte) : null } : {}),
@@ -2582,6 +2613,16 @@ app.post<{ Body: { name?: string } }>("/api/wiki/categories", async (request, re
   return { ok: true, id: result.id };
 });
 
+// Registered before /:id so the literal "reorder" path is not captured as an id.
+app.post<{ Body: { ids?: unknown } }>("/api/wiki/categories/reorder", async (request, reply) => {
+  const result = await reorderWikiCategories(request.body?.ids);
+  if ("error" in result) {
+    reply.code(400);
+    return result;
+  }
+  return { ok: true };
+});
+
 app.post<{ Params: { id: string }; Body: { name?: string } }>(
   "/api/wiki/categories/:id",
   async (request, reply) => {
@@ -2617,7 +2658,7 @@ app.post<{ Params: { id: string } }>("/api/wiki/categories/:id/delete", async (r
 // convention). They reply with { ok: true } and the client reloads /tasks so the
 // server re-renders the new state.
 
-app.post<{ Body: { title?: string; dueDate?: string; estimatedMinutes?: string; projectId?: string; taskGroupId?: string; assigneeId?: string; centreKey?: string } }>(
+app.post<{ Body: { title?: string; dueDate?: string; projectId?: string; taskGroupId?: string; assigneeId?: string; centreKey?: string } }>(
   "/api/tasks",
   async (request, reply) => {
     const title = String(request.body?.title ?? "").trim();
@@ -2628,7 +2669,6 @@ app.post<{ Body: { title?: string; dueDate?: string; estimatedMinutes?: string; 
     const id = await createTask({
       title,
       dueDate: request.body?.dueDate ?? null,
-      estimatedMinutes: request.body?.estimatedMinutes != null ? Number(request.body.estimatedMinutes) : null,
       projectId: toNullableId(request.body?.projectId),
       taskGroupId: toNullableId(request.body?.taskGroupId),
       assigneeId: toNullableId(request.body?.assigneeId),
@@ -2638,7 +2678,7 @@ app.post<{ Body: { title?: string; dueDate?: string; estimatedMinutes?: string; 
   },
 );
 
-app.post<{ Params: { id: string }; Body: { title?: string; description?: string; dueDate?: string; estimatedMinutes?: string; projectId?: string; taskGroupId?: string; assigneeId?: string; centreKey?: string } }>(
+app.post<{ Params: { id: string }; Body: { title?: string; description?: string; dueDate?: string; projectId?: string; taskGroupId?: string; assigneeId?: string; centreKey?: string } }>(
   "/api/tasks/:id",
   async (request, reply) => {
     const id = parsePositiveInt(request.params.id);
@@ -2655,7 +2695,6 @@ app.post<{ Params: { id: string }; Body: { title?: string; description?: string;
       title,
       description: request.body?.description ?? null,
       dueDate: request.body?.dueDate ?? null,
-      estimatedMinutes: request.body?.estimatedMinutes != null ? Number(request.body.estimatedMinutes) : null,
       projectId: toNullableId(request.body?.projectId),
       taskGroupId: toNullableId(request.body?.taskGroupId),
       assigneeId: toNullableId(request.body?.assigneeId),
@@ -2675,40 +2714,68 @@ app.post<{ Params: { id: string }; Body: { status?: string } }>("/api/tasks/:id/
   return { ok: true };
 });
 
-app.post<{ Params: { id: string } }>("/api/tasks/:id/timer/start", async (request, reply) => {
-  const id = parsePositiveInt(request.params.id);
-  if (id == null) {
-    reply.code(400);
-    return { error: "Valid task id is required." };
-  }
-  await startTaskTimer(id);
-  return { ok: true };
-});
-
-app.post<{ Params: { id: string } }>("/api/tasks/:id/timer/stop", async (request, reply) => {
-  const id = parsePositiveInt(request.params.id);
-  if (id == null) {
-    reply.code(400);
-    return { error: "Valid task id is required." };
-  }
-  await stopTaskTimer(id);
-  return { ok: true };
-});
-
-app.post<{ Params: { id: string }; Body: { minutes?: string | number; note?: string } }>(
-  "/api/tasks/:id/time",
+// Task notes: timestamped progress updates, newest first. Append-only by
+// default; editing and deleting an individual note are separate routes.
+app.post<{ Params: { id: string }; Body: { body?: string } }>(
+  "/api/tasks/:id/notes",
   async (request, reply) => {
     const id = parsePositiveInt(request.params.id);
     if (id == null) {
       reply.code(400);
       return { error: "Valid task id is required." };
     }
-    const minutes = Number(request.body?.minutes ?? 0);
-    if (!Number.isFinite(minutes) || minutes <= 0) {
+    const body = String(request.body?.body ?? "").trim();
+    if (!body) {
       reply.code(400);
-      return { error: "Logged minutes must be a positive number." };
+      return { error: "Note text is required." };
     }
-    await logTaskTime(id, minutes, request.body?.note ?? null);
+    const noteId = await addTaskNote(id, body);
+    return reply.code(201).send({ ok: true, id: noteId });
+  },
+);
+
+// Saves the unposted note draft. Called as the user types, so it never
+// reloads — the draft is only restored on the next full render.
+app.post<{ Params: { id: string }; Body: { body?: string } }>(
+  "/api/tasks/:id/notes/draft",
+  async (request, reply) => {
+    const id = parsePositiveInt(request.params.id);
+    if (id == null) {
+      reply.code(400);
+      return { error: "Valid task id is required." };
+    }
+    await saveTaskNoteDraft(id, String(request.body?.body ?? ""));
+    return { ok: true };
+  },
+);
+
+app.post<{ Params: { id: string; noteId: string }; Body: { body?: string } }>(
+  "/api/tasks/:id/notes/:noteId",
+  async (request, reply) => {
+    const noteId = parsePositiveInt(request.params.noteId);
+    if (noteId == null) {
+      reply.code(400);
+      return { error: "Valid note id is required." };
+    }
+    const body = String(request.body?.body ?? "").trim();
+    if (!body) {
+      reply.code(400);
+      return { error: "Note text is required." };
+    }
+    await updateTaskNote(noteId, body);
+    return { ok: true };
+  },
+);
+
+app.post<{ Params: { id: string; noteId: string } }>(
+  "/api/tasks/:id/notes/:noteId/delete",
+  async (request, reply) => {
+    const noteId = parsePositiveInt(request.params.noteId);
+    if (noteId == null) {
+      reply.code(400);
+      return { error: "Valid note id is required." };
+    }
+    await deleteTaskNote(noteId);
     return { ok: true };
   },
 );
@@ -2846,7 +2913,7 @@ app.post<{ Params: { id: string }; Body: { projectId?: string; taskGroupId?: str
   },
 );
 
-app.post<{ Params: { id: string }; Body: { label?: string } }>(
+app.post<{ Params: { id: string }; Body: { label?: string; dueDate?: string } }>(
   "/api/tasks/:id/checklist",
   async (request, reply) => {
     const id = parsePositiveInt(request.params.id);
@@ -2855,12 +2922,12 @@ app.post<{ Params: { id: string }; Body: { label?: string } }>(
       reply.code(400);
       return { error: "Task id and checklist label are required." };
     }
-    await addChecklistItem(id, label);
+    await addChecklistItem(id, label, request.body?.dueDate ?? null);
     return reply.code(201).send({ ok: true });
   },
 );
 
-app.post<{ Params: { id: string; itemId: string }; Body: { label?: string } }>(
+app.post<{ Params: { id: string; itemId: string }; Body: { label?: string; dueDate?: string } }>(
   "/api/tasks/:id/checklist/:itemId",
   async (request, reply) => {
     const itemId = parsePositiveInt(request.params.itemId);
@@ -2869,7 +2936,13 @@ app.post<{ Params: { id: string; itemId: string }; Body: { label?: string } }>(
       reply.code(400);
       return { error: "Valid checklist item id and label are required." };
     }
-    await updateChecklistItem(itemId, label);
+    // Only pass dueDate through when the client sent the field, so a label-only
+    // edit leaves an existing deadline alone.
+    await updateChecklistItem(
+      itemId,
+      label,
+      request.body?.dueDate !== undefined ? request.body.dueDate : undefined,
+    );
     return { ok: true };
   },
 );
@@ -3592,28 +3665,34 @@ app.post<{
   const memorySelectedCentreKey = selectedCentreKey ?? memory.selectedCentreKey;
   let liveGrounding: string | null = null;
 
-  if (isLiveInfocarePrompt(prompt)) {
-    const livePlan = planLiveInfocareRequest(prompt, centreReferences, memorySelectedCentreKey);
+  // A bare centre-name reply to a clarifying question still belongs to the
+  // earlier live request, so rebuild that request before deciding.
+  const livePrompt =
+    resolvePendingLiveInfocarePrompt(prompt, request.body?.messages as { role: string; content: string }[] | undefined) ??
+    prompt;
 
+  if (isLiveInfocarePrompt(livePrompt)) {
+    const livePlan = planLiveInfocareRequest(livePrompt, centreReferences, memorySelectedCentreKey);
+
+    // An unresolved lookup must never end the turn: fall through to the model
+    // with the reason as grounding so it can reason about the centre name.
     if (!livePlan.intent) {
-      reply.code(400);
+      liveGrounding = buildUnresolvedLiveInfocareGrounding(livePlan.error, centreReferences);
+    } else {
+      const liveResult = await runLiveInfocareRequest(livePlan.intent);
+      liveGrounding = buildLiveInfocareGrounding(liveResult, livePrompt);
+      const answer = formatLiveInfocareAnswer(liveResult, livePrompt);
 
-      return { error: livePlan.error ?? "I could not determine which live Infocare data to read." };
+      return {
+        answer,
+        model: "live Infocare read-only",
+        context: {
+          selectedCentre: livePlan.intent.kind === "centre_list" ? null : livePlan.intent.centre.name,
+          selectedWindowKey,
+          snapshotCreatedAt: null,
+        },
+      };
     }
-
-    const liveResult = await runLiveInfocareRequest(livePlan.intent);
-    liveGrounding = buildLiveInfocareGrounding(liveResult, prompt);
-    const answer = formatLiveInfocareAnswer(liveResult, prompt);
-
-    return {
-      answer,
-      model: "live Infocare read-only",
-      context: {
-        selectedCentre: livePlan.intent.kind === "centre_list" ? null : livePlan.intent.centre.name,
-        selectedWindowKey,
-        snapshotCreatedAt: null,
-      },
-    };
   }
 
   const latestSnapshotSet = await readLatestAnalyticsSnapshotSet();
@@ -3733,46 +3812,53 @@ app.post<{
   const memorySelectedCentreKey = selectedCentreKey ?? memory.selectedCentreKey;
   let liveGrounding: string | null = null;
 
-  if (isLiveInfocarePrompt(prompt)) {
-    const livePlan = planLiveInfocareRequest(prompt, centreReferences, memorySelectedCentreKey);
+  // A bare centre-name reply to a clarifying question still belongs to the
+  // earlier live request, so rebuild that request before deciding.
+  const livePrompt =
+    resolvePendingLiveInfocarePrompt(prompt, request.body?.messages as { role: string; content: string }[] | undefined) ??
+    prompt;
 
+  if (isLiveInfocarePrompt(livePrompt)) {
+    const livePlan = planLiveInfocareRequest(livePrompt, centreReferences, memorySelectedCentreKey);
+
+    // An unresolved lookup must never end the turn: fall through to the model
+    // with the reason as grounding so it can reason about the centre name.
     if (!livePlan.intent) {
-      reply.code(400);
+      liveGrounding = buildUnresolvedLiveInfocareGrounding(livePlan.error, centreReferences);
+    } else {
+      const liveResult = await runLiveInfocareRequest(livePlan.intent);
+      liveGrounding = buildLiveInfocareGrounding(liveResult, livePrompt);
+      const answer = formatLiveInfocareAnswer(liveResult, livePrompt);
+      const selectedCentreName = livePlan.intent.kind === "centre_list" ? null : livePlan.intent.centre.name;
 
-      return { error: livePlan.error ?? "I could not determine which live Infocare data to read." };
+      reply.raw.writeHead(200, {
+        "Content-Type": "text/event-stream; charset=utf-8",
+        "Cache-Control": "no-cache, no-transform",
+        Connection: "keep-alive",
+      });
+
+      const writeEvent = (event: string, data: unknown) => {
+        reply.raw.write(`event: ${event}\n`);
+        reply.raw.write(`data: ${JSON.stringify(data)}\n\n`);
+      };
+
+      writeEvent("meta", {
+        model: "live Infocare read-only",
+        context: {
+          selectedCentre: selectedCentreName,
+          selectedCentreKey: livePlan.intent.kind === "centre_list" ? null : livePlan.intent.centre.centreKey,
+          selectedWindowKey,
+          snapshotCreatedAt: null,
+        },
+      });
+      for (const chunk of answer.split(/(\s+)/).filter(Boolean)) {
+        writeEvent("chunk", { chunk });
+      }
+
+      writeEvent("done", {});
+      reply.raw.end();
+      return;
     }
-
-    const liveResult = await runLiveInfocareRequest(livePlan.intent);
-    liveGrounding = buildLiveInfocareGrounding(liveResult, prompt);
-    const answer = formatLiveInfocareAnswer(liveResult, prompt);
-    const selectedCentreName = livePlan.intent.kind === "centre_list" ? null : livePlan.intent.centre.name;
-
-    reply.raw.writeHead(200, {
-      "Content-Type": "text/event-stream; charset=utf-8",
-      "Cache-Control": "no-cache, no-transform",
-      Connection: "keep-alive",
-    });
-
-    const writeEvent = (event: string, data: unknown) => {
-      reply.raw.write(`event: ${event}\n`);
-      reply.raw.write(`data: ${JSON.stringify(data)}\n\n`);
-    };
-
-    writeEvent("meta", {
-      model: "live Infocare read-only",
-      context: {
-        selectedCentre: selectedCentreName,
-        selectedCentreKey: livePlan.intent.kind === "centre_list" ? null : livePlan.intent.centre.centreKey,
-        selectedWindowKey,
-        snapshotCreatedAt: null,
-      },
-    });
-    for (const chunk of answer.split(/(\s+)/).filter(Boolean)) {
-      writeEvent("chunk", { chunk });
-    }
-    writeEvent("done", {});
-    reply.raw.end();
-    return;
   }
 
   const latestSnapshotSet = await readLatestAnalyticsSnapshotSet();

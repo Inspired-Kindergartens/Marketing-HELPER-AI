@@ -1,5 +1,11 @@
-import type { JobDescriptionView, JdTitleProfileView, JdCentreProfileView } from "../../storage/jd-store.js";
+import {
+  JD_OTHER_LOCATION_KEY,
+  type JobDescriptionView,
+  type JdTitleProfileView,
+  type JdCentreProfileView,
+} from "../../storage/jd-store.js";
 import { formatNzDateInput, formatNzDateTimeInput } from "./jd-date.js";
+import { formatJdLocationDisplay } from "./jd-email.js";
 
 function escapeHtml(value: string) {
   return value
@@ -28,10 +34,12 @@ function renderTitleProfileOptions(profiles: JdTitleProfileView[], selectedId: n
 
 function renderCentreProfileOptions(profiles: JdCentreProfileView[], selectedKey: number | null): string {
   return [
-    `<option value="">None</option>`,
+    // A JD with no centre is an org-wide role, so "Other" (not the bare "None")
+    // is what a null centreKey means here.
+    `<option value="${JD_OTHER_LOCATION_KEY}"${selectedKey == null ? " selected" : ""}>Other (not centre based)</option>`,
     ...profiles.map(
       (profile) =>
-        `<option value="${profile.centreKey}"${profile.centreKey === selectedKey ? " selected" : ""}>${escapeHtml(profile.locationDisplay)}</option>`,
+        `<option value="${profile.centreKey}"${profile.centreKey === selectedKey ? " selected" : ""}>${escapeHtml(formatJdLocationDisplay(profile.locationDisplay))}</option>`,
     ),
   ].join("");
 }

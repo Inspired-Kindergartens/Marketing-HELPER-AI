@@ -1,5 +1,10 @@
 import type { TaskView } from "../../storage/task-store.js";
-import { TASK_STATUSES, TASK_STATUS_LABELS, type TaskStatus } from "../../storage/task-status.js";
+import {
+  TASK_STATUSES,
+  TASK_STATUS_LABELS,
+  TASK_NEXT_STATUS,
+  type TaskStatus,
+} from "../../storage/task-status.js";
 import type { ProjectListItem } from "../../storage/project-store.js";
 import type { MemberView } from "../../storage/member-store.js";
 
@@ -12,15 +17,6 @@ function escapeHtml(value: string) {
     .replaceAll("'", "&#39;");
 }
 
-function formatMinutes(total: number): string {
-  if (total <= 0) return "0m";
-  const hours = Math.floor(total / 60);
-  const minutes = total % 60;
-  if (hours === 0) return `${minutes}m`;
-  if (minutes === 0) return `${hours}h`;
-  return `${hours}h ${minutes}m`;
-}
-
 function formatDueDate(iso: string | null): string | null {
   if (!iso) return null;
   const date = new Date(iso);
@@ -30,14 +26,18 @@ function formatDueDate(iso: string | null): string | null {
 
 function renderTaskCard(task: TaskView): string {
   const due = formatDueDate(task.dueDate);
-  const timeLabel = task.estimatedMinutes
-    ? `${formatMinutes(task.loggedMinutes)} / ${formatMinutes(task.estimatedMinutes)}`
-    : formatMinutes(task.loggedMinutes);
+  // One-click advance to the next phase; a completed task has none.
+  const nextStatus = TASK_NEXT_STATUS[task.status];
+  // A checklist deadline is only useful if it is visible from the board, so the
+  // progress badge flags when any item is past its own deadline.
+  const overdueChecklistCount = task.checklist.filter((item) => item.overdue).length;
   const meta: string[] = [];
   if (task.projectName) meta.push(escapeHtml(task.projectName));
   if (task.centreName) meta.push(escapeHtml(task.centreName));
 
-  const href = `/tasks?panel=task-detail&task=${task.id}`;
+  // No panel= here: that would switch the page into single-panel focus mode and
+  // hide the board. Just ?task= keeps the board and opens Task Detail beside it.
+  const href = `/tasks?task=${task.id}`;
 
   return `
     <article class="task-card${task.overdue ? " task-card--overdue" : ""}" data-task-id="${task.id}">
@@ -47,15 +47,16 @@ function renderTaskCard(task: TaskView): string {
       </a>
       <div class="task-card__badges">
         ${due ? `<span class="task-card__badge${task.overdue ? " task-card__badge--overdue" : ""}">${task.overdue ? "Overdue " : ""}${escapeHtml(due)}</span>` : ""}
-        <span class="task-card__badge">${escapeHtml(timeLabel)}</span>
-        ${task.checklistTotal > 0 ? `<span class="task-card__badge">${task.checklistDone}/${task.checklistTotal}</span>` : ""}
+        ${task.checklistTotal > 0 ? `<span class="task-card__badge${overdueChecklistCount > 0 ? " task-card__badge--overdue" : ""}"${overdueChecklistCount > 0 ? ` title="${overdueChecklistCount} checklist item${overdueChecklistCount === 1 ? "" : "s"} past deadline"` : ""}>${task.checklistDone}/${task.checklistTotal}</span>` : ""}
         ${task.assigneeName ? `<span class="task-card__badge task-card__badge--assignee">${escapeHtml(task.assigneeName)}</span>` : ""}
       </div>
-      <div class="task-card__actions">
-        ${task.timerRunning
-          ? `<button type="button" class="task-card__timer task-card__timer--stop" data-task-action="timer-stop" data-task-id="${task.id}"><i class="bi bi-stop-circle ui-icon" aria-hidden="true"></i><span>Stop</span></button>`
-          : `<button type="button" class="task-card__timer" data-task-action="timer-start" data-task-id="${task.id}"><i class="bi bi-play-circle ui-icon" aria-hidden="true"></i><span>Start</span></button>`}
-      </div>
+      ${nextStatus
+        ? `<div class="task-card__actions">
+        <button type="button" class="task-card__advance" data-task-action="advance" data-task-id="${task.id}" data-next-status="${nextStatus}">
+          <i class="bi bi-arrow-right-circle ui-icon" aria-hidden="true"></i><span>Move to ${escapeHtml(TASK_STATUS_LABELS[nextStatus])}</span>
+        </button>
+      </div>`
+        : ""}
     </article>
   `;
 }
@@ -98,7 +99,11 @@ export function renderTaskBoardPanel(options: TaskBoardPanelOptions): string {
     <div class="task-board" data-task-board>
       <form class="task-create" data-task-create>
         <input type="text" class="task-create__title" name="title" placeholder="Add a task…" maxlength="200" required />
-        <input type="date" class="task-create__due" name="dueDate" aria-label="Due date" />
+        <span class="date-combo task-create__due">
+          <input type="text" name="dueDate" placeholder="YYYY-MM-DD" inputmode="numeric" aria-label="Due date" data-date-text />
+          <button type="button" class="date-combo__button" data-open-date-picker title="Choose due date" aria-label="Choose due date"><i class="bi bi-calendar3 ui-icon" aria-hidden="true"></i></button>
+          <input type="date" class="date-combo__picker" tabindex="-1" aria-hidden="true" data-date-picker />
+        </span>
         <select class="task-create__select" name="projectId" aria-label="Project">
           <option value="">No project</option>
           ${projectOptions}

@@ -663,9 +663,6 @@ model Task {
   description      String?
   status           String               @default("todo")
   dueDate          DateTime?
-  estimatedMinutes Int?
-  loggedMinutes    Int                  @default(0)
-  timerStartedAt   DateTime?
   projectId        Int?
   taskGroupId      Int?
   centreKey        Int?
@@ -676,6 +673,10 @@ model Task {
   // point next time; the actual send happens via a mailto: link to Outlook).
   emailSubject     String?
   emailBody        String?
+  // An unposted note still being typed. Saved as the user types so it survives
+  // the page reload that every other field's autosave triggers; cleared when
+  // the note is actually added.
+  noteDraft        String?
   createdAt        DateTime             @default(now())
   updatedAt        DateTime             @updatedAt
   project          Project?             @relation(fields: [projectId], references: [id], onDelete: SetNull, onUpdate: Cascade)
@@ -685,7 +686,7 @@ model Task {
   checklistItems   ChecklistItem[]
   emailRecipients  TaskEmailRecipient[]
   attachments      TaskAttachment[]
-  timeEntries      TimeEntry[]
+  notes            TaskNote[]
 
   @@index([status, dueDate])
   @@index([projectId, position])
@@ -727,32 +728,33 @@ model TaskEmailRecipient {
 }
 
 model ChecklistItem {
-  id        Int      @id @default(autoincrement())
+  id        Int       @id @default(autoincrement())
   taskId    Int
   label     String
-  done      Boolean  @default(false)
-  position  Int      @default(0)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  done      Boolean   @default(false)
+  // Optional per-item deadline, independent of the parent task's due date.
+  dueDate   DateTime?
+  position  Int       @default(0)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  task      Task      @relation(fields: [taskId], references: [id], onDelete: Cascade, onUpdate: Cascade)
 
   @@index([taskId, position])
 }
 
-// Audit trail for time logged against a task. `Task.loggedMinutes` is the cached
-// sum, incremented when an entry is written (timer stop or manual log).
-model TimeEntry {
-  id        Int       @id @default(autoincrement())
+// Timestamped notes on a task, newest first. Free-text progress updates that
+// are appended rather than edited in place, so the note history is the record.
+model TaskNote {
+  id        Int      @id @default(autoincrement())
   taskId    Int
-  minutes   Int
-  note      String?
-  startedAt DateTime?
-  endedAt   DateTime?
-  createdAt DateTime  @default(now())
-  task      Task      @relation(fields: [taskId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  body      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade, onUpdate: Cascade)
 
   @@index([taskId, createdAt(sort: Desc)])
 }
+
 
 // --- Job Descriptions ------------------------------------------------------
 // KTCA pay-scale rates by effective date. Selectable-by-date so the salary

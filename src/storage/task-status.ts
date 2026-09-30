@@ -1,18 +1,27 @@
-// Shared task-status vocabulary and time math, used by both the stores and the
-// UI so the API and rendering agree on the allowed set (mirrors the
-// VALID_COMMS_PANEL_IDS / resolveWindowKey guard pattern used elsewhere).
+// Shared task-status vocabulary, used by both the stores and the UI so the API
+// and rendering agree on the allowed set (mirrors the VALID_COMMS_PANEL_IDS /
+// resolveWindowKey guard pattern used elsewhere).
 
-export const TASK_STATUSES = ["todo", "in_progress", "blocked", "done"] as const;
+export const TASK_STATUSES = ["todo", "in_progress", "done"] as const;
 
 export type TaskStatus = (typeof TASK_STATUSES)[number];
 
 const TASK_STATUS_SET = new Set<string>(TASK_STATUSES);
 
+// The stored key stays "done" (existing rows and the completedAt logic depend
+// on it); only the label the user sees is "Completed".
 export const TASK_STATUS_LABELS: Record<TaskStatus, string> = {
   todo: "To do",
   in_progress: "In progress",
-  blocked: "Blocked",
-  done: "Done",
+  done: "Completed",
+};
+
+// The next phase a task moves to, for the board's one-click advance control.
+// "done" is terminal, so it has no next phase.
+export const TASK_NEXT_STATUS: Record<TaskStatus, TaskStatus | null> = {
+  todo: "in_progress",
+  in_progress: "done",
+  done: null,
 };
 
 // Narrows an arbitrary string to a known status, falling back to "todo" so a
@@ -21,17 +30,4 @@ export function resolveTaskStatus(value: unknown): TaskStatus {
   return typeof value === "string" && TASK_STATUS_SET.has(value)
     ? (value as TaskStatus)
     : "todo";
-}
-
-// Minutes logged against a task, including the live elapsed time of a running
-// timer. Reading this never writes — the running timer is folded into
-// loggedMinutes only when it is stopped.
-export function taskTimeMinutes(
-  task: { loggedMinutes: number; timerStartedAt: Date | null },
-  now: Date = new Date(),
-): number {
-  const running = task.timerStartedAt
-    ? Math.max(0, Math.floor((now.getTime() - task.timerStartedAt.getTime()) / 60000))
-    : 0;
-  return task.loggedMinutes + running;
 }

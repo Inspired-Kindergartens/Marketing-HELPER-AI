@@ -7,7 +7,7 @@ import type {
 } from "../storage/member-store.js";
 import { renderLayout } from "./layout.js";
 import { renderTaskBoardPanel } from "./tasks/task-board-panel.js";
-import { renderTaskDetailPanel } from "./tasks/task-detail-panel.js";
+import { renderTaskDetailPanel, renderTaskDetailActions } from "./tasks/task-detail-panel.js";
 import { renderProjectsPanel } from "./tasks/projects-panel.js";
 import { renderMembersPanel } from "./tasks/members-panel.js";
 
@@ -36,6 +36,15 @@ export type TasksAppShellOptions = {
 
 export function resolveTasksFocusPanelId(input?: string | null) {
   return input && VALID_TASKS_PANEL_IDS.has(input) ? input : null;
+}
+
+// Panel-header actions, so the task's Back/Delete controls sit on the title row
+// like the /jd and /wiki panels do.
+function renderPanelActions(panelId: string, options: TasksAppShellOptions): string | undefined {
+  if (panelId === "task-detail") {
+    return renderTaskDetailActions(options.selectedTask ?? null);
+  }
+  return undefined;
 }
 
 function renderPanelContent(panelId: string, options: TasksAppShellOptions): string {
@@ -77,12 +86,7 @@ function renderPanelContent(panelId: string, options: TasksAppShellOptions): str
 function renderTasksAiChatPanel(): string {
   return `
     <div class="chat-shell" data-ai-chat data-ai-chat-endpoint="/api/tasks/ai/chat/stream">
-      <div class="chat-shell__messages">
-        <div class="chat-message chat-message--assistant">
-          <span class="chat-message__role">Beep Beep</span>
-          <p class="chat-message__body">Ask about tasks, projects, due dates, time logged, or who is assigned to what.</p>
-        </div>
-      </div>
+      <div class="chat-shell__messages"></div>
       <div class="chat-shell__composer">
         <label class="chat-shell__prompt-label" for="tasks-chat-prompt">Prompt</label>
         <textarea id="tasks-chat-prompt" class="chat-shell__prompt-input" placeholder="Ask about overdue tasks, project progress, or team workload."></textarea>
@@ -204,9 +208,14 @@ function renderTasksScript(): string {
           }
         }
 
-        function post(url, payload) { return postRaw(url, payload, true); }
+        // post() reloads on success, so the in-progress note draft is flushed
+        // first — otherwise any button on the page would discard it.
+        function post(url, payload) {
+          return saveNoteDraftNow().then(function() { return postRaw(url, payload, true); });
+        }
 
         async function postForm(url, form) {
+          await saveNoteDraftNow();
           try {
             var response = await fetch(url, { method: "POST", body: new FormData(form) });
             if (!response.ok) throw new Error("Request failed");
@@ -274,8 +283,30 @@ function renderTasksScript(): string {
           var taskHost = el.closest("[data-task-id]");
           var taskId = el.getAttribute("data-task-id") || (taskHost && taskHost.getAttribute("data-task-id"));
 
-          if (taskAction === "timer-start") { event.preventDefault(); post("/api/tasks/" + taskId + "/timer/start", {}); return; }
-          if (taskAction === "timer-stop") { event.preventDefault(); post("/api/tasks/" + taskId + "/timer/stop", {}); return; }
+          if (taskAction === "advance") {
+            event.preventDefault();
+            post("/api/tasks/" + taskId + "/status", { status: el.getAttribute("data-next-status") });
+            return;
+          }
+          if (taskAction === "note-delete") {
+            event.preventDefault();
+            // Two-step, in place: the first click arms the button, the second
+            // removes. Avoids a modal, and a stray click can't destroy a note.
+            if (el.getAttribute("data-armed") !== "true") {
+              el.setAttribute("data-armed", "true");
+              var armLabel = el.querySelector("span");
+              if (armLabel) armLabel.textContent = el.getAttribute("data-arm-label") || "Confirm";
+              window.setTimeout(function() {
+                if (!el.isConnected) return;
+                el.removeAttribute("data-armed");
+                var resetLabel = el.querySelector("span");
+                if (resetLabel) resetLabel.textContent = "Remove";
+              }, 4000);
+              return;
+            }
+            post("/api/tasks/" + taskId + "/notes/" + el.getAttribute("data-note-id") + "/delete", {});
+            return;
+          }
           if (taskAction === "delete") {
             event.preventDefault();
             if (window.confirm("Delete this task?")) post("/api/tasks/" + taskId + "/delete", {});
@@ -296,22 +327,19 @@ function renderTasksScript(): string {
             return;
           }
 
-          // Email compose actions live in the [data-task-email] section.
-          if (taskAction === "email-save" || taskAction === "email-open") {
+          // Email compose lives in the [data-task-email] section. The draft
+          // autosaves on blur (see below), so this only hands off to Outlook.
+          if (taskAction === "email-open") {
             event.preventDefault();
             var section = el.closest("[data-task-email]");
             if (!section) return;
             var draft = readEmailDraft(section);
-            if (taskAction === "email-open") {
-              if (!draft.to) { window.alert("Add a recipient email address first."); return; }
-              // Remember the draft, then hand off to the mail app. Don't reload
-              // (that would cancel the mailto: navigation).
-              postRaw("/api/tasks/" + taskId + "/email", draft, false).then(function(ok) {
-                if (ok) window.location.href = buildMailto(draft);
-              });
-            } else {
-              post("/api/tasks/" + taskId + "/email", draft);
-            }
+            if (!draft.to) { window.alert("Add a recipient email address first."); return; }
+            // Remember the draft, then hand off to the mail app. Don't reload
+            // (that would cancel the mailto: navigation).
+            postRaw("/api/tasks/" + taskId + "/email", draft, false).then(function(ok) {
+              if (ok) window.location.href = buildMailto(draft);
+            });
             return;
           }
 
@@ -366,8 +394,116 @@ function renderTasksScript(): string {
           var titleInput = form.querySelector("[name=title]");
           if (!titleInput || !titleInput.value.trim()) return;
           var needsReload = field.getAttribute("name") === "projectId";
-          postRaw("/api/tasks/" + host.getAttribute("data-task-id"), formData(form), needsReload);
+          // Flush the note draft first: this save may reload the page, which
+          // would otherwise discard whatever is still in the note box.
+          saveNoteDraftNow().then(function() {
+            postRaw("/api/tasks/" + host.getAttribute("data-task-id"), formData(form), needsReload);
+          });
         }
+
+        // Date fields pair a typed YYYY-MM-DD text input with a calendar button
+        // that opens the browser's native picker (mirrors the JD editor's
+        // date combo, so both sections behave the same way).
+        function openDatePicker(button) {
+          var combo = button.closest(".date-combo");
+          var picker = combo ? combo.querySelector("[data-date-picker]") : null;
+          var text = combo ? combo.querySelector("[data-date-text]") : null;
+          if (!(picker instanceof HTMLInputElement) || !(text instanceof HTMLInputElement)) return;
+          picker.value = text.value;
+          if (typeof picker.showPicker === "function") picker.showPicker();
+          else picker.click();
+        }
+
+        document.addEventListener("click", function(event) {
+          var button = event.target instanceof Element ? event.target.closest("[data-open-date-picker]") : null;
+          if (!button) return;
+          event.preventDefault();
+          openDatePicker(button);
+        });
+
+        // Choosing a date writes it back to the text field. On the task-edit
+        // form that also autosaves; on the create form it just fills the box.
+        document.addEventListener("change", function(event) {
+          var picker = event.target instanceof Element ? event.target.closest("[data-date-picker]") : null;
+          if (!(picker instanceof HTMLInputElement)) return;
+          var combo = picker.closest(".date-combo");
+          var text = combo ? combo.querySelector("[data-date-text]") : null;
+          if (!(text instanceof HTMLInputElement)) return;
+          text.value = picker.value;
+          if (text.closest("[data-task-edit]")) {
+            autosaveTaskEdit(text);
+            return;
+          }
+          // A checklist row's deadline saves with its label, via the row's form.
+          var checklistForm = text.closest("[data-checklist-edit]");
+          if (checklistForm) {
+            if (typeof checklistForm.requestSubmit === "function") checklistForm.requestSubmit();
+            else checklistForm.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+          }
+        });
+
+        // A half-written note is saved to the server as it is typed, because
+        // every other field's autosave reloads the page and would otherwise
+        // discard it. Debounced while typing; flushed immediately (and awaited)
+        // before any action that navigates or reloads.
+        var noteDraftTimer = null;
+        var noteDraftPending = false;
+
+        window.addEventListener("beforeunload", function() {
+          var field = noteDraftField();
+          if (!field || !noteDraftPending) return;
+          var host = field.closest("[data-task-id]");
+          if (!host) return;
+          // Unload cannot await fetch; sendBeacon survives the teardown.
+          if (navigator.sendBeacon) {
+            navigator.sendBeacon(
+              "/api/tasks/" + host.getAttribute("data-task-id") + "/notes/draft",
+              new Blob([JSON.stringify({ body: field.value })], { type: "application/json" }),
+            );
+          }
+        });
+
+        function noteDraftField() {
+          return document.querySelector("[data-note-draft]");
+        }
+
+        function saveNoteDraftNow() {
+          if (noteDraftTimer) { window.clearTimeout(noteDraftTimer); noteDraftTimer = null; }
+          var field = noteDraftField();
+          if (!field || !noteDraftPending) return Promise.resolve(true);
+          var host = field.closest("[data-task-id]");
+          if (!host) return Promise.resolve(true);
+          noteDraftPending = false;
+          return postRaw("/api/tasks/" + host.getAttribute("data-task-id") + "/notes/draft", { body: field.value }, false);
+        }
+
+        function queueNoteDraftSave() {
+          var field = noteDraftField();
+          if (!field) return;
+          noteDraftPending = true;
+          var status = document.querySelector("[data-note-draft-status]");
+          if (status) status.textContent = "Saving draft…";
+          if (noteDraftTimer) window.clearTimeout(noteDraftTimer);
+          noteDraftTimer = window.setTimeout(function() {
+            noteDraftTimer = null;
+            saveNoteDraftNow().then(function(ok) {
+              if (status) status.textContent = ok ? "Draft saved" : "Draft not saved";
+            });
+          }, 600);
+        }
+
+        document.addEventListener("input", function(event) {
+          var field = event.target instanceof Element ? event.target.closest("[data-note-draft]") : null;
+          if (!field) return;
+          queueNoteDraftSave();
+        });
+
+        // Leaving the box, or leaving the page, commits whatever is pending.
+        document.addEventListener("blur", function(event) {
+          var field = event.target instanceof Element ? event.target.closest("[data-note-draft]") : null;
+          if (!field) return;
+          saveNoteDraftNow();
+        }, true);
 
         document.addEventListener("blur", function(event) {
           var field = event.target instanceof Element ? event.target.closest("[data-task-edit] input, [data-task-edit] textarea") : null;
@@ -379,6 +515,65 @@ function renderTasksScript(): string {
           var field = event.target instanceof Element ? event.target.closest("[data-task-edit] select") : null;
           if (!field) return;
           autosaveTaskEdit(field);
+        });
+
+        // #8: the email draft saves itself on blur instead of via a "Save draft"
+        // button. No reload — that would wipe what the user is still typing.
+        function autosaveEmailDraft(field) {
+          var section = field.closest("[data-task-email]");
+          if (!section) return;
+          var host = section.closest("[data-task-id]");
+          if (!host) return;
+          var status = section.querySelector("[data-email-status]");
+          if (status) status.textContent = "Saving…";
+          postRaw("/api/tasks/" + host.getAttribute("data-task-id") + "/email", readEmailDraft(section), false).then(function(ok) {
+            if (status) status.textContent = ok ? "Draft saved" : "Draft not saved";
+          });
+        }
+
+        document.addEventListener("blur", function(event) {
+          var field = event.target instanceof Element ? event.target.closest("[data-task-email] input, [data-task-email] textarea") : null;
+          if (!field) return;
+          autosaveEmailDraft(field);
+        }, true);
+
+        // A note edit commits on blur when its text actually changed, matching
+        // the checklist's edit-in-place behaviour.
+        document.addEventListener("blur", function(event) {
+          var field = event.target instanceof Element ? event.target.closest("[data-note-edit] textarea") : null;
+          if (!field) return;
+          if (field.value === field.defaultValue) return;
+          var form = field.closest("form");
+          if (!form) return;
+          if (typeof form.requestSubmit === "function") form.requestSubmit();
+          else form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+        }, true);
+
+        // Ctrl/Cmd+Enter posts a new note without reaching for the button.
+        document.addEventListener("keydown", function(event) {
+          if (event.key !== "Enter" || !(event.ctrlKey || event.metaKey)) return;
+          var field = event.target instanceof Element ? event.target.closest("[data-note-add] textarea") : null;
+          if (!field) return;
+          event.preventDefault();
+          var form = field.closest("form");
+          if (!form) return;
+          if (typeof form.requestSubmit === "function") form.requestSubmit();
+          else form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+        });
+
+        // Description and note textareas grow to fit their content (#1), so a
+        // long description is fully visible without an inner scrollbar.
+        function autogrow(field) {
+          field.style.height = "auto";
+          field.style.height = field.scrollHeight + "px";
+        }
+
+        document.querySelectorAll("[data-task-autogrow]").forEach(autogrow);
+
+        document.addEventListener("input", function(event) {
+          var field = event.target instanceof Element ? event.target.closest("[data-task-autogrow]") : null;
+          if (!field) return;
+          autogrow(field);
         });
 
         function formData(form) {
@@ -395,6 +590,9 @@ function renderTasksScript(): string {
         document.addEventListener("change", function(event) {
           var input = event.target instanceof Element ? event.target.closest("[data-checklist-edit] input") : null;
           if (!input) return;
+          // The hidden date picker is handled by the date-combo listener, which
+          // copies its value into the text field before submitting.
+          if (input.hasAttribute("data-date-picker")) return;
           var form = input.closest("form");
           if (!form) return;
           if (typeof form.requestSubmit === "function") form.requestSubmit();
@@ -414,10 +612,20 @@ function renderTasksScript(): string {
             post("/api/tasks/" + host.getAttribute("data-task-id"), formData(form));
             return;
           }
-          if (form.hasAttribute("data-task-log")) {
+          if (form.hasAttribute("data-note-add")) {
             event.preventDefault();
-            var logHost = form.closest("[data-task-id]");
-            post("/api/tasks/" + logHost.getAttribute("data-task-id") + "/time", formData(form));
+            var noteHost = form.closest("[data-task-id]");
+            var noteBody = form.querySelector("[name=body]");
+            if (!noteBody || !noteBody.value.trim()) return;
+            post("/api/tasks/" + noteHost.getAttribute("data-task-id") + "/notes", formData(form));
+            return;
+          }
+          if (form.hasAttribute("data-note-edit")) {
+            event.preventDefault();
+            var editHost = form.closest("[data-task-id]");
+            var editBody = form.querySelector("[name=body]");
+            if (!editBody || !editBody.value.trim()) return;
+            postRaw("/api/tasks/" + editHost.getAttribute("data-task-id") + "/notes/" + form.getAttribute("data-note-id"), formData(form), false);
             return;
           }
           if (form.hasAttribute("data-checklist-add")) {
@@ -429,7 +637,12 @@ function renderTasksScript(): string {
           if (form.hasAttribute("data-checklist-edit")) {
             event.preventDefault();
             var editHost = form.closest("[data-task-id]");
-            post("/api/tasks/" + editHost.getAttribute("data-task-id") + "/checklist/" + form.getAttribute("data-item-id"), formData(form));
+            var editPayload = formData(form);
+            // formData() drops empty values, but an emptied deadline box means
+            // "clear it" — send it explicitly so the server can unset the date.
+            var dueField = form.querySelector("[name=dueDate]");
+            if (dueField && !dueField.value.trim()) editPayload.dueDate = "";
+            post("/api/tasks/" + editHost.getAttribute("data-task-id") + "/checklist/" + form.getAttribute("data-item-id"), editPayload);
             return;
           }
           if (form.hasAttribute("data-task-attachment-upload")) {
@@ -472,8 +685,15 @@ export function renderTasksAppShell(options: TasksAppShellOptions): string {
     title: panel.title,
     className: panel.className,
     children: renderPanelContent(panel.id, options),
+    actions: renderPanelActions(panel.id, options),
   }));
-  const layout = renderLayout({ panels: panelContent, focusPanelId });
+  // Selecting a task on the board fills the Task Detail accordion panel and
+  // opens it in place, rather than replacing the board with a focus view.
+  const layout = renderLayout({
+    panels: panelContent,
+    focusPanelId,
+    openPanelId: options.selectedTask != null ? "task-detail" : null,
+  });
 
   return `<!DOCTYPE html>
 <html lang="en">

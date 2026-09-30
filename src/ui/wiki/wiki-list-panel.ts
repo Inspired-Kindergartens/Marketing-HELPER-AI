@@ -9,12 +9,6 @@ function escapeHtml(value: string) {
     .replaceAll("'", "&#39;");
 }
 
-function formatUpdated(iso: string): string {
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return "";
-  return date.toLocaleDateString("en-NZ", { day: "numeric", month: "short", year: "numeric" });
-}
-
 export type WikiListPanelOptions = {
   articles: WikiArticleListItem[];
   search: string;
@@ -27,14 +21,14 @@ export type WikiListPanelOptions = {
 function renderArticleRow(article: WikiArticleListItem): string {
   // Clicking an article opens it for reading; editing is a step from there.
   const href = `/wiki?panel=wiki-article&article=${article.id}`;
-  // An untagged article is still being classified by the background pass, so
-  // say so rather than showing an empty gap.
-  const tags = article.tags.length
-    ? article.tags
-        .slice(0, 4)
-        .map((tag) => `<span class="wiki-list__tag">${escapeHtml(tag)}</span>`)
-        .join("")
-    : `<span class="wiki-list__tag wiki-list__tag--pending" data-wiki-tagging="${article.id}">Tagging…</span>`;
+  // The row carries the title alone. The summary is the one thing worth
+  // knowing before opening an article, so it rides along as a hover popup
+  // rather than a second line on every row. An article with no summary yet is
+  // still being classified by the background pass, so the popup says so
+  // instead of appearing empty.
+  const tip = article.summary
+    ? `<span class="wiki-list__tip" role="tooltip">${escapeHtml(article.summary)}</span>`
+    : `<span class="wiki-list__tip wiki-list__tip--pending" role="tooltip" data-wiki-tagging="${article.id}">Tagging…</span>`;
 
   return `
     <article class="wiki-list__row" data-wiki-id="${article.id}">
@@ -43,10 +37,8 @@ function renderArticleRow(article: WikiArticleListItem): string {
           ${article.isPinned ? `<i class="bi bi-pin-angle-fill ui-icon wiki-list__pin-icon" aria-label="Pinned" title="Always sent to AI chat"></i>` : ""}
           ${escapeHtml(article.title)}
         </span>
-        ${article.summary ? `<span class="wiki-list__summary">${escapeHtml(article.summary)}</span>` : ""}
-        <span class="wiki-list__meta">Updated ${escapeHtml(formatUpdated(article.updatedAt))}</span>
+        ${tip}
       </a>
-      <div class="wiki-list__badges">${tags}</div>
       <div class="wiki-list__actions">
         ${
           article.isArchived
@@ -63,7 +55,12 @@ function renderArticleRow(article: WikiArticleListItem): string {
 
 // Articles sit under their category heading so a long wiki stays scannable.
 // Categories are AI-assigned from a closed list, so this grouping stays stable.
-function renderGroups(articles: WikiArticleListItem[]): string {
+//
+// The group order follows the category list's stored sortOrder, which is what
+// dragging a heading rewrites. A category holding no articles is skipped, and
+// any category an article claims that is not in the list (a rename mid-flight)
+// still renders, after the known ones, so no article can go missing.
+function renderGroups(articles: WikiArticleListItem[], categories: WikiCategoryView[]): string {
   const groups = new Map<string, WikiArticleListItem[]>();
   for (const article of articles) {
     const existing = groups.get(article.category);
@@ -74,12 +71,23 @@ function renderGroups(articles: WikiArticleListItem[]): string {
     }
   }
 
-  return Array.from(groups.entries())
+  const ordered: Array<{ id: number | null; name: string; rows: WikiArticleListItem[] }> = [];
+  for (const category of categories) {
+    const rows = groups.get(category.name);
+    if (!rows) continue;
+    ordered.push({ id: category.id, name: category.name, rows });
+    groups.delete(category.name);
+  }
+  for (const [name, rows] of groups) {
+    ordered.push({ id: null, name, rows });
+  }
+
+  return ordered
     .map(
-      ([category, rows]) => `
-        <section class="wiki-list__group">
-          <h3 class="wiki-list__group-heading">${escapeHtml(category)} <span class="wiki-list__group-count">${rows.length}</span></h3>
-          ${rows.map(renderArticleRow).join("")}
+      (group) => `
+        <section class="wiki-list__group"${group.id == null ? "" : ` draggable="true" data-wiki-category-order="${group.id}"`}>
+          <h3 class="wiki-list__group-heading">${escapeHtml(group.name)}</h3>
+          <div class="wiki-list__group-articles">${group.rows.map(renderArticleRow).join("")}</div>
         </section>
       `,
     )
@@ -170,7 +178,7 @@ export function renderWikiListPanel(options: WikiListPanelOptions): string {
       </div>
 
       <div class="wiki-list__rows">
-        ${options.articles.length ? renderGroups(options.articles) : emptyMessage}
+        ${options.articles.length ? renderGroups(options.articles, options.categories) : emptyMessage}
       </div>
 
       <!-- Adding an article is an occasional action, so it opens in a modal

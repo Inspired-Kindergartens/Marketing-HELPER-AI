@@ -225,6 +225,38 @@ export async function renameWikiCategory(id: number, name: unknown): Promise<{ o
 }
 
 /**
+ * Writes a new category order from a list of ids. Positions come from the
+ * supplied order, so the drag on the wiki page is the only thing that decides
+ * it. Ids that no longer exist are ignored, and any category the caller left
+ * out keeps its place after the ones that were sent, so a stale page cannot
+ * drop a category off the end.
+ */
+export async function reorderWikiCategories(ids: unknown): Promise<{ ok: true } | { error: string }> {
+  if (!Array.isArray(ids)) return { error: "A category order is required." };
+
+  const requested = ids
+    .map((value) => (typeof value === "number" ? value : Number.parseInt(String(value), 10)))
+    .filter((value) => Number.isInteger(value) && value > 0);
+  if (requested.length === 0) return { error: "A category order is required." };
+
+  const existing = await prisma.wikiCategory.findMany({ orderBy: CATEGORY_ORDER, select: { id: true } });
+  const known = new Set(existing.map((row) => row.id));
+
+  const ordered = Array.from(new Set(requested)).filter((id) => known.has(id));
+  if (ordered.length === 0) return { error: "None of those categories exist." };
+
+  // Anything the caller did not mention keeps its relative order, appended.
+  for (const row of existing) {
+    if (!ordered.includes(row.id)) ordered.push(row.id);
+  }
+
+  await prisma.$transaction(
+    ordered.map((id, index) => prisma.wikiCategory.update({ where: { id }, data: { sortOrder: index } })),
+  );
+  return { ok: true };
+}
+
+/**
  * Deletes a category and moves its articles to the fallback, so deleting can
  * never destroy content. The fallback itself is protected and cannot be
  * deleted, which guarantees the articles always have somewhere to go.

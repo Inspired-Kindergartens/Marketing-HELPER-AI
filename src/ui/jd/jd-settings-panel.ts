@@ -1,5 +1,6 @@
 import type { JdCentreProfileView, JdTitleProfileView, JdKnowledgeDocView } from "../../storage/jd-store.js";
 import type { AgreementStatus, JdGlobalSettingsView } from "../../storage/jd-store.js";
+import { formatJdLocationDisplay } from "./jd-email.js";
 
 function escapeHtml(value: string) {
   return value
@@ -25,31 +26,35 @@ export type JdSettingsPanelOptions = {
 };
 
 function renderCentreProfileRow(centre: JdCentreProfileView): string {
+  // Collapsed like the job title rows: 26 centres would otherwise fill the
+  // panel with every field expanded at once.
   return `
-    <form class="jd-settings__centre-row" data-jd-centre-profile data-centre-key="${centre.centreKey}">
-      <span class="jd-settings__centre-name">${escapeHtml(centre.centreName)}</span>
-      <label>
-        <span>Location display</span>
-        <input type="text" name="locationDisplay" value="${escapeHtml(centre.locationDisplay)}" />
-      </label>
-      <label>
-        <span>Intro paragraph</span>
-        <textarea name="introParagraph">${escapeHtml(centre.introParagraph)}</textarea>
-      </label>
-      <label>
-        <span>Senior Teacher name</span>
-        <input type="text" name="seniorTeacherName" value="${escapeHtml(centre.seniorTeacherName)}" />
-      </label>
-      <label>
-        <span>Senior Teacher acronym</span>
-        <input type="text" name="seniorTeacherAcronym" value="${escapeHtml(centre.seniorTeacherAcronym)}" />
-      </label>
-      <label class="jd-settings__checkbox-label">
-        <input type="checkbox" name="isEnviroschool" ${centre.isEnviroschool ? "checked" : ""} />
-        <span>Registered Enviroschool</span>
-      </label>
-      <button type="submit"><i class="bi bi-save ui-icon" aria-hidden="true"></i><span>Save</span></button>
-    </form>
+    <details class="jd-settings__centre-row">
+      <summary>${escapeHtml(formatJdLocationDisplay(centre.locationDisplay))}${centre.isEnviroschool ? ` <span class="jd-settings__centre-meta">Enviroschool</span>` : ""}</summary>
+      <form data-jd-centre-profile data-centre-key="${centre.centreKey}">
+        <label>
+          <span>Location display</span>
+          <input type="text" name="locationDisplay" value="${escapeHtml(formatJdLocationDisplay(centre.locationDisplay))}" />
+        </label>
+        <label>
+          <span>Intro paragraph</span>
+          <textarea name="introParagraph">${escapeHtml(centre.introParagraph)}</textarea>
+        </label>
+        <label>
+          <span>Senior Teacher name</span>
+          <input type="text" name="seniorTeacherName" value="${escapeHtml(centre.seniorTeacherName)}" />
+        </label>
+        <label>
+          <span>Senior Teacher acronym</span>
+          <input type="text" name="seniorTeacherAcronym" value="${escapeHtml(centre.seniorTeacherAcronym)}" />
+        </label>
+        <label class="jd-settings__checkbox-label">
+          <input type="checkbox" name="isEnviroschool" ${centre.isEnviroschool ? "checked" : ""} />
+          <span>Registered Enviroschool</span>
+        </label>
+        <button type="submit"><i class="bi bi-save ui-icon" aria-hidden="true"></i><span>Save</span></button>
+      </form>
+    </details>
   `;
 }
 
@@ -67,7 +72,7 @@ function renderTitleProfileRow(profile: JdTitleProfileView): string {
           <input type="checkbox" name="isCentreSpecific" ${profile.isCentreSpecific ? "checked" : ""} />
           <span>Centre specific</span>
         </label>
-        <p class="jd-settings__hint">Role sections are edited per job description in the JD Editor panel; this text seeds new job descriptions of this title. Untick <strong>Centre specific</strong> for org-wide roles (e.g. office staff) that are not based at a kindergarten - those skip the Location step.</p>
+        <p class="jd-settings__hint">Role sections are edited per job description in the JD Editor panel; this text seeds new job descriptions of this title. Untick <strong>Centre specific</strong> for org-wide roles (e.g. office staff) that are not based at a kindergarten - those default the Location to <strong>Other</strong>, where you can name the location yourself.</p>
         <button type="submit"><i class="bi bi-save ui-icon" aria-hidden="true"></i><span>Save</span></button>
       </form>
     </details>

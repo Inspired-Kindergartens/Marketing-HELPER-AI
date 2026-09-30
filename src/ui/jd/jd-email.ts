@@ -13,10 +13,25 @@ function escapeHtml(value: string) {
     .replaceAll("'", "&#39;");
 }
 
-function titleCaseWord(value: string): string {
+// Words that stay lower-case inside a name unless they lead it, plus the
+// Te Reo / Pacific particles that appear in centre names ("Tai o Fenua").
+const LOWER_CASE_SMALL_WORDS = new Set(["a", "and", "o", "of", "the", "me", "ki", "na", "nga"]);
+
+// Names already stored in mixed case can carry an intentional acronym
+// ("OPEYS"); an all-caps word of 2-5 letters with no vowel pattern of a real
+// word is kept as-is rather than flattened to "Opeys".
+const PRESERVED_ACRONYMS = new Set(["OPEYS"]);
+
+function titleCaseWord(value: string, isFirst: boolean): string {
   return value
     .split("/")
-    .map((part) => (part ? part.charAt(0).toUpperCase() + part.slice(1).toLowerCase() : part))
+    .map((part, partIndex) => {
+      if (!part) return part;
+      if (PRESERVED_ACRONYMS.has(part)) return part;
+      const lower = part.toLowerCase();
+      if (!(isFirst && partIndex === 0) && LOWER_CASE_SMALL_WORDS.has(lower)) return lower;
+      return part.charAt(0).toUpperCase() + part.slice(1).toLowerCase();
+    })
     .join("/");
 }
 
@@ -25,7 +40,7 @@ function toTitleCase(value: string): string {
     .replace(/\s+/g, " ")
     .trim()
     .split(" ")
-    .map(titleCaseWord)
+    .map((word, index) => titleCaseWord(word, index === 0))
     .join(" ");
 }
 
@@ -34,9 +49,17 @@ function toTitleCase(value: string): string {
 // `${name.toUpperCase()} Kindergarten` over names that already end in
 // KINDERGARTEN). Title-case and collapse the repeat so display text reads
 // "Gwen Rogers Kindergarten". Shared by the email and the blurb boilerplate.
+const RE_ADJACENT_REPEAT = /(?:\s+Kindergarten){2,}$/i;
+const RE_TRAILING = /\s+Kindergarten$/i;
+const RE_WORD = /\bkindergarten\b/i;
 export function formatJdLocationDisplay(locationDisplay: string): string {
   const titleCased = toTitleCase(locationDisplay);
-  return titleCased.replace(/(?:\s+Kindergarten){2,}$/i, " Kindergarten");
+  // Collapse adjacent repeats ("Arataki Kindergarten Kindergarten"), then
+  // drop a trailing one that only duplicates an earlier mid-string
+  // occurrence ("Maungaarangi Kindergarten and Whanau Centre Kindergarten").
+  const collapsed = titleCased.replace(RE_ADJACENT_REPEAT, " Kindergarten");
+  const withoutTrailing = collapsed.replace(RE_TRAILING, "");
+  return RE_WORD.test(withoutTrailing) ? withoutTrailing : collapsed;
 }
 
 export const formatJdEmailLocation = formatJdLocationDisplay;

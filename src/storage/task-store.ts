@@ -1,17 +1,17 @@
 import { prisma } from "../db.js";
-import {
-  resolveTaskStatus,
-  taskTimeMinutes,
-  type TaskStatus,
-} from "./task-status.js";
+import { resolveTaskStatus, type TaskStatus } from "./task-status.js";
 
-// Tasks: progress status, time tracking (estimate + logged + running timer),
-// checklists, due dates, and optional links to a project/group/centre/assignee.
+// Tasks: progress status, timestamped notes, checklists, due dates, and
+// optional links to a project/group/centre/assignee.
 
 export type ChecklistItemView = {
   id: number;
   label: string;
   done: boolean;
+  // Optional per-item deadline, separate from the parent task's due date.
+  dueDate: string | null;
+  // True when an unfinished item's deadline has passed.
+  overdue: boolean;
   position: number;
   createdAt: string;
 };
@@ -21,6 +21,15 @@ export type ChecklistItemView = {
 export type TaskEmailRecipientView = {
   email: string;
   name: string | null;
+};
+
+// A timestamped progress note. Ordered newest-first by the store, so the UI
+// renders task.notes as given.
+export type TaskNoteView = {
+  id: number;
+  body: string;
+  createdAt: string;
+  updatedAt: string;
 };
 
 export type TaskAttachmentView = {
@@ -38,10 +47,6 @@ export type TaskView = {
   status: TaskStatus;
   dueDate: string | null;
   overdue: boolean;
-  estimatedMinutes: number | null;
-  loggedMinutes: number;
-  timerRunning: boolean;
-  timerStartedAt: string | null;
   projectId: number | null;
   projectName: string | null;
   taskGroupId: number | null;
@@ -57,8 +62,11 @@ export type TaskView = {
   checklist: ChecklistItemView[];
   emailSubject: string | null;
   emailBody: string | null;
+  // An unposted note still being typed; restored into the add-note box.
+  noteDraft: string | null;
   emailRecipients: TaskEmailRecipientView[];
   attachments: TaskAttachmentView[];
+  notes: TaskNoteView[];
 };
 
 export type TaskReminderView = {
@@ -89,7 +97,6 @@ export type TaskInput = {
   description?: string | null;
   status?: string;
   dueDate?: string | null;
-  estimatedMinutes?: number | null;
   projectId?: number | null;
   taskGroupId?: number | null;
   centreKey?: number | null;
@@ -104,6 +111,7 @@ const TASK_INCLUDE = {
   checklistItems: { orderBy: { position: "asc" } as const },
   emailRecipients: { orderBy: { lastUsedAt: "desc" } as const },
   attachments: { orderBy: { uploadedAt: "desc" } as const },
+  notes: { orderBy: { createdAt: "desc" } as const },
 } as const;
 
 function emptyToNull(value: string | null | undefined): string | null {
@@ -115,12 +123,6 @@ function parseDate(value: string | null | undefined): Date | null {
   if (!value) return null;
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? null : date;
-}
-
-function parseMinutes(value: number | null | undefined): number | null {
-  if (value == null) return null;
-  const n = Math.floor(Number(value));
-  return Number.isSafeInteger(n) && n >= 0 ? n : null;
 }
 
 function startOfDay(date: Date): Date {
@@ -136,9 +138,6 @@ type IncludedTask = {
   description: string | null;
   status: string;
   dueDate: Date | null;
-  estimatedMinutes: number | null;
-  loggedMinutes: number;
-  timerStartedAt: Date | null;
   projectId: number | null;
   taskGroupId: number | null;
   centreKey: number | null;
@@ -147,6 +146,7 @@ type IncludedTask = {
   completedAt: Date | null;
   emailSubject: string | null;
   emailBody: string | null;
+  noteDraft: string | null;
   project: { name: string } | null;
   group: { name: string } | null;
   centre: { name: string } | null;
@@ -155,6 +155,7 @@ type IncludedTask = {
     id: number;
     label: string;
     done: boolean;
+    dueDate: Date | null;
     position: number;
     createdAt: Date;
   }[];
@@ -168,6 +169,12 @@ type IncludedTask = {
     mimeType: string | null;
     sizeBytes: number;
     uploadedAt: Date;
+  }[];
+  notes: {
+    id: number;
+    body: string;
+    createdAt: Date;
+    updatedAt: Date;
   }[];
 };
 
@@ -183,10 +190,6 @@ function toTaskView(task: IncludedTask, now: Date = new Date()): TaskView {
     status: resolveTaskStatus(task.status),
     dueDate: task.dueDate ? task.dueDate.toISOString() : null,
     overdue,
-    estimatedMinutes: task.estimatedMinutes,
-    loggedMinutes: taskTimeMinutes(task, now),
-    timerRunning: task.timerStartedAt != null,
-    timerStartedAt: task.timerStartedAt ? task.timerStartedAt.toISOString() : null,
     projectId: task.projectId,
     projectName: task.project?.name ?? null,
     taskGroupId: task.taskGroupId,
@@ -203,11 +206,15 @@ function toTaskView(task: IncludedTask, now: Date = new Date()): TaskView {
       id: item.id,
       label: item.label,
       done: item.done,
+      dueDate: item.dueDate ? item.dueDate.toISOString() : null,
+      // Same rule as the task's own overdue flag: only pending work is overdue.
+      overdue: !item.done && item.dueDate != null && item.dueDate.getTime() < now.getTime(),
       position: item.position,
       createdAt: item.createdAt.toISOString(),
     })),
     emailSubject: task.emailSubject,
     emailBody: task.emailBody,
+    noteDraft: task.noteDraft,
     emailRecipients: task.emailRecipients.map((recipient) => ({
       email: recipient.email,
       name: recipient.name,
@@ -218,6 +225,12 @@ function toTaskView(task: IncludedTask, now: Date = new Date()): TaskView {
       mimeType: attachment.mimeType,
       sizeBytes: attachment.sizeBytes,
       uploadedAt: attachment.uploadedAt.toISOString(),
+    })),
+    notes: task.notes.map((note) => ({
+      id: note.id,
+      body: note.body,
+      createdAt: note.createdAt.toISOString(),
+      updatedAt: note.updatedAt.toISOString(),
     })),
   };
 }
@@ -254,7 +267,6 @@ export async function createTask(input: TaskInput): Promise<number> {
       description: emptyToNull(input.description),
       status,
       dueDate: parseDate(input.dueDate),
-      estimatedMinutes: parseMinutes(input.estimatedMinutes),
       projectId: input.projectId ?? null,
       taskGroupId: input.taskGroupId ?? null,
       centreKey: input.centreKey ?? null,
@@ -277,7 +289,6 @@ export async function updateTask(id: number, input: TaskInput): Promise<void> {
       title,
       description: emptyToNull(input.description),
       dueDate: parseDate(input.dueDate),
-      estimatedMinutes: parseMinutes(input.estimatedMinutes),
       projectId: input.projectId ?? null,
       taskGroupId: input.taskGroupId ?? null,
       centreKey: input.centreKey ?? null,
@@ -300,80 +311,60 @@ export async function setTaskStatus(id: number, status: string): Promise<void> {
 }
 
 export async function deleteTask(id: number): Promise<void> {
-  // ChecklistItem and TimeEntry rows cascade.
+  // ChecklistItem, TaskNote and attachment rows cascade.
   await prisma.task.delete({ where: { id } });
 }
 
-// --- Time tracking -------------------------------------------------------
+// --- Notes ---------------------------------------------------------------
 
-// Starts the running timer. No-op if a timer is already running so a double
-// click doesn't lose the earlier start time.
-export async function startTaskTimer(id: number): Promise<void> {
-  await prisma.task.updateMany({
-    where: { id, timerStartedAt: null },
-    data: { timerStartedAt: new Date() },
+// Appends a timestamped note. Notes are append-only progress updates, listed
+// newest-first by TASK_INCLUDE, so the history stays the record.
+// Saves the half-written note so it survives the page reload that another
+// field's autosave triggers. Passing empty text clears the draft.
+export async function saveTaskNoteDraft(taskId: number, body: string): Promise<void> {
+  await prisma.task.update({
+    where: { id: taskId },
+    data: { noteDraft: emptyToNull(body) },
   });
 }
 
-// Stops the running timer: folds elapsed whole minutes into loggedMinutes,
-// writes a TimeEntry for the audit trail, and clears the running flag. No-op if
-// no timer is running.
-export async function stopTaskTimer(id: number): Promise<void> {
-  const task = await prisma.task.findUnique({
-    where: { id },
-    select: { timerStartedAt: true },
-  });
-  if (!task?.timerStartedAt) return;
-
-  const startedAt = task.timerStartedAt;
-  const endedAt = new Date();
-  const minutes = Math.max(
-    0,
-    Math.floor((endedAt.getTime() - startedAt.getTime()) / 60000),
-  );
-
-  await prisma.$transaction([
-    prisma.task.update({
-      where: { id },
-      data: {
-        timerStartedAt: null,
-        loggedMinutes: { increment: minutes },
-      },
-    }),
-    ...(minutes > 0
-      ? [
-          prisma.timeEntry.create({
-            data: { taskId: id, minutes, startedAt, endedAt, note: "Timer" },
-          }),
-        ]
-      : []),
-  ]);
-}
-
-// Manual time log: adds minutes to the cached total and records an entry.
-export async function logTaskTime(
-  id: number,
-  minutes: number,
-  note?: string | null,
-): Promise<void> {
-  const amount = parseMinutes(minutes);
-  if (!amount || amount <= 0) {
-    throw new Error("Logged minutes must be a positive number");
+export async function addTaskNote(taskId: number, body: string): Promise<number> {
+  const text = emptyToNull(body);
+  if (!text) {
+    throw new Error("Note text is required");
   }
-  await prisma.$transaction([
-    prisma.task.update({
-      where: { id },
-      data: { loggedMinutes: { increment: amount } },
+  const [note] = await prisma.$transaction([
+    prisma.taskNote.create({
+      data: { taskId, body: text },
+      select: { id: true },
     }),
-    prisma.timeEntry.create({
-      data: { taskId: id, minutes: amount, note: emptyToNull(note) },
-    }),
+    // The draft has become a real note, so it must not reappear in the box.
+    prisma.task.update({ where: { id: taskId }, data: { noteDraft: null } }),
   ]);
+  return note.id;
+}
+
+// Edits an existing note in place. `updatedAt` moves so the UI can show that a
+// note was revised after it was first written.
+export async function updateTaskNote(id: number, body: string): Promise<void> {
+  const text = emptyToNull(body);
+  if (!text) {
+    throw new Error("Note text is required");
+  }
+  await prisma.taskNote.update({ where: { id }, data: { body: text } });
+}
+
+export async function deleteTaskNote(id: number): Promise<void> {
+  await prisma.taskNote.delete({ where: { id } });
 }
 
 // --- Checklist -----------------------------------------------------------
 
-export async function addChecklistItem(taskId: number, label: string): Promise<void> {
+export async function addChecklistItem(
+  taskId: number,
+  label: string,
+  dueDate?: string | null,
+): Promise<void> {
   const text = label.trim();
   if (text.length === 0) {
     throw new Error("Checklist item is required");
@@ -384,18 +375,32 @@ export async function addChecklistItem(taskId: number, label: string): Promise<v
     select: { position: true },
   });
   await prisma.checklistItem.create({
-    data: { taskId, label: text, position: (last?.position ?? -1) + 1 },
+    data: {
+      taskId,
+      label: text,
+      dueDate: parseDate(dueDate),
+      position: (last?.position ?? -1) + 1,
+    },
   });
 }
 
-export async function updateChecklistItem(itemId: number, label: string): Promise<void> {
+// `dueDate` is only written when the caller passes the field at all, so editing
+// the label alone cannot clear a deadline. Passing an empty string clears it.
+export async function updateChecklistItem(
+  itemId: number,
+  label: string,
+  dueDate?: string | null,
+): Promise<void> {
   const text = label.trim();
   if (text.length === 0) {
     throw new Error("Checklist item is required");
   }
   await prisma.checklistItem.updateMany({
     where: { id: itemId },
-    data: { label: text },
+    data: {
+      label: text,
+      ...(dueDate !== undefined ? { dueDate: parseDate(dueDate) } : {}),
+    },
   });
 }
 

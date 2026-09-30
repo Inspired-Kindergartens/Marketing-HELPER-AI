@@ -79,7 +79,7 @@ function parseDate(value: string | null | undefined): Date | null {
 }
 
 function emptyStatusCounts(): Record<TaskStatus, number> {
-  return { todo: 0, in_progress: 0, blocked: 0, done: 0 };
+  return { todo: 0, in_progress: 0, done: 0 };
 }
 
 export async function listProjects(): Promise<ProjectListItem[]> {

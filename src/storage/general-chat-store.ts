@@ -259,6 +259,16 @@ async function readConversationMemoryMetadata(conversationId: number) {
   };
 }
 
+export async function readGeneralChatHistory(conversationId: number) {
+  const rows = await prisma.generalChatMessage.findMany({
+    where: { conversationId },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    select: { role: true, content: true },
+  });
+
+  return rows.map((row) => ({ role: row.role, content: row.content }));
+}
+
 export async function buildGeneralChatMemory(
   conversationId: number,
   centres: readonly ChatMemoryCentreReference[] = [],

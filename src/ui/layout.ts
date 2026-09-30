@@ -16,6 +16,9 @@ type LayoutPanel = {
 type LayoutOptions = {
   panels: LayoutPanel[];
   focusPanelId?: string | null;
+  // Which accordion panel starts open. Defaults to the first left panel, so a
+  // caller that doesn't care keeps the existing behaviour.
+  openPanelId?: string | null;
 };
 
 // A download/refresh action button navigates to an /actions route that does
@@ -36,7 +39,7 @@ const DOWNLOAD_SPINNER_SCRIPT = `
     </script>
   `;
 
-export function renderLayout({ panels, focusPanelId }: LayoutOptions) {
+export function renderLayout({ panels, focusPanelId, openPanelId }: LayoutOptions) {
   const focusPanel = focusPanelId ? panels.find((panel) => panel.id === focusPanelId) : null;
 
   if (focusPanel) {
@@ -58,7 +61,12 @@ export function renderLayout({ panels, focusPanelId }: LayoutOptions) {
   const isSidePanel = (panel: LayoutPanel) => panel.sidePanel === true || panel.className?.includes("panel--chat") === true;
   const chatPanel = panels.find(isSidePanel);
   const leftPanels = panels.filter((panel) => !isSidePanel(panel));
-  const activeAccordionPanelId = leftPanels[0]?.id ?? "";
+  // An explicitly requested panel wins, as long as it is actually in the
+  // accordion (a side panel like chat is never the accordion's open one).
+  const requestedOpenPanel = openPanelId
+    ? leftPanels.find((panel) => panel.id === openPanelId)
+    : undefined;
+  const activeAccordionPanelId = requestedOpenPanel?.id ?? leftPanels[0]?.id ?? "";
 
   return `
     <main class="app-shell">

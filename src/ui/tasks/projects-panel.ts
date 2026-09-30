@@ -107,7 +107,7 @@ function renderGantt(rollup: ProjectRollup): string {
 }
 
 function renderStatusBreakdown(groups: ProjectGroupView[]): string {
-  const totals: Record<TaskStatus, number> = { todo: 0, in_progress: 0, blocked: 0, done: 0 };
+  const totals: Record<TaskStatus, number> = { todo: 0, in_progress: 0, done: 0 };
   for (const group of groups) {
     for (const status of Object.keys(totals) as TaskStatus[]) {
       totals[status] += group.statusCounts[status];
@@ -133,7 +133,7 @@ function renderGroup(group: ProjectGroupView): string {
     .map(
       (task) => `
         <li class="project-group__task project-group__task--${escapeHtml(task.status)}">
-          <a href="/tasks?panel=task-detail&task=${task.id}">${escapeHtml(task.title)}</a>
+          <a href="/tasks?task=${task.id}">${escapeHtml(task.title)}</a>
           <span class="project-group__task-status">${escapeHtml(TASK_STATUS_LABELS[task.status])}</span>
         </li>
       `,
@@ -170,7 +170,7 @@ function renderProjectDetail(rollup: ProjectRollup, members: MemberView[]): stri
             name: "Ungrouped",
             position: 9999,
             tasks: rollup.ungrouped,
-            statusCounts: { todo: 0, in_progress: 0, blocked: 0, done: 0 },
+            statusCounts: { todo: 0, in_progress: 0, done: 0 },
           } as ProjectGroupView,
         ]
       : []),

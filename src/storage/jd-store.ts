@@ -15,8 +15,18 @@ function toJsonInput(value: object | null): Prisma.InputJsonValue | typeof Prism
 // formatting lives in formatJdLocationDisplay (src/ui/jd/jd-email.ts).
 function defaultLocationDisplay(name: string): string {
   const cleaned = name.replace(/\s+/g, " ").trim();
-  return /\s*kindergarten$/i.test(cleaned) ? cleaned : `${cleaned} Kindergarten`;
+  // Only append "Kindergarten" when the name does not already contain it
+  // anywhere - names like "Maungaarangi Kindergarten and Whanau Centre" carry
+  // it mid-string, and a trailing-only check would double it up.
+  return /\bkindergarten\b/i.test(cleaned) ? cleaned : `${cleaned} Kindergarten`;
 }
+
+// "Other" in the Location dropdown: an org-wide role that is not based at a
+// kindergarten (e.g. a Communications Coordinator in the office). Such a JD is
+// stored with centreKey = null, so the centre-derived fields (intro paragraph,
+// Senior Teacher, centre knowledge docs) are simply absent rather than faked.
+export const JD_OTHER_LOCATION_KEY = "other";
+export const JD_OTHER_LOCATION_DISPLAY = "Inspired Kindergartens Office";
 
 // Job Descriptions: title/centre profiles drive defaults for a generated
 // JobDescription, which is then editable independently (values are copied at
@@ -565,7 +575,15 @@ export async function getJobDescription(id: number): Promise<JobDescriptionView 
 
 export type CreateJobDescriptionInput = {
   jobTitleProfileId: number;
-  centreKey: number;
+  // null = the "Other" (non-centre) option; see JD_OTHER_LOCATION_KEY.
+  centreKey: number | null;
+  // Only used when centreKey is null, so an office role can name its own
+  // location. Falls back to JD_OTHER_LOCATION_DISPLAY.
+  locationDisplay?: string | null;
+  // Overrides the title profile's job title, so a one-off role (e.g. a new
+  // office position) can be named without first creating a profile for it.
+  // The profile still supplies the layout, category and role sections.
+  jobTitleOverride?: string | null;
   positionType?: string | null;
   fte?: number | null;
   dateAdvertised?: string | null;
@@ -580,8 +598,8 @@ export type CreateJobDescriptionInput = {
 export async function createJobDescription(input: CreateJobDescriptionInput): Promise<number> {
   const titleProfile = await getTitleProfile(input.jobTitleProfileId);
   if (!titleProfile) throw new Error("Unknown job title profile");
-  const centreProfile = await getCentreProfile(input.centreKey);
-  if (!centreProfile) throw new Error("Unknown centre");
+  const centreProfile = input.centreKey == null ? null : await getCentreProfile(input.centreKey);
+  if (input.centreKey != null && !centreProfile) throw new Error("Unknown centre");
 
   const positionType = emptyToNull(input.positionType) ?? titleProfile.defaultPositionType;
   const fte = positionType === "Part-time" ? (input.fte ?? 1) : null;
@@ -593,10 +611,12 @@ export async function createJobDescription(input: CreateJobDescriptionInput): Pr
 
   const row = await prisma.jobDescription.create({
     data: {
-      jobTitle: titleProfile.jobTitle,
+      jobTitle: emptyToNull(input.jobTitleOverride ?? null) ?? titleProfile.jobTitle,
       titleProfileId: titleProfile.id,
-      centreKey: centreProfile.centreKey,
-      locationDisplay: centreProfile.locationDisplay,
+      centreKey: centreProfile?.centreKey ?? null,
+      locationDisplay:
+        centreProfile?.locationDisplay ??
+        (emptyToNull(input.locationDisplay ?? null) ?? JD_OTHER_LOCATION_DISPLAY),
       positionType,
       fte,
       jobCategory: titleProfile.jobCategory,
@@ -607,11 +627,11 @@ export async function createJobDescription(input: CreateJobDescriptionInput): Pr
       closingAt: parseDate(input.closingAt) ?? defaultClosingDate(dateAdvertised),
       startDateText: emptyToNull(input.startDateText) ?? "To be negotiated",
       qualificationsText: titleProfile.qualificationsText,
-      introParagraph: centreProfile.introParagraph,
+      introParagraph: centreProfile?.introParagraph ?? "",
       roleSections: toJsonInput(titleProfile.roleSections as object),
       extras: toJsonInput(titleProfile.extras ?? null),
-      seniorTeacherName: centreProfile.seniorTeacherName,
-      reviewedByAcronym: centreProfile.seniorTeacherAcronym,
+      seniorTeacherName: centreProfile?.seniorTeacherName ?? "",
+      reviewedByAcronym: centreProfile?.seniorTeacherAcronym ?? "",
       approvedByAcronym: "PM",
       // Falls back to the global "Last Reviewed by" setting so the PDF footer's
       // Last Updated By row is populated rather than printing blank.

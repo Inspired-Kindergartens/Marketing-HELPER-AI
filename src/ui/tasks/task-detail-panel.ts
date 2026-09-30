@@ -12,15 +12,6 @@ function escapeHtml(value: string) {
     .replaceAll("'", "&#39;");
 }
 
-function formatMinutes(total: number): string {
-  if (total <= 0) return "0m";
-  const hours = Math.floor(total / 60);
-  const minutes = total % 60;
-  if (hours === 0) return `${minutes}m`;
-  if (minutes === 0) return `${hours}h`;
-  return `${hours}h ${minutes}m`;
-}
-
 function formatBytes(total: number): string {
   if (total < 1024) return `${total} B`;
   const units = ["KB", "MB", "GB"];
@@ -45,6 +36,13 @@ function formatTimestamp(iso: string): string {
   });
 }
 
+function formatDueDateShort(iso: string | null): string {
+  if (!iso) return "";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleDateString("en-NZ", { day: "numeric", month: "short", year: "numeric" });
+}
+
 function toDateInputValue(iso: string | null): string {
   if (!iso) return "";
   const date = new Date(iso);
@@ -61,6 +59,42 @@ export type TaskDetailPanelOptions = {
   // Member + centre contacts used to autocomplete a new "To" address.
   contactSuggestions: EmailContactSuggestion[];
 };
+
+// Timestamped progress notes, newest first (the store orders them). Each note
+// is editable in place and commits on blur, matching the checklist's pattern.
+function renderNotesSection(task: TaskView): string {
+  const notes = task.notes
+    .map(
+      (note) => `
+        <li class="task-notes__item" data-note-id="${note.id}">
+          <div class="task-notes__meta">
+            <span class="task-notes__timestamp">${escapeHtml(formatTimestamp(note.createdAt))}</span>
+            ${note.updatedAt !== note.createdAt ? `<span class="task-notes__edited">edited</span>` : ""}
+            <button type="button" class="task-notes__remove" data-task-action="note-delete" data-note-id="${note.id}" data-arm-label="Confirm remove" aria-label="Remove note">
+              <span>Remove</span>
+            </button>
+          </div>
+          <form class="task-notes__edit" data-note-edit data-note-id="${note.id}">
+            <textarea name="body" rows="3" aria-label="Edit note" data-task-autogrow>${escapeHtml(note.body)}</textarea>
+          </form>
+        </li>`,
+    )
+    .join("");
+
+  return `
+    <section class="task-detail__section task-notes" data-task-notes>
+      <h3 class="task-detail__section-title">Notes <span class="task-detail__section-count">${task.notes.length}</span></h3>
+      <form class="task-notes__add" data-note-add>
+        <textarea name="body" rows="3" placeholder="Add a note…" aria-label="New note" data-task-autogrow data-note-draft>${escapeHtml(task.noteDraft ?? "")}</textarea>
+        <div class="task-notes__add-actions">
+          <button type="submit"><i class="bi bi-plus-lg ui-icon" aria-hidden="true"></i><span>Add note</span></button>
+          <span class="task-notes__draft-status" data-note-draft-status role="status" aria-live="polite">${task.noteDraft ? "Unsaved draft restored" : ""}</span>
+        </div>
+      </form>
+      ${notes ? `<ol class="task-notes__list">${notes}</ol>` : `<p class="task-notes__empty">No notes yet.</p>`}
+    </section>
+  `;
+}
 
 function renderAttachmentSection(task: TaskView): string {
   const attachments = task.attachments
@@ -125,7 +159,7 @@ function renderEmailSection(task: TaskView, contactSuggestions: EmailContactSugg
   return `
     <section class="task-detail__section task-email" data-task-email>
       <h3 class="task-detail__section-title">Email</h3>
-      <p class="task-email__hint">Compose a message, then open it in your mail app (Outlook). The subject, body, and recipient are remembered for next time.</p>
+      <p class="task-email__hint">Compose a message, then open it in your mail app (Outlook). The draft saves itself as you go, so the subject, body, and recipient are remembered for next time.</p>
       ${chips ? `<div class="task-email__chips" role="group" aria-label="Previous recipients">${chips}</div>` : ""}
       <label class="task-field">
         <span class="task-field__label">To</span>
@@ -142,7 +176,7 @@ function renderEmailSection(task: TaskView, contactSuggestions: EmailContactSugg
       </label>
       <div class="task-email__actions">
         <button type="button" class="task-email__open" data-task-action="email-open"><i class="bi bi-envelope-arrow-up ui-icon" aria-hidden="true"></i><span>Open in Outlook</span></button>
-        <button type="button" class="task-email__save" data-task-action="email-save"><i class="bi bi-save ui-icon" aria-hidden="true"></i><span>Save draft</span></button>
+        <span class="task-email__status" data-email-status role="status" aria-live="polite"></span>
       </div>
     </section>
   `;
@@ -154,8 +188,8 @@ export function renderTaskDetailPanel(options: TaskDetailPanelOptions): string {
   if (!task) {
     return `
       <div class="task-detail task-detail--empty">
-        <p class="task-detail__empty-text">Select a task from the board to see its details, checklist, and time log.</p>
-        <a class="task-detail__back" href="/tasks"><i class="bi bi-arrow-left ui-icon" aria-hidden="true"></i><span>Back to board</span></a>
+        <p class="task-detail__empty-text">Select a task from the board to see its details, notes, and checklist.</p>
+        <a class="panel-action-link" href="/tasks"><i class="bi bi-arrow-left ui-icon" aria-hidden="true"></i><span>Back to Tasks</span></a>
       </div>
     `;
   }
@@ -184,21 +218,22 @@ export function renderTaskDetailPanel(options: TaskDetailPanelOptions): string {
     )
     .join("");
 
-  const timeLabel = task.estimatedMinutes
-    ? `${formatMinutes(task.loggedMinutes)} logged of ${formatMinutes(task.estimatedMinutes)} estimated`
-    : `${formatMinutes(task.loggedMinutes)} logged`;
-
   const checklist = task.checklist
     .map(
       (item) => `
-        <li class="task-checklist__item${item.done ? " task-checklist__item--done" : ""}" data-checklist-item="${item.id}">
+        <li class="task-checklist__item${item.done ? " task-checklist__item--done" : ""}${item.overdue ? " task-checklist__item--overdue" : ""}" data-checklist-item="${item.id}">
           <label class="task-checklist__label">
             <input type="checkbox" data-task-action="checklist-toggle" data-item-id="${item.id}"${item.done ? " checked" : ""} />
           </label>
           <form class="task-checklist__edit" data-checklist-edit data-item-id="${item.id}">
             <input type="text" name="label" value="${escapeHtml(item.label)}" maxlength="200" aria-label="Edit checklist item" />
+            <span class="date-combo task-checklist__due">
+              <input type="text" name="dueDate" value="${toDateInputValue(item.dueDate)}" placeholder="No deadline" inputmode="numeric" aria-label="Checklist item deadline" data-date-text />
+              <button type="button" class="date-combo__button" data-open-date-picker title="Choose deadline" aria-label="Choose deadline"><i class="bi bi-calendar3 ui-icon" aria-hidden="true"></i></button>
+              <input type="date" class="date-combo__picker" value="${toDateInputValue(item.dueDate)}" tabindex="-1" aria-hidden="true" data-date-picker />
+            </span>
           </form>
-          <span class="task-checklist__timestamp">${escapeHtml(formatTimestamp(item.createdAt))}</span>
+          <span class="task-checklist__timestamp"${item.dueDate ? ` title="Added ${escapeHtml(formatTimestamp(item.createdAt))}"` : ""}>${item.dueDate ? `${item.overdue ? "Overdue " : "Due "}${escapeHtml(formatDueDateShort(item.dueDate))}` : escapeHtml(formatTimestamp(item.createdAt))}</span>
           <button type="button" class="task-checklist__remove" data-task-action="checklist-delete" data-item-id="${item.id}" aria-label="Remove checklist item"><i class="bi bi-x-lg ui-icon" aria-hidden="true"></i></button>
         </li>
       `,
@@ -207,19 +242,14 @@ export function renderTaskDetailPanel(options: TaskDetailPanelOptions): string {
 
   return `
     <div class="task-detail" data-task-detail data-task-id="${task.id}">
-      <div class="task-detail__toolbar">
-        <a class="task-detail__back" href="/tasks"><i class="bi bi-arrow-left ui-icon" aria-hidden="true"></i><span>Board</span></a>
-        <button type="button" class="task-detail__delete" data-task-action="delete"><i class="bi bi-trash ui-icon" aria-hidden="true"></i><span>Delete</span></button>
-      </div>
-
       <form class="task-detail__form" data-task-edit>
-        <label class="task-field">
+        <label class="task-field task-field--block">
           <span class="task-field__label">Title</span>
           <input type="text" name="title" value="${escapeHtml(task.title)}" maxlength="200" required />
         </label>
-        <label class="task-field">
+        <label class="task-field task-field--block">
           <span class="task-field__label">Description</span>
-          <textarea name="description" rows="3" placeholder="Optional notes…">${escapeHtml(task.description ?? "")}</textarea>
+          <textarea name="description" rows="8" placeholder="Describe the task…" data-task-autogrow>${escapeHtml(task.description ?? "")}</textarea>
         </label>
         <div class="task-field-row">
           <label class="task-field">
@@ -228,11 +258,11 @@ export function renderTaskDetailPanel(options: TaskDetailPanelOptions): string {
           </label>
           <label class="task-field">
             <span class="task-field__label">Due date</span>
-            <input type="date" name="dueDate" value="${toDateInputValue(task.dueDate)}" />
-          </label>
-          <label class="task-field">
-            <span class="task-field__label">Estimate (min)</span>
-            <input type="number" name="estimatedMinutes" min="0" step="5" value="${task.estimatedMinutes ?? ""}" />
+            <span class="date-combo">
+              <input type="text" name="dueDate" value="${toDateInputValue(task.dueDate)}" placeholder="YYYY-MM-DD" inputmode="numeric" data-date-text />
+              <button type="button" class="date-combo__button" data-open-date-picker title="Choose due date" aria-label="Choose due date"><i class="bi bi-calendar3 ui-icon" aria-hidden="true"></i></button>
+              <input type="date" class="date-combo__picker" value="${toDateInputValue(task.dueDate)}" tabindex="-1" aria-hidden="true" data-date-picker />
+            </span>
           </label>
         </div>
         <div class="task-field-row">
@@ -261,31 +291,34 @@ export function renderTaskDetailPanel(options: TaskDetailPanelOptions): string {
       </form>
 
       <section class="task-detail__section">
-        <h3 class="task-detail__section-title">Time tracking</h3>
-        <p class="task-detail__time">${escapeHtml(timeLabel)}</p>
-        <div class="task-detail__time-actions">
-          ${task.timerRunning
-            ? `<button type="button" class="task-detail__timer task-detail__timer--stop" data-task-action="timer-stop"><i class="bi bi-stop-circle ui-icon" aria-hidden="true"></i><span>Stop timer</span></button>`
-            : `<button type="button" class="task-detail__timer" data-task-action="timer-start"><i class="bi bi-play-circle ui-icon" aria-hidden="true"></i><span>Start timer</span></button>`}
-          <form class="task-detail__log" data-task-log>
-            <input type="number" name="minutes" min="1" step="5" placeholder="Log min" aria-label="Minutes to log" />
-            <button type="submit"><i class="bi bi-plus-lg ui-icon" aria-hidden="true"></i><span>Log</span></button>
-          </form>
-        </div>
-      </section>
-
-      <section class="task-detail__section">
         <h3 class="task-detail__section-title">Checklist <span class="task-detail__section-count">${task.checklistDone}/${task.checklistTotal}</span></h3>
         <ul class="task-checklist">${checklist}</ul>
         <form class="task-checklist__add" data-checklist-add>
           <input type="text" name="label" placeholder="Add checklist item…" maxlength="200" />
+          <span class="date-combo task-checklist__due">
+            <input type="text" name="dueDate" placeholder="Deadline (optional)" inputmode="numeric" aria-label="New checklist item deadline" data-date-text />
+            <button type="button" class="date-combo__button" data-open-date-picker title="Choose deadline" aria-label="Choose deadline"><i class="bi bi-calendar3 ui-icon" aria-hidden="true"></i></button>
+            <input type="date" class="date-combo__picker" tabindex="-1" aria-hidden="true" data-date-picker />
+          </span>
           <button type="submit"><i class="bi bi-plus-lg ui-icon" aria-hidden="true"></i><span>Add</span></button>
         </form>
       </section>
+
+      ${renderNotesSection(task)}
 
       ${renderAttachmentSection(task)}
 
       ${renderEmailSection(task, contactSuggestions)}
     </div>
+  `;
+}
+
+// Rendered into the panel header's actions slot so the task's controls sit on
+// the same row as the panel title, matching the /jd and /wiki panels.
+export function renderTaskDetailActions(task: TaskView | null): string | undefined {
+  if (!task) return undefined;
+  return `
+    <a class="panel-action-link" href="/tasks"><i class="bi bi-arrow-left ui-icon" aria-hidden="true"></i><span>Back to Tasks</span></a>
+    <button type="button" class="panel-action-link" data-task-action="delete" data-task-id="${task.id}"><i class="bi bi-trash ui-icon" aria-hidden="true"></i><span>Delete</span></button>
   `;
 }

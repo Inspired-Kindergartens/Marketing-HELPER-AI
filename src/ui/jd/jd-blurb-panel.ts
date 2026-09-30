@@ -201,8 +201,13 @@ export function renderJdBlurbPanel(options: JdBlurbPanelOptions): string {
         ` : ""}
 
         root.querySelectorAll("[data-blurb-cmd]").forEach(function(btn) {
+          // Keep the caret where the user left it: a plain click blurs the
+          // editor, and the focus() below then collapses the selection to the
+          // start, so formatBlock would reformat the first block rather than
+          // the one being edited.
+          btn.addEventListener("mousedown", function(event) { event.preventDefault(); });
           btn.addEventListener("click", function() {
-            editor.focus();
+            if (document.activeElement !== editor) editor.focus();
             var cmd = btn.getAttribute("data-blurb-cmd");
             var value = btn.getAttribute("data-blurb-value") || undefined;
             if (cmd === "createLink") {

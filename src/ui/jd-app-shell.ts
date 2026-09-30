@@ -110,7 +110,7 @@ function renderJdScript(): string {
         function setCreateBusy(form, busy) {
           var busyStatus = form.querySelector("[data-jd-create-busy]");
           var submit = form.querySelector("[data-jd-create-submit]");
-          var fields = form.querySelectorAll("select, button");
+          var fields = form.querySelectorAll("select, button, input");
           fields.forEach(function(field) {
             field.disabled = busy;
           });
