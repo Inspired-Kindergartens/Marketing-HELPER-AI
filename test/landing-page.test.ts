@@ -14,6 +14,7 @@ function buildReminder(overrides: Partial<TaskReminderView> = {}): TaskReminderV
     daysUntilDue: -4,
     assigneeName: null,
     projectName: null,
+    nextChecklist: [],
     ...overrides,
   };
 }
@@ -217,4 +218,36 @@ test("landing page hides the Postmark alert when webhooks are current", () => {
   const html = renderLandingPage({ postmarkAlert: null });
 
   assert.doesNotMatch(html, /landing-alert/);
+});
+
+test("landing page renders reminders as sidebar cards with the next checklist items", () => {
+  const feed: TaskReminderFeed = {
+    overdue: [],
+    dueSoon: [
+      buildReminder({
+        id: 7,
+        title: "Brookfield SM Campaign",
+        daysUntilDue: 2,
+        nextChecklist: [
+          { id: 11, label: "Draft captions", dueDate: "2026-07-12T00:00:00.000Z", daysUntilDue: -1 },
+          { id: 12, label: "Book photographer", dueDate: null, daysUntilDue: null },
+        ],
+      }),
+    ],
+    total: 1,
+  };
+  const html = renderLandingPage({ reminders: feed });
+
+  assert.match(html, /landing-layout landing-layout--with-sidebar/);
+  assert.match(html, /<aside class="landing__reminders"/);
+  assert.ok(html.indexOf("</main>") < html.indexOf('<aside class="landing__reminders"'));
+  assert.match(html, /landing-reminder__check landing-reminder__check--overdue/);
+  assert.match(html, /Draft captions/);
+  assert.match(html, /Overdue by 1 day</);
+  assert.match(html, /Book photographer/);
+});
+
+test("landing page omits the sidebar layout when there are no reminders", () => {
+  const html = renderLandingPage({ reminders: { overdue: [], dueSoon: [], total: 0 } });
+  assert.doesNotMatch(html, /landing-layout--with-sidebar/);
 });

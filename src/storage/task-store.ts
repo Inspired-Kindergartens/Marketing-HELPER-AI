@@ -77,6 +77,16 @@ export type TaskReminderView = {
   daysUntilDue: number; // negative when overdue
   assigneeName: string | null;
   projectName: string | null;
+  // The next (max two) unfinished checklist items: dated ones soonest-first,
+  // then undated ones in checklist order.
+  nextChecklist: TaskReminderChecklistItem[];
+};
+
+export type TaskReminderChecklistItem = {
+  id: number;
+  label: string;
+  dueDate: string | null;
+  daysUntilDue: number | null; // negative when overdue
 };
 
 export type TaskReminderFeed = {
@@ -568,8 +578,16 @@ export async function getDueAndOverdueTasks(
       dueDate: true,
       assignee: { select: { name: true } },
       project: { select: { name: true } },
+      checklistItems: {
+        where: { done: false },
+        orderBy: { position: "asc" },
+        select: { id: true, label: true, dueDate: true },
+      },
     },
   });
+
+  const daysFromToday = (date: Date) =>
+    Math.round((startOfDay(date).getTime() - today.getTime()) / 86400000);
 
   const overdue: TaskReminderView[] = [];
   const dueSoon: TaskReminderView[] = [];
@@ -577,9 +595,23 @@ export async function getDueAndOverdueTasks(
   for (const row of rows) {
     if (!row.dueDate) continue;
     const due = row.dueDate;
-    const daysUntilDue = Math.round(
-      (startOfDay(due).getTime() - today.getTime()) / 86400000,
-    );
+    const daysUntilDue = daysFromToday(due);
+    // Stable sort keeps checklist (position) order within the same date and
+    // among undated items.
+    const nextChecklist = [...row.checklistItems]
+      .sort((a, b) => {
+        if (a.dueDate && b.dueDate) return a.dueDate.getTime() - b.dueDate.getTime();
+        if (a.dueDate) return -1;
+        if (b.dueDate) return 1;
+        return 0;
+      })
+      .slice(0, 2)
+      .map((item) => ({
+        id: item.id,
+        label: item.label,
+        dueDate: item.dueDate ? item.dueDate.toISOString() : null,
+        daysUntilDue: item.dueDate ? daysFromToday(item.dueDate) : null,
+      }));
     const view: TaskReminderView = {
       id: row.id,
       title: row.title,
@@ -588,6 +620,7 @@ export async function getDueAndOverdueTasks(
       daysUntilDue,
       assigneeName: row.assignee?.name ?? null,
       projectName: row.project?.name ?? null,
+      nextChecklist,
     };
     if (due.getTime() < today.getTime()) {
       overdue.push(view);

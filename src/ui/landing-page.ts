@@ -10,16 +10,34 @@ function escapeHtml(value: string) {
     .replaceAll("'", "&#39;");
 }
 
-// "Overdue by 3 days" / "Due today" / "Due in 2 days" from the signed
-// daysUntilDue the reminder feed computes.
-function dueLabel(reminder: TaskReminderView): string {
-  const days = reminder.daysUntilDue;
+// "Overdue by 3 days" / "Due today" / "Due in 2 days" from a signed
+// days-until-due count.
+function dueLabelFromDays(days: number): string {
   if (days < 0) {
     const n = Math.abs(days);
     return `Overdue by ${n} day${n === 1 ? "" : "s"}`;
   }
   if (days === 0) return "Due today";
   return `Due in ${days} day${days === 1 ? "" : "s"}`;
+}
+
+function renderReminderChecklist(reminder: TaskReminderView): string {
+  const items = reminder.nextChecklist ?? [];
+  if (items.length === 0) return "";
+  return `
+      <ul class="landing-reminder__checklist" aria-label="Next checklist items">
+        ${items
+          .map(
+            (item) => `
+          <li class="landing-reminder__check${item.daysUntilDue != null && item.daysUntilDue < 0 ? " landing-reminder__check--overdue" : ""}">
+            <i class="bi bi-square" aria-hidden="true"></i>
+            <span class="landing-reminder__check-label">${escapeHtml(item.label)}</span>
+            ${item.daysUntilDue != null ? `<span class="landing-reminder__check-due">${escapeHtml(dueLabelFromDays(item.daysUntilDue))}</span>` : ""}
+          </li>`,
+          )
+          .join("")}
+      </ul>
+  `;
 }
 
 function renderReminderItem(reminder: TaskReminderView, overdue: boolean): string {
@@ -29,9 +47,10 @@ function renderReminderItem(reminder: TaskReminderView, overdue: boolean): strin
     .join(" · ");
   return `
     <a class="landing-reminder${overdue ? " landing-reminder--overdue" : ""}" href="/tasks?task=${reminder.id}">
-      <span class="landing-reminder__due">${escapeHtml(dueLabel(reminder))}</span>
+      <span class="landing-reminder__due">${escapeHtml(dueLabelFromDays(reminder.daysUntilDue))}</span>
       <span class="landing-reminder__title">${escapeHtml(reminder.title)}</span>
       ${meta ? `<span class="landing-reminder__meta">${meta}</span>` : ""}
+      ${renderReminderChecklist(reminder)}
     </a>
   `;
 }
@@ -100,10 +119,10 @@ function renderReminders(reminders: TaskReminderFeed | undefined, ktcaReminder?:
   const overdueCount = (reminders?.overdue.length ?? 0) + (ktcaReminder ? 1 : 0);
   const heading = overdueCount > 0 ? `${overdueCount} overdue · ${total} need attention` : `${total} due soon`;
   return `
-    <section class="landing__reminders" aria-label="Task reminders">
+    <aside class="landing__reminders" aria-label="Task reminders">
       <h2 class="landing-reminders__heading">${escapeHtml(heading)}</h2>
       <div class="landing-reminders__list">${items}</div>
-    </section>
+    </aside>
   `;
 }
 
@@ -256,6 +275,8 @@ export function renderLandingPage(options: LandingPageOptions = {}) {
 
   const placeholderTiles: string[] = [];
 
+  const remindersHtml = renderReminders(options.reminders, options.ktcaReminder);
+
   const secondaryTileRow = secondaryTiles
     .map(
       (tile) => `
@@ -288,6 +309,7 @@ export function renderLandingPage(options: LandingPageOptions = {}) {
     <link rel="stylesheet" href="/app.css" />
   </head>
   <body class="landing-body">
+    <div class="landing-layout${remindersHtml ? " landing-layout--with-sidebar" : ""}">
     <main class="landing">
       ${renderPostmarkAlert(options.postmarkAlert)}
       <header class="landing__header">
@@ -297,7 +319,6 @@ export function renderLandingPage(options: LandingPageOptions = {}) {
         <source src="/assets/beepbeep-intro.mp4" type="video/mp4" />
       </video>
       <p class="landing__tagline">Local marketing &amp; enrolment intelligence for kindergartens.</p>
-      ${renderReminders(options.reminders, options.ktcaReminder)}
       <nav class="landing__buttons" aria-label="Primary navigation">
         ${buttonRow}
       </nav>
@@ -329,6 +350,8 @@ export function renderLandingPage(options: LandingPageOptions = {}) {
         </a>
       </footer>
     </main>
+    ${remindersHtml}
+    </div>
     <script>
       (function () {
         var btn = document.querySelector("[data-restart]");
