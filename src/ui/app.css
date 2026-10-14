@@ -207,6 +207,16 @@ button {
   cursor: pointer;
 }
 
+.panel-action-button:hover,
+.panel-action-button:focus-visible,
+.panel-action-link:hover,
+.panel-action-link:focus-visible,
+button:hover,
+button:focus-visible {
+  color: var(--color-active);
+  border-color: var(--color-active);
+}
+
 .panel-action-button--disabled {
   opacity: 0.6;
   cursor: progress;
@@ -1981,9 +1991,6 @@ button {
   gap: 6px;
   min-height: 2.25rem;
   padding: 0 0.85rem;
-  border: var(--button-border);
-  background: var(--color-surface);
-  color: var(--color-muted-control);
   font: inherit;
 }
 
@@ -3361,10 +3368,6 @@ body.general-chat-body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  background: var(--color-surface-dark);
-  color: var(--color-text);
   cursor: pointer;
 }
 
@@ -4319,9 +4322,6 @@ body.readme-body {
 .comms-active-filter button {
   flex: none;
   padding: 4px 10px;
-  background: transparent;
-  color: var(--color-text);
-  border: var(--button-border);
   cursor: pointer;
 }
 
@@ -4340,9 +4340,6 @@ body.readme-body {
 }
 
 .comms-pagination button {
-  border: 1px solid var(--color-border);
-  background: var(--color-surface-dark);
-  color: var(--color-ghost);
   cursor: pointer;
   padding: 5px 10px;
 }
@@ -4456,9 +4453,6 @@ body.readme-body {
 .task-attachments__link,
 .task-detail__back {
   align-items: center;
-  border: 1px solid var(--color-border);
-  background: var(--color-surface-dark);
-  color: var(--color-ghost);
   cursor: pointer;
   display: inline-flex;
   gap: 6px;
@@ -4911,16 +4905,8 @@ body.readme-body {
 .task-checklist__due .date-combo__button {
   width: 28px;
   min-height: 28px;
-  border-color: transparent;
-  background: none;
-  color: var(--color-ghost);
 }
 
-.task-checklist__due .date-combo__button:hover,
-.task-checklist__due .date-combo__button:focus-visible {
-  border-color: var(--color-active);
-  color: var(--color-active);
-}
 
 .task-checklist__item--done .task-checklist__edit input[name="label"] {
   color: var(--color-empty);
@@ -5223,9 +5209,6 @@ body.readme-body {
   align-items: center;
 }
 
-.member-row__delete {
-  background: none;
-}
 
 .member-row__delete:hover {
   border-color: var(--color-wait-long);
@@ -5280,7 +5263,7 @@ body.readme-body {
   gap: 10px;
   align-items: flex-end;
   padding-bottom: 12px;
-  border-bottom: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border-accent);
 }
 
 .jd-list__create label {
@@ -5293,6 +5276,7 @@ body.readme-body {
 }
 
 .jd-list__create select,
+.jd-list__create input,
 .jd-editor input,
 .jd-editor select,
 .jd-editor textarea,
@@ -5306,8 +5290,6 @@ body.readme-body {
   font: inherit;
 }
 
-.jd-list__create button,
-.jd-editor__actions button,
 .jd-settings__centre-row button,
 .jd-settings__title-row button,
 .jd-settings__doc-row button,
@@ -5316,23 +5298,11 @@ body.readme-body {
   align-items: center;
   gap: 8px;
   padding: 8px 14px;
-  border: 1px solid var(--color-border);
-  background: transparent;
-  color: var(--color-text);
   font: inherit;
   cursor: pointer;
   transition: color 120ms ease, border-color 120ms ease;
 }
 
-.jd-list__create button:hover,
-.jd-editor__save:hover,
-.jd-settings__centre-row button:hover,
-.jd-settings__title-row button:hover,
-.jd-settings__doc-row button:hover,
-.jd-settings__ktca-import button:hover {
-  color: var(--color-active);
-  border-color: var(--color-active);
-}
 
 .jd-list__create[aria-busy="true"] select,
 .jd-list__create[aria-busy="true"] button {
@@ -5350,6 +5320,7 @@ body.readme-body {
   font-size: var(--font-size-small);
 }
 
+.jd-list__row[hidden],
 .jd-list__create-busy[hidden] {
   display: none;
 }
@@ -5433,18 +5404,10 @@ body.readme-body {
   justify-content: center;
   width: 30px;
   height: 30px;
-  border: 1px solid var(--color-border-muted);
-  background: transparent;
-  color: var(--color-muted);
   cursor: pointer;
   text-decoration: none;
 }
 
-.jd-list__link:hover,
-.jd-list__button:hover {
-  color: var(--color-active);
-  border-color: var(--color-active);
-}
 
 .jd-list__button--danger:hover {
   color: var(--color-wait-long);
@@ -5502,18 +5465,8 @@ body.readme-body {
   width: 36px;
   min-height: 36px;
   padding: 0;
-  border: 1px solid var(--color-border);
-  background: var(--color-surface-dark);
-  color: var(--color-text);
 }
 
-.date-combo__button:hover,
-.date-combo__button:focus-visible,
-.jd-editor__date-button:hover,
-.jd-editor__date-button:focus-visible {
-  color: var(--color-active);
-  border-color: var(--color-active);
-}
 
 .date-combo__picker,
 .jd-editor__date-picker {
@@ -5584,12 +5537,6 @@ body.readme-body {
   flex: 1;
 }
 
-.jd-editor__inline-button,
-.jd-editor__mini-button {
-  border: 1px solid var(--color-border-muted);
-  background: var(--color-surface);
-  color: var(--color-text);
-}
 
 .jd-editor__inline-button {
   align-self: flex-start;
@@ -5637,21 +5584,13 @@ body.readme-body {
   min-width: 32px;
   height: 32px;
   padding: 0 8px;
-  border: 1px solid var(--color-border-muted);
-  background: transparent;
-  color: var(--color-muted);
   cursor: pointer;
 }
 
-.jd-blurb__toolbar button:hover {
-  color: var(--color-active);
-  border-color: var(--color-active);
-}
 
 .jd-blurb__generate,
 .jd-blurb__copy {
   margin-left: auto;
-  color: var(--color-text) !important;
 }
 
 .jd-blurb__editor {
@@ -5717,17 +5656,10 @@ body.readme-body {
   align-items: center;
   gap: 8px;
   padding: 8px 16px;
-  border: 1px solid var(--color-border);
-  background: transparent;
-  color: var(--color-text);
   font: inherit;
   cursor: pointer;
 }
 
-.jd-blurb__save:hover {
-  color: var(--color-active);
-  border-color: var(--color-active);
-}
 
 .jd-blurb__versions h3 {
   color: var(--color-text-strong);
@@ -5782,7 +5714,8 @@ body.readme-body {
   gap: 20px;
 }
 
-.jd-settings__section h3 {
+.jd-settings__section h3,
+.jd-list__heading {
   color: var(--color-text-strong);
   font-size: var(--font-size-base);
   margin: 0 0 10px;
@@ -5934,18 +5867,10 @@ body.readme-body {
   align-items: center;
   gap: 8px;
   padding: 8px 16px;
-  border: 1px solid var(--color-border);
-  background: transparent;
-  color: var(--color-text);
   font: inherit;
   cursor: pointer;
 }
 
-.wiki-list__create button:hover,
-.wiki-editor__save:hover {
-  color: var(--color-active);
-  border-color: var(--color-active);
-}
 
 .wiki-list__search {
   display: flex;
@@ -6102,16 +6027,9 @@ body.readme-body {
   justify-content: center;
   width: 30px;
   height: 30px;
-  border: 1px solid var(--color-border-muted);
-  background: transparent;
-  color: var(--color-muted);
   cursor: pointer;
 }
 
-.wiki-list__button:hover {
-  color: var(--color-active);
-  border-color: var(--color-active);
-}
 
 .wiki-list__button[aria-pressed="true"] {
   color: var(--color-active);
@@ -6200,20 +6118,12 @@ body.readme-body {
   min-width: 32px;
   height: 32px;
   padding: 0 8px;
-  border: 1px solid var(--color-border-muted);
-  background: transparent;
-  color: var(--color-muted);
   cursor: pointer;
 }
 
-.wiki-editor__toolbar button:hover {
-  color: var(--color-active);
-  border-color: var(--color-active);
-}
 
 .wiki-editor__copy {
   margin-left: auto;
-  color: var(--color-text) !important;
 }
 
 .wiki-editor__content {
@@ -6299,18 +6209,11 @@ body.readme-body {
   align-items: center;
   gap: 8px;
   padding: 8px 16px;
-  border: 1px solid var(--color-border);
-  background: transparent;
-  color: var(--color-text);
   font: inherit;
   cursor: pointer;
   white-space: nowrap;
 }
 
-.wiki-list__add:hover {
-  color: var(--color-active);
-  border-color: var(--color-active);
-}
 
 .wiki-list__create {
   display: flex;
@@ -6337,17 +6240,10 @@ body.readme-body {
   align-items: center;
   gap: 8px;
   padding: 8px 16px;
-  border: 1px solid var(--color-border);
-  background: transparent;
-  color: var(--color-text);
   font: inherit;
   cursor: pointer;
 }
 
-.wiki-list__create-actions button:hover {
-  color: var(--color-active);
-  border-color: var(--color-active);
-}
 
 
 
@@ -6356,7 +6252,6 @@ body.readme-body {
 
 .wiki-editor__regenerate {
   margin-left: auto;
-  color: var(--color-text) !important;
 }
 
 .wiki-editor__regenerate:disabled {
@@ -6412,7 +6307,8 @@ body.readme-body {
   text-transform: uppercase;
 }
 
-.wiki-modal__field input {
+.wiki-modal__field input,
+.wiki-modal__field select {
   border: 1px solid var(--color-border);
   background: var(--color-surface-dark);
   color: var(--color-text);
@@ -6437,21 +6333,11 @@ body.readme-body {
   align-items: center;
   gap: 8px;
   padding: 8px 16px;
-  border: 1px solid var(--color-border);
-  background: transparent;
-  color: var(--color-text);
   font: inherit;
   cursor: pointer;
 }
 
-.wiki-modal__actions button:hover {
-  color: var(--color-active);
-  border-color: var(--color-active);
-}
 
-.wiki-modal__submit {
-  border-color: var(--color-border-accent) !important;
-}
 
 /* Article reader — the default view when an article is opened. */
 
@@ -6664,9 +6550,6 @@ body.readme-body {
   width: 30px;
   height: 30px;
   flex: none;
-  border: 1px solid var(--color-border-muted);
-  background: transparent;
-  color: var(--color-muted);
 }
 
 .wiki-categories__delete {
@@ -6709,18 +6592,11 @@ body.readme-body {
   align-items: center;
   gap: 8px;
   padding: 8px 16px;
-  border: 1px solid var(--color-border);
-  background: transparent;
-  color: var(--color-text);
   font: inherit;
   cursor: pointer;
   white-space: nowrap;
 }
 
-.wiki-categories__add button:hover {
-  color: var(--color-active);
-  border-color: var(--color-active);
-}
 
 .wiki-categories__status {
   margin: 0;
@@ -6821,15 +6697,66 @@ body.readme-body {
   align-items: center;
   gap: 8px;
   padding: 8px 16px;
-  border: 1px solid var(--color-border);
-  background: transparent;
-  color: var(--color-text);
   font: inherit;
   cursor: pointer;
   white-space: nowrap;
 }
 
-.wiki-article__copy:hover {
-  color: var(--color-active);
-  border-color: var(--color-active);
+
+/* --- Code Snippets ----------------------------------------------------------
+   Reuses the wiki's list, modal and editor treatment; only the code-specific
+   pieces are defined here. */
+
+.panel--snippet-list,
+.panel--snippet-editor {
+  overflow: hidden;
+}
+
+.panel--snippet-list .panel__body,
+.panel--snippet-editor .panel__body {
+  overflow: auto;
+}
+
+/* Description beside the title: one line, truncated rather than wrapping so
+   every row stays the same height. The title keeps its full width. */
+[data-snippet-row] .wiki-list__title {
+  flex-shrink: 0;
+}
+
+.snippets-list__description {
+  min-width: 0;
+  margin-left: 10px;
+  overflow: hidden;
+  color: var(--color-ghost);
+  font-size: var(--font-size-small);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.snippets-list__language {
+  border: 1px solid var(--color-border-muted);
+  color: var(--color-muted);
+  padding: 1px 6px;
+  font-size: var(--font-size-small);
+  font-weight: var(--font-weight-body);
+}
+
+.snippet-editor__code {
+  min-height: 360px;
+  resize: vertical;
+  box-sizing: border-box;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-dark);
+  color: var(--color-text);
+  padding: 12px;
+  font-family: ui-monospace, "Cascadia Code", "Consolas", "Menlo", monospace;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  text-transform: none;
+  white-space: pre;
+  tab-size: 2;
+}
+
+.snippet-editor__code:focus {
+  outline: 1px solid var(--color-active);
 }

@@ -3,7 +3,14 @@ import { renderJdListPanel, type JdListPanelOptions } from "./jd/jd-list-panel.j
 import { renderJdEditorPanel, type JdEditorPanelOptions } from "./jd/jd-editor-panel.js";
 import { renderJdBlurbPanel, type JdBlurbPanelOptions } from "./jd/jd-blurb-panel.js";
 import { renderJdSettingsPanel, type JdSettingsPanelOptions } from "./jd/jd-settings-panel.js";
-import { buildJdGenerateEmailHref, formatJdLocationDisplay } from "./jd/jd-email.js";
+import {
+  JD_APPROVAL_DEADLINE_TOKEN,
+  JD_APPROVAL_EMAIL_SUBJECT,
+  buildJdApprovalEmailText,
+  buildJdGenerateEmailHref,
+  formatJdLocationDisplay,
+} from "./jd/jd-email.js";
+import type { CentreContact } from "../storage/centre-contact-store.js";
 
 const PANEL_DEFINITIONS = [
   { id: "jd-list", title: "Job Descriptions", className: "panel--jd-list" },
@@ -24,6 +31,9 @@ export type JdAppShellOptions = {
   editor: JdEditorPanelOptions;
   blurb: JdBlurbPanelOptions;
   settings: JdSettingsPanelOptions;
+  // Contact-list row for the selected JD's kindergarten; addressee of the
+  // "For Approval" email.
+  centreContact?: CentreContact | null;
 };
 
 function renderPanelContent(panelId: string, options: JdAppShellOptions): string {
@@ -49,11 +59,23 @@ function renderPanelActions(panelId: string, options: JdAppShellOptions): string
   if (panelId === "jd-editor" && options.editor.jobDescription) {
     const jd = options.editor.jobDescription;
     const emailHref = buildJdGenerateEmailHref(jd);
+    const contact = options.centreContact;
 
     return `
       <a class="panel-action-link" href="/jd"><i class="bi bi-arrow-left ui-icon" aria-hidden="true"></i><span>Back to Job Descriptions</span></a>
       <a class="panel-action-link" href="/jd?panel=jd-blurb&jd=${jd.id}"><i class="bi bi-file-earmark-richtext ui-icon" aria-hidden="true"></i><span>Website blurb for this JD</span></a>
-      <a class="panel-action-link" href="${escapeHtml(emailHref)}"><i class="bi bi-envelope-plus ui-icon" aria-hidden="true"></i><span>Generate Email</span></a>
+      <a
+        class="panel-action-link"
+        href="${escapeHtml(emailHref)}"
+        data-jd-generate-email
+        data-jd-id="${jd.id}"
+        ${jd.blurbHtml == null && jd.centreKey != null ? `data-blurb-generate-url="/api/jd/${jd.id}/blurb/generate"` : ""}
+        data-approval-to="${escapeHtml(contact?.email ?? "")}"
+        data-approval-subject="${escapeHtml(JD_APPROVAL_EMAIL_SUBJECT)}"
+        data-approval-body="${escapeHtml(buildJdApprovalEmailText(contact?.headTeacher ?? "", contact?.keySeniorTeacher ?? "", jd.blurbHtml ?? ""))}"
+      ><i class="bi bi-envelope-plus ui-icon" aria-hidden="true"></i><span>Generate Email</span></a>
+      <button type="button" class="panel-action-button" data-jd-action="pdf" data-jd-id="${jd.id}"><i class="bi bi-file-earmark-pdf ui-icon" aria-hidden="true"></i><span>Download PDF</span></button>
+      <button type="submit" class="panel-action-button" form="jd-edit-${jd.id}"><i class="bi bi-save ui-icon" aria-hidden="true"></i><span>Save</span></button>
     `;
   }
 
@@ -183,7 +205,7 @@ function renderJdScript(): string {
           var picker = combo ? combo.querySelector("[data-jd-date-picker]") : null;
           var text = combo ? combo.querySelector("[data-jd-date-text]") : null;
           if (!(picker instanceof HTMLInputElement) || !(text instanceof HTMLInputElement)) return;
-          picker.value = text.value;
+          picker.value = picker.hasAttribute("data-jd-keep-time") ? text.value.slice(0, 10) : text.value;
           if (typeof picker.showPicker === "function") {
             picker.showPicker();
           } else {
@@ -195,9 +217,110 @@ function renderJdScript(): string {
           var combo = picker.closest(".jd-editor__date-combo");
           var text = combo ? combo.querySelector("[data-jd-date-text]") : null;
           if (!(text instanceof HTMLInputElement)) return;
-          text.value = picker.value;
-          autosaveJdEdit(text);
+          // A date-only picker closes as soon as a day is clicked (a datetime
+          // picker stays open for the time), so keep the existing time - the
+          // 4pm closing default - and swap in just the date.
+          if (picker.hasAttribute("data-jd-keep-time")) {
+            var time = /T(\\d{2}:\\d{2})$/.exec(text.value);
+            text.value = picker.value ? picker.value + "T" + (time ? time[1] : "16:00") : "";
+          } else {
+            text.value = picker.value;
+          }
+          // The create form has nothing to autosave; it submits as a whole.
+          if (text.closest("[data-jd-edit]")) autosaveJdEdit(text);
         }
+
+        // "Wednesday 21 October", one week from now in NZ time.
+        function approvalDeadline() {
+          var parts = {};
+          new Intl.DateTimeFormat("en-NZ", { timeZone: "Pacific/Auckland", weekday: "long", day: "numeric", month: "long" })
+            .formatToParts(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000))
+            .forEach(function(part) { parts[part.type] = part.value; });
+          return parts.weekday + " " + parts.day + " " + parts.month;
+        }
+
+        function openEmailChoice(link) {
+          var blocker = document.createElement("div");
+          var dialog = document.createElement("div");
+          var message = document.createElement("p");
+          var actions = document.createElement("div");
+          var approvalButton = document.createElement("button");
+          var officeButton = document.createElement("button");
+
+          blocker.className = "modal-page-blocker";
+          dialog.className = "email-confirm-dialog email-confirm-dialog--choice";
+          dialog.setAttribute("role", "dialog");
+          dialog.setAttribute("aria-modal", "true");
+          dialog.setAttribute("aria-label", "Choose which email to send");
+          message.textContent = "Choose which email to send";
+          actions.className = "email-confirm-dialog__actions email-confirm-dialog__actions--grid";
+          approvalButton.type = "button";
+          approvalButton.textContent = "For Approval";
+          officeButton.type = "button";
+          officeButton.textContent = "To Office Admin";
+          actions.append(approvalButton, officeButton);
+          dialog.append(message, actions);
+          blocker.append(dialog);
+          document.body.append(blocker);
+
+          function close() { blocker.remove(); }
+          function send(href) { close(); window.location.href = href; }
+
+          approvalButton.addEventListener("click", function() {
+            var body = (link.getAttribute("data-approval-body") || "").replace("${JD_APPROVAL_DEADLINE_TOKEN}", approvalDeadline());
+            send("mailto:" + (link.getAttribute("data-approval-to") || "")
+              + "?subject=" + encodeURIComponent(link.getAttribute("data-approval-subject") || "")
+              + "&body=" + encodeURIComponent(body));
+          });
+          officeButton.addEventListener("click", function() { send(link.href); });
+          blocker.addEventListener("click", function(event) { if (event.target === blocker) close(); });
+          dialog.addEventListener("keydown", function(event) { if (event.key === "Escape") close(); });
+          approvalButton.focus();
+        }
+
+        // No blurb yet: generate one first, then reload so the approval email
+        // carries it, and reopen the choice modal on the fresh page.
+        function generateBlurbThenEmail(link) {
+          if (link.getAttribute("aria-busy") === "true") return;
+          var icon = link.querySelector("i");
+          var label = link.querySelector("span");
+          var originalLabel = label ? label.textContent : "";
+          link.setAttribute("aria-busy", "true");
+          link.classList.add("panel-action-button--disabled");
+          if (icon) icon.className = "bi bi-arrow-repeat ui-icon panel-action-button__spinner";
+          if (label) label.textContent = "Generating blurb…";
+
+          fetch(link.getAttribute("data-blurb-generate-url"), { method: "POST", headers: { "content-type": "application/json" }, body: "{}" })
+            .then(function(response) {
+              if (!response.ok) throw new Error("Blurb generation failed");
+              window.location.href = "/jd?panel=jd-editor&jd=" + link.getAttribute("data-jd-id") + "&email=choose";
+            })
+            .catch(function() {
+              link.removeAttribute("aria-busy");
+              link.classList.remove("panel-action-button--disabled");
+              if (icon) icon.className = "bi bi-envelope-plus ui-icon";
+              if (label) label.textContent = originalLabel;
+              window.alert("The website blurb couldn't be generated. Please try again.");
+            });
+        }
+
+        document.addEventListener("click", function(event) {
+          var emailLink = event.target instanceof Element ? event.target.closest("[data-jd-generate-email]") : null;
+          if (emailLink) {
+            event.preventDefault();
+            if (emailLink.hasAttribute("data-blurb-generate-url")) generateBlurbThenEmail(emailLink);
+            else openEmailChoice(emailLink);
+          }
+        });
+
+        (function() {
+          var params = new URLSearchParams(window.location.search);
+          if (params.get("email") !== "choose") return;
+          params.delete("email");
+          window.history.replaceState(null, "", window.location.pathname + "?" + params.toString());
+          var emailLink = document.querySelector("[data-jd-generate-email]");
+          if (emailLink) openEmailChoice(emailLink);
+        })();
 
         document.addEventListener("click", function(event) {
           var el = event.target instanceof Element
@@ -226,7 +349,8 @@ function renderJdScript(): string {
           }
           if (action === "pdf") {
             event.preventDefault();
-            var editForm = el.closest("[data-jd-edit]");
+            // The top-bar copy sits outside the form, so fall back to looking it up.
+            var editForm = el.closest("[data-jd-edit]") || document.getElementById("jd-edit-" + jdId);
             if (editForm) {
               postSilent("/api/jd/" + jdId, formData(editForm, true)).then(function (result) {
                 if (result !== null) window.location.href = "/api/jd/" + jdId + "/pdf";
@@ -370,7 +494,7 @@ function renderJdScript(): string {
 
         document.addEventListener("change", function(event) {
           var field = event.target instanceof Element
-            ? event.target.closest("[data-jd-edit] select, [data-jd-edit] [data-jd-date-picker]")
+            ? event.target.closest("[data-jd-edit] select, [data-jd-edit] [data-jd-date-picker], [data-jd-create] [data-jd-date-picker]")
             : null;
           if (!field) return;
           if (field instanceof HTMLInputElement && field.hasAttribute("data-jd-date-picker")) {

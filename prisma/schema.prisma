@@ -829,6 +829,7 @@ model JdCentreProfile {
   introParagraph       String          @default("")
   seniorTeacherName    String          @default("")
   seniorTeacherAcronym String          @default("")
+  seniorTeacherEmail   String          @default("") // CC'd on the JD "For Approval" email.
   isEnviroschool       Boolean         @default(false) // Only true for centres factually registered as Enviroschools — drives the AI blurb prompt so it never invents this claim.
   createdAt            DateTime        @default(now())
   updatedAt            DateTime        @updatedAt
@@ -938,6 +939,35 @@ model WikiCategory {
   name        String   @unique
   sortOrder   Int      @default(0)
   isProtected Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([sortOrder, name])
+}
+
+// A reusable code snippet (tracking tags, embed codes, email HTML) kept on the
+// Code Snippets page so it can be copied to the clipboard in one click.
+model CodeSnippet {
+  id          Int      @id @default(autoincrement())
+  title       String
+  category    String   @default("General") // user-chosen; the list groups by it
+  language    String   @default("") // free-text label, e.g. HTML, CSS, JS
+  description String   @default("")
+  code        String   @default("")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([category, title])
+}
+
+// Code snippet categories, managed from the Categories modal on the snippets
+// page the same way WikiCategory is. Snippets store the name, not an id, so a
+// rename re-files them in the same transaction.
+model CodeSnippetCategory {
+  id          Int      @id @default(autoincrement())
+  name        String   @unique
+  sortOrder   Int      @default(0)
+  isProtected Boolean  @default(false) // the General fallback cannot be deleted
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 

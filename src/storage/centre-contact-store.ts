@@ -6,6 +6,8 @@ export type CentreContact = {
   kindergarten: string;
   headTeacher: string;
   administrator: string;
+  // First name only in the sheet ("Marion"); optional column.
+  keySeniorTeacher: string;
   email: string;
 };
 
@@ -197,6 +199,7 @@ export async function readCentreContactListStats(filePath = join(process.cwd(), 
     const headers = rows[0] ?? [];
     const kindergartenIndex = headers.indexOf("Kindergarten");
     const headTeacherIndex = headers.indexOf("Head Teacher");
+    const keySeniorTeacherIndex = headers.indexOf("Key Senior Teacher");
     const administratorIndex = headers.indexOf("Administrator");
     const emailIndex = headers.indexOf("Email");
 
@@ -210,6 +213,7 @@ export async function readCentreContactListStats(filePath = join(process.cwd(), 
         kindergarten: (row[kindergartenIndex] ?? "").trim(),
         headTeacher: (row[headTeacherIndex] ?? "").trim(),
         administrator: (row[administratorIndex] ?? "").trim(),
+        keySeniorTeacher: keySeniorTeacherIndex < 0 ? "" : (row[keySeniorTeacherIndex] ?? "").trim(),
         email: (row[emailIndex] ?? "").trim(),
       }))
       .filter((contact) => contact.kindergarten && contact.email);

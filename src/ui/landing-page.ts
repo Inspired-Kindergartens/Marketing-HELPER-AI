@@ -271,6 +271,7 @@ export function renderLandingPage(options: LandingPageOptions = {}) {
     { label: "Open Upscalar", href: "upscalar://open", external: false },
     { label: "SharePoint", href: "https://ikindergartens.sharepoint.com/", external: true },
     { label: "Website", href: "https://inspiredkindergartens.nz/admin/", external: true },
+    { label: "Code Snippets", href: "/snippets", external: false },
   ];
 
   const placeholderTiles: string[] = [];

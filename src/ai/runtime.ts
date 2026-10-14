@@ -13,6 +13,11 @@ const READY_PROBE_TIMEOUT_MS = 2000;
 const START_WAIT_TIMEOUT_MS = 30000;
 const START_POLL_INTERVAL_MS = 1000;
 
+// How long Ollama keeps a model in memory after its last request. The default
+// (5 minutes) meant most visits paid a cold load first, which on this machine
+// can take over a minute and pushed requests past their timeout.
+export const AI_KEEP_ALIVE = "30m";
+
 export async function isAiReady(config: AiConfig): Promise<boolean> {
   // The built-in provider needs no external runtime, so it is always ready.
   if (config.AI_PROVIDER !== "ollama") return true;
@@ -97,23 +102,85 @@ async function startOllama(config: AiConfig, log?: Logger): Promise<boolean> {
   return false;
 }
 
+function aiUrl(config: AiConfig, path: string) {
+  return `${config.AI_BASE_URL.replace(/\/$/, "")}${path}`;
+}
+
+async function isModelLoaded(config: AiConfig): Promise<boolean> {
+  try {
+    const response = await fetch(aiUrl(config, "/api/ps"), {
+      signal: AbortSignal.timeout(READY_PROBE_TIMEOUT_MS),
+    });
+    const payload = (await response.json()) as { models?: { name?: string; model?: string }[] };
+    return (payload.models ?? []).some(
+      (m) => m.name === config.AI_CHAT_MODEL || m.model === config.AI_CHAT_MODEL,
+    );
+  } catch {
+    return false;
+  }
+}
+
+// One in-flight load per model, so concurrent page loads don't stack requests.
+const warmPromises = new Map<string, Promise<void>>();
+
+// Loads the configured model into memory ahead of the first real request. An
+// empty /api/generate call does exactly that and returns once it is resident.
+function warmModel(config: AiConfig, log?: Logger): Promise<void> {
+  const model = config.AI_CHAT_MODEL;
+  const existing = warmPromises.get(model);
+  if (existing) return existing;
+
+  const promise = (async () => {
+    if (await isModelLoaded(config)) return;
+
+    log?.info(`Loading local AI model ${model}.`);
+    try {
+      const response = await fetch(aiUrl(config, "/api/generate"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model, keep_alive: AI_KEEP_ALIVE }),
+        signal: AbortSignal.timeout(Math.max(config.AI_TIMEOUT_MS, 120000)),
+      });
+      if (response.ok) {
+        log?.info(`Local AI model ${model} is loaded.`);
+      } else {
+        log?.warn(`Local AI model ${model} failed to load (HTTP ${response.status}).`);
+      }
+    } catch {
+      log?.warn(`Local AI model ${model} did not load in time; it will load on first use.`);
+    }
+  })().finally(() => {
+    warmPromises.delete(model);
+  });
+
+  warmPromises.set(model, promise);
+  return promise;
+}
+
 /**
  * Ensures the local AI runtime is up, starting it if it is not. Safe to call
  * unawaited from a page route: it never throws, and concurrent callers share a
- * single start attempt.
+ * single start attempt. Once the runtime answers, it also loads
+ * `config.AI_CHAT_MODEL` in the background so the first request is not a cold
+ * start - pass a config with a different model to warm that one instead.
  */
 export async function ensureAiRunning(config: AiConfig, log?: Logger): Promise<boolean> {
   if (config.AI_PROVIDER !== "ollama") return true;
-  if (await isAiReady(config)) return true;
 
-  if (!startPromise) {
-    log?.info("Local AI runtime is not responding; starting Ollama.");
-    startPromise = startOllama(config, log).finally(() => {
-      startPromise = null;
-    });
+  let ready = await isAiReady(config);
+
+  if (!ready) {
+    if (!startPromise) {
+      log?.info("Local AI runtime is not responding; starting Ollama.");
+      startPromise = startOllama(config, log).finally(() => {
+        startPromise = null;
+      });
+    }
+    ready = await startPromise;
   }
 
-  return startPromise;
+  if (ready) void warmModel(config, log);
+  return ready;
 }
 
 export const __testing = { findOllamaExecutable };

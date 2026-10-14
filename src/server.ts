@@ -28,7 +28,7 @@ import {
   planLiveInfocareRequest,
   runLiveInfocareRequest,
 } from "./ai/infocare-live.js";
-import { readAiConfig } from "./ai/config.js";
+import { readAiConfig, type AiConfig } from "./ai/config.js";
 import { buildChatDocumentPrompt, extractChatDocument } from "./ai/document-reader.js";
 import {
   clearSnapshotRefreshOutcome,
@@ -61,7 +61,7 @@ import {
   readCentreSnapshotHistory,
   readLatestAnalyticsSnapshotSet,
 } from "./storage/analytics-store.js";
-import { readCentreContactList, readCentreContactListStats } from "./storage/centre-contact-store.js";
+import { matchCentreContact, readCentreContactList, readCentreContactListStats } from "./storage/centre-contact-store.js";
 import {
   addGeneralChatMessage,
   buildGeneralChatMemory,
@@ -230,6 +230,21 @@ import {
 import { buildWikiTaggingChatMessages, parseWikiTaggingResponse } from "./ai/wiki-context.js";
 import { ensureAiRunning, isAiReady } from "./ai/runtime.js";
 import { renderWikiAppShell, resolveWikiFocusPanelId } from "./ui/wiki-app-shell.js";
+import { renderSnippetsAppShell } from "./ui/snippets-app-shell.js";
+import {
+  createCodeSnippet,
+  deleteCodeSnippet,
+  duplicateCodeSnippet,
+  getCodeSnippet,
+  listCodeSnippetCategories,
+  listCodeSnippetCategoriesWithCounts,
+  createCodeSnippetCategory,
+  renameCodeSnippetCategory,
+  deleteCodeSnippetCategory,
+  listCodeSnippets,
+  updateCodeSnippet,
+} from "./storage/code-snippet-store.js";
+import { buildSnippetsAiChatMessages, buildSnippetsAiContext } from "./ai/snippets-context.js";
 
 loadDotenv({ override: true });
 
@@ -1867,7 +1882,23 @@ function parseExtrasFromForm(body: Record<string, unknown>): Record<string, stri
   return found ? extras : undefined;
 }
 
+// JD blurb generation deliberately uses llama3.1:8b instead of whatever
+// model the dashboard chat is configured for: it's not a "thinking" model,
+// so it skips the multi-minute hidden <think> reasoning that made qwen3
+// time out on this hardware for a multi-paragraph draft (measured ~13
+// tokens/sec, 39s+ for even a one-sentence reply). The timeout is generous
+// because a cold load plus generation measured ~80s CPU-only, and much more
+// when something else (e.g. a game) holds the GPU.
+const jdBlurbAiConfig: AiConfig = {
+  ...aiConfig,
+  AI_CHAT_MODEL: "llama3.1:8b",
+  AI_TIMEOUT_MS: 240000,
+};
+
 app.get<{ Querystring: { panel?: string; jd?: string } }>("/jd", async (request, reply) => {
+  // Load the blurb model while the user is still reading the page.
+  void ensureAiRunning(jdBlurbAiConfig, app.log);
+
   const selectedJdId = parsePositiveInt(request.query?.jd);
   const focusPanelId =
     resolveJdFocusPanelId(request.query?.panel) ?? (selectedJdId != null ? "jd-editor" : null);
@@ -1887,6 +1918,7 @@ app.get<{ Querystring: { panel?: string; jd?: string } }>("/jd", async (request,
   const boilerplateHtml = selectedJd
     ? buildImmovableBoilerplateHtml(selectedJd, jdPdfAssetUrl(selectedJd))
     : "";
+  const centreContact = selectedJd ? matchCentreContact(selectedJd.locationDisplay, await readCentreContactList()) : null;
 
   return reply.type("text/html; charset=utf-8").send(
     renderJdAppShell({
@@ -1895,11 +1927,21 @@ app.get<{ Querystring: { panel?: string; jd?: string } }>("/jd", async (request,
       editor: { jobDescription: selectedJd, titleProfiles, centreProfiles },
       blurb: { jobDescription: selectedJd, boilerplateHtml, versions: blurbVersions },
       settings: { centreProfiles, titleProfiles, knowledgeDocs: genericDoc ? [genericDoc, ...knowledgeDocs] : knowledgeDocs, agreementStatus, globalSettings },
+      centreContact,
     }),
   );
 });
 
-app.post<{ Body: { jobTitleProfileId?: string; centreKey?: string; locationDisplay?: string; jobTitleOverride?: string } }>("/api/jd", async (request, reply) => {
+app.post<{
+  Body: {
+    jobTitleProfileId?: string;
+    centreKey?: string;
+    locationDisplay?: string;
+    jobTitleOverride?: string;
+    closingAt?: string;
+    startDateText?: string;
+  };
+}>("/api/jd", async (request, reply) => {
   const jobTitleProfileId = parsePositiveInt(request.body?.jobTitleProfileId);
   const rawCentreKey = request.body?.centreKey;
   // "other" = an org-wide role with no kindergarten (see JD_OTHER_LOCATION_KEY).
@@ -1917,6 +1959,8 @@ app.post<{ Body: { jobTitleProfileId?: string; centreKey?: string; locationDispl
     const id = await createJobDescription({
       jobTitleProfileId,
       centreKey,
+      closingAt: request.body?.closingAt ?? null,
+      startDateText: request.body?.startDateText ?? null,
       ...(isOtherLocation
         ? {
             locationDisplay: request.body?.locationDisplay ?? null,
@@ -2083,6 +2127,10 @@ async function generateJdIntroParagraphIfEmpty(id: number): Promise<string | nul
     return jd.introParagraph;
   }
 
+  if (!(await ensureAiRunning(aiConfig, app.log))) {
+    throw new AiClientError("The local AI server isn't running and couldn't be started.", 503);
+  }
+
   const [centreProfiles, knowledgeDocs, latestSnapshotSet, centreExamples, fallbackExamples] = await Promise.all([
     listCentreProfiles(),
     listKnowledgeDocsForCentre(jd.centreKey),
@@ -2130,9 +2178,27 @@ async function generateJdIntroParagraphIfEmpty(id: number): Promise<string | nul
   return introParagraph;
 }
 
-// Shared by the explicit "Generate with AI" button and the fire-and-forget
-// auto-generation kicked off when a JD is first created.
-async function generateJdBlurb(id: number): Promise<string> {
+// Shared by the explicit "Generate with AI" button, the fire-and-forget
+// auto-generation kicked off when a JD is first created, and the Generate
+// Email pre-check. A request for a JD whose blurb is already being generated
+// joins that run instead of starting a second one.
+const jdBlurbGenerations = new Map<number, Promise<string>>();
+
+function generateJdBlurb(id: number): Promise<string> {
+  const inFlight = jdBlurbGenerations.get(id);
+  if (inFlight) return inFlight;
+  const run = runJdBlurbGeneration(id).finally(() => jdBlurbGenerations.delete(id));
+  jdBlurbGenerations.set(id, run);
+  return run;
+}
+
+async function runJdBlurbGeneration(id: number): Promise<string> {
+  // Make sure the local AI server is up (starting it if needed) before
+  // asking it for anything; otherwise the request just fails.
+  if (!(await ensureAiRunning(jdBlurbAiConfig, app.log))) {
+    throw new AiClientError("The local AI server isn't running and couldn't be started.", 503);
+  }
+
   const jd = await getJobDescription(id);
   if (!jd || jd.centreKey == null) {
     throw new Error("Job description not found.");
@@ -2161,18 +2227,7 @@ async function generateJdBlurb(id: number): Promise<string> {
     fallbackBlurbs,
     isEnviroschool: centreProfile?.isEnviroschool ?? false,
   });
-  // JD blurb generation deliberately uses llama3.1:8b instead of whatever
-  // model the dashboard chat is configured for: it's not a "thinking" model,
-  // so it skips the multi-minute hidden <think> reasoning that made qwen3
-  // time out on this hardware for a multi-paragraph draft (measured ~13
-  // tokens/sec, 39s+ for even a one-sentence reply). Still generous on
-  // timeout since it's a background/explicit action, not interactive chat.
-  const JD_BLURB_AI_MODEL = "llama3.1:8b";
-  const JD_BLURB_AI_TIMEOUT_MS = 120000;
-  const html = await runLocalChat(
-    { ...aiConfig, AI_CHAT_MODEL: JD_BLURB_AI_MODEL, AI_TIMEOUT_MS: JD_BLURB_AI_TIMEOUT_MS },
-    messages,
-  );
+  const html = await runLocalChat(jdBlurbAiConfig, messages);
   await saveBlurb(id, html);
   return html;
 }
@@ -2222,6 +2277,7 @@ app.post<{ Params: { centreKey: string }; Body: Record<string, unknown> }>(
       introParagraph: typeof body.introParagraph === "string" ? body.introParagraph : "",
       seniorTeacherName: typeof body.seniorTeacherName === "string" ? body.seniorTeacherName : "",
       seniorTeacherAcronym: typeof body.seniorTeacherAcronym === "string" ? body.seniorTeacherAcronym : "",
+      seniorTeacherEmail: typeof body.seniorTeacherEmail === "string" ? body.seniorTeacherEmail : "",
       isEnviroschool: body.isEnviroschool === "on" || body.isEnviroschool === true,
     });
     return { ok: true };
@@ -2339,6 +2395,174 @@ async function withWikiGrounding(prompt: string, existingGrounding: string | nul
     return existingGrounding;
   }
 }
+
+// --- Code Snippets -------------------------------------------------------------
+// Same shape as the wiki: one page route that renders the shell, plus JSON POST
+// mutations the delegated client script reloads on.
+
+app.get<{ Querystring: { snippet?: string } }>("/snippets", async (request, reply) => {
+  // Warm the local AI for the snippets chat. Unawaited: never blocks the page.
+  void ensureAiRunning(aiConfig, app.log);
+
+  const selectedId = parsePositiveInt(request.query?.snippet);
+  const [snippets, categories, selected] = await Promise.all([
+    listCodeSnippets(),
+    listCodeSnippetCategoriesWithCounts(),
+    selectedId != null ? getCodeSnippet(selectedId) : Promise.resolve(null),
+  ]);
+  return reply.type("text/html; charset=utf-8").send(
+    renderSnippetsAppShell({
+      list: { snippets, categories },
+      editor: { snippet: selected, categories: categories.map((category) => category.name) },
+    }),
+  );
+});
+
+// Categories mirror the wiki's: renaming re-files every snippet under the old
+// name, and deleting moves them to General rather than destroying them.
+// Registered before /api/snippets/:id so "categories" is never taken as an id.
+app.post<{ Body: { name?: string } }>("/api/snippets/categories", async (request, reply) => {
+  const result = await createCodeSnippetCategory(request.body?.name);
+  if ("error" in result) {
+    reply.code(400);
+    return result;
+  }
+  return { ok: true, id: result.id };
+});
+
+app.post<{ Params: { id: string }; Body: { name?: string } }>(
+  "/api/snippets/categories/:id",
+  async (request, reply) => {
+    const id = parsePositiveInt(request.params.id);
+    if (id == null) {
+      reply.code(400);
+      return { error: "Valid category id is required." };
+    }
+    const result = await renameCodeSnippetCategory(id, request.body?.name);
+    if ("error" in result) {
+      reply.code(400);
+      return result;
+    }
+    return { ok: true };
+  },
+);
+
+app.post<{ Params: { id: string } }>("/api/snippets/categories/:id/delete", async (request, reply) => {
+  const id = parsePositiveInt(request.params.id);
+  if (id == null) {
+    reply.code(400);
+    return { error: "Valid category id is required." };
+  }
+  const result = await deleteCodeSnippetCategory(id);
+  if ("error" in result) {
+    reply.code(400);
+    return result;
+  }
+  return { ok: true, moved: result.moved };
+});
+
+app.post<{ Body: Record<string, unknown> }>("/api/snippets", async (request, reply) => {
+  const title = String(request.body?.title ?? "").trim();
+  if (!title) {
+    reply.code(400);
+    return { error: "A snippet title is required." };
+  }
+  const id = await createCodeSnippet({ ...request.body, title });
+  return reply.code(201).send({ ok: true, id });
+});
+
+app.post<{ Params: { id: string }; Body: Record<string, unknown> }>("/api/snippets/:id", async (request, reply) => {
+  const id = parsePositiveInt(request.params.id);
+  if (id == null) {
+    reply.code(400);
+    return { error: "Valid snippet id is required." };
+  }
+  if (!(await updateCodeSnippet(id, request.body ?? {}))) {
+    reply.code(404);
+    return { error: "That snippet no longer exists." };
+  }
+  return { ok: true };
+});
+
+app.post<{ Params: { id: string } }>("/api/snippets/:id/duplicate", async (request, reply) => {
+  const id = parsePositiveInt(request.params.id);
+  if (id == null) {
+    reply.code(400);
+    return { error: "Valid snippet id is required." };
+  }
+  const newId = await duplicateCodeSnippet(id);
+  if (newId == null) {
+    reply.code(404);
+    return { error: "That snippet no longer exists." };
+  }
+  return { ok: true, id: newId };
+});
+
+// The snippets chat: same SSE shape as the Tasks chat, grounded on the saved
+// snippet titles/categories and the snippet open in the editor, if any.
+app.post<{
+  Body: {
+    prompt?: string;
+    snippetId?: number | string | null;
+    messages?: AiChatHistoryMessageInput[];
+  };
+}>("/api/snippets/ai/chat/stream", async (request, reply) => {
+  const prompt = String(request.body?.prompt ?? "").trim();
+
+  if (!prompt || prompt.length > 2000) {
+    reply.code(400);
+    return { error: !prompt ? "Prompt is required." : "Prompt is too long. Keep it under 2,000 characters." };
+  }
+
+  const openSnippetId = parsePositiveInt(request.body?.snippetId);
+  const [snippets, openSnippet] = await Promise.all([
+    listCodeSnippets(),
+    openSnippetId != null ? getCodeSnippet(openSnippetId) : Promise.resolve(null),
+  ]);
+  const context = buildSnippetsAiContext({ snippets, openSnippet });
+
+  reply.raw.writeHead(200, {
+    "Content-Type": "text/event-stream; charset=utf-8",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+  });
+
+  const writeEvent = (event: string, data: unknown) => {
+    reply.raw.write(`event: ${event}\n`);
+    reply.raw.write(`data: ${JSON.stringify(data)}\n\n`);
+  };
+
+  // There is no useful canned answer for writing code, so without the local
+  // model the chat says so plainly rather than guessing.
+  const unavailable = "The local AI isn't available right now, so I can't write snippets. Try again in a minute.";
+
+  try {
+    if (aiConfig.AI_PROVIDER === "builtin") {
+      writeEvent("chunk", { chunk: unavailable });
+    } else {
+      for await (const chunk of streamLocalChat(aiConfig, buildSnippetsAiChatMessages(context, prompt, request.body?.messages))) {
+        writeEvent("chunk", { chunk });
+      }
+    }
+    writeEvent("done", {});
+  } catch (error) {
+    app.log.warn({ error }, "Snippets AI stream unavailable");
+    writeEvent("error", { error: unavailable });
+    writeEvent("done", {});
+  } finally {
+    reply.raw.end();
+  }
+});
+
+app.post<{ Params: { id: string } }>("/api/snippets/:id/delete", async (request, reply) => {
+  const id = parsePositiveInt(request.params.id);
+  if (id == null) {
+    reply.code(400);
+    return { error: "Valid snippet id is required." };
+  }
+  await deleteCodeSnippet(id);
+  return { ok: true };
+});
 
 // --- Things To Know (marketing wiki) -----------------------------------------
 // Same shape as the JD section: one page route that renders the shell, plus
@@ -4555,6 +4779,9 @@ async function start() {
   logIntegrationConfigWarnings();
   void checkPostmarkWebhookOnStartup();
   startCloudflarePostmarkSyncLoop();
+  // Start Ollama and load the chat model as soon as the app opens, so the
+  // first AI request isn't stuck behind a cold model load.
+  void ensureAiRunning(aiConfig, app.log);
   void startLandingIntelligenceFeedLoop(aiConfig, app.log);
   void logJdAgreementStatusOnStartup();
 

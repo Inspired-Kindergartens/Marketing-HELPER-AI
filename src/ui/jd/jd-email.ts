@@ -185,3 +185,45 @@ export function buildJdEmailText(jd: Pick<JobDescriptionView, "jobTitle" | "loca
 export function buildJdGenerateEmailHref(jd: Pick<JobDescriptionView, "jobTitle" | "locationDisplay" | "positionType" | "dateAdvertised">) {
   return `mailto:${JD_EMAIL_RECIPIENT}?subject=${encodeURIComponent(buildJdEmailSubject(jd))}&body=${encodeURIComponent(buildJdEmailText(jd))}`;
 }
+
+export const JD_APPROVAL_EMAIL_SUBJECT = "Please review the Job Position";
+// Replaced client-side when the email is generated, so the deadline is a week
+// from the click rather than from when the page was rendered.
+export const JD_APPROVAL_DEADLINE_TOKEN = "{{deadline}}";
+
+// mailto: bodies are plain text, so flatten the blurb HTML: one blank line
+// between blocks, "- " for list items, tags dropped.
+function blurbHtmlToText(html: string) {
+  return html
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<li\b[^>]*>/gi, "\n- ")
+    .replace(/<\/(p|div|h[1-6]|ul|ol)>/gi, "\n\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&ndash;/g, "–")
+    .replace(/&mdash;/g, "—")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, "&")
+    .replace(/[ \t]+/g, " ")
+    .replace(/ *\n */g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+export function buildJdApprovalEmailText(headTeacherName: string, seniorTeacherName: string, blurbHtml: string) {
+  const firstName = headTeacherName.trim().split(/\s+/)[0] ?? "";
+  const greeting = firstName ? `Kia ora ${firstName},` : "Kia ora,";
+  const seniorTeacher = seniorTeacherName.trim().split(/\s+/)[0] ?? "";
+  const askedBy = seniorTeacher ? `${seniorTeacher} has asked I submit` : "I have been asked to submit";
+
+  return [
+    greeting,
+    "",
+    `${askedBy} this to you to review the website blurb and attached PD before we go live with advertising this position. If you could please respond by ${JD_APPROVAL_DEADLINE_TOKEN} will be appreciated.`,
+    "",
+    blurbHtmlToText(blurbHtml),
+  ].join("\n");
+}

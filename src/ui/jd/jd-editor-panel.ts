@@ -83,7 +83,7 @@ export function renderJdEditorPanel(options: JdEditorPanelOptions): string {
   const isPartTime = jd.positionType === "Part-time";
 
   return `
-    <form class="jd-editor" data-jd-edit data-jd-id="${jd.id}">
+    <form class="jd-editor" id="jd-edit-${jd.id}" data-jd-edit data-jd-id="${jd.id}">
       <div class="jd-editor__field-grid">
         <label>
           <span>Job Title</span>
@@ -125,7 +125,7 @@ export function renderJdEditorPanel(options: JdEditorPanelOptions): string {
           <span class="jd-editor__date-combo">
             <input type="text" name="closingAt" value="${formatNzDateTimeInput(jd.closingAt)}" placeholder="YYYY-MM-DDTHH:mm" inputmode="numeric" data-jd-date-text />
             <button type="button" class="jd-editor__date-button" data-jd-open-date-picker title="Choose closing date and time" aria-label="Choose closing date and time"><i class="bi bi-calendar3 ui-icon" aria-hidden="true"></i></button>
-            <input type="datetime-local" class="jd-editor__date-picker" value="${formatNzDateTimeInput(jd.closingAt)}" data-jd-date-picker tabindex="-1" aria-hidden="true" />
+            <input type="date" class="jd-editor__date-picker" value="${formatNzDateTimeInput(jd.closingAt).slice(0, 10)}" data-jd-date-picker data-jd-keep-time tabindex="-1" aria-hidden="true" />
           </span>
         </label>
         <label>
@@ -170,8 +170,8 @@ export function renderJdEditorPanel(options: JdEditorPanelOptions): string {
       </div>
 
       <div class="jd-editor__actions">
-        <button type="button" class="jd-editor__pdf" data-jd-action="pdf" data-jd-id="${jd.id}"><i class="bi bi-file-earmark-pdf ui-icon" aria-hidden="true"></i><span>Download PDF</span></button>
-        <button type="submit" class="jd-editor__save"><i class="bi bi-save ui-icon" aria-hidden="true"></i><span>Save</span></button>
+        <button type="button" class="panel-action-button" data-jd-action="pdf" data-jd-id="${jd.id}"><i class="bi bi-file-earmark-pdf ui-icon" aria-hidden="true"></i><span>Download PDF</span></button>
+        <button type="submit" class="panel-action-button"><i class="bi bi-save ui-icon" aria-hidden="true"></i><span>Save</span></button>
       </div>
     </form>
   `;

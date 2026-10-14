@@ -48,6 +48,10 @@ function renderCentreProfileRow(centre: JdCentreProfileView): string {
           <span>Senior Teacher acronym</span>
           <input type="text" name="seniorTeacherAcronym" value="${escapeHtml(centre.seniorTeacherAcronym)}" />
         </label>
+        <label>
+          <span>Senior Teacher email</span>
+          <input type="email" name="seniorTeacherEmail" value="${escapeHtml(centre.seniorTeacherEmail)}" />
+        </label>
         <label class="jd-settings__checkbox-label">
           <input type="checkbox" name="isEnviroschool" ${centre.isEnviroschool ? "checked" : ""} />
           <span>Registered Enviroschool</span>

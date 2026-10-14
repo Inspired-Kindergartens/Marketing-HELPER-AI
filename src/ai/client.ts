@@ -1,5 +1,6 @@
 import type { AiConfig } from "./config.js";
 import { runBuiltinChat } from "./builtin.js";
+import { AI_KEEP_ALIVE } from "./runtime.js";
 
 export type AiChatMessage = {
   role: "system" | "user" | "assistant";
@@ -110,6 +111,7 @@ export async function runLocalChat(config: AiConfig, messages: AiChatMessage[]) 
         model: config.AI_CHAT_MODEL,
         stream: false,
         messages,
+        keep_alive: AI_KEEP_ALIVE,
         options: {
           temperature: 0.2,
         },
@@ -175,6 +177,7 @@ export async function* streamLocalChat(config: AiConfig, messages: AiChatMessage
         model: config.AI_CHAT_MODEL,
         stream: true,
         messages,
+        keep_alive: AI_KEEP_ALIVE,
         options: {
           temperature: 0.2,
         },

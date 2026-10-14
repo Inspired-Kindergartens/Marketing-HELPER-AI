@@ -2,6 +2,7 @@ import { Prisma } from "../../generated/prisma/client.js";
 import { prisma } from "../db.js";
 import { formatSalaryRange as formatSalaryRangePure, type PayScaleRow } from "./jd-pay-scale.js";
 import { sanitizeJdBlurbHtml } from "./jd-sanitize-html.js";
+import { matchCentreContact, readCentreContactList } from "./centre-contact-store.js";
 
 // Prisma's nullable Json columns need the JsonNull sentinel instead of a bare
 // `null` (a bare null would mean "don't change this field" on update).
@@ -67,6 +68,7 @@ export type JdCentreProfileView = {
   introParagraph: string;
   seniorTeacherName: string;
   seniorTeacherAcronym: string;
+  seniorTeacherEmail: string;
   isEnviroschool: boolean;
 };
 
@@ -381,6 +383,7 @@ export async function listCentreProfiles(): Promise<JdCentreProfileView[]> {
       introParagraph: row.jdCentreProfile?.introParagraph || fallback?.introParagraph || "",
       seniorTeacherName: row.jdCentreProfile?.seniorTeacherName || fallback?.seniorTeacherName || "",
       seniorTeacherAcronym: row.jdCentreProfile?.seniorTeacherAcronym || fallback?.seniorTeacherAcronym || "",
+      seniorTeacherEmail: row.jdCentreProfile?.seniorTeacherEmail ?? "",
       isEnviroschool: row.jdCentreProfile?.isEnviroschool ?? false,
     };
   });
@@ -399,6 +402,7 @@ export async function getCentreProfile(centreKey: number): Promise<JdCentreProfi
     introParagraph: row.jdCentreProfile?.introParagraph ?? "",
     seniorTeacherName: row.jdCentreProfile?.seniorTeacherName ?? "",
     seniorTeacherAcronym: row.jdCentreProfile?.seniorTeacherAcronym ?? "",
+    seniorTeacherEmail: row.jdCentreProfile?.seniorTeacherEmail ?? "",
     isEnviroschool: row.jdCentreProfile?.isEnviroschool ?? false,
   };
 }
@@ -408,6 +412,7 @@ export type JdCentreProfileInput = {
   introParagraph?: string | null;
   seniorTeacherName?: string | null;
   seniorTeacherAcronym?: string | null;
+  seniorTeacherEmail?: string | null;
   isEnviroschool?: boolean;
 };
 
@@ -420,6 +425,7 @@ export async function upsertCentreProfile(
     introParagraph: input.introParagraph?.trim() ?? "",
     seniorTeacherName: input.seniorTeacherName?.trim() ?? "",
     seniorTeacherAcronym: input.seniorTeacherAcronym?.trim() ?? "",
+    seniorTeacherEmail: input.seniorTeacherEmail?.trim() ?? "",
     isEnviroschool: input.isEnviroschool ?? false,
   };
   await prisma.jdCentreProfile.upsert({
@@ -570,7 +576,67 @@ export async function getJobDescription(id: number): Promise<JobDescriptionView 
     where: { id },
     select: JOB_DESCRIPTION_SELECT,
   });
-  return row ? toJobDescriptionView(row as JobDescriptionRow) : null;
+  if (!row) return null;
+  const view = toJobDescriptionView(row as JobDescriptionRow);
+  // Senior Teacher and Reviewed By are never left blank: fall back to the
+  // centre's SLT initials until the user saves their own value.
+  if (!view.seniorTeacherName.trim() || !view.reviewedByAcronym.trim()) {
+    const sltInitials = await resolveSltInitials(view.centreKey, view.locationDisplay);
+    if (!view.seniorTeacherName.trim()) view.seniorTeacherName = sltInitials;
+    if (!view.reviewedByAcronym.trim()) view.reviewedByAcronym = sltInitials;
+  }
+  return view;
+}
+
+function initialsOf(fullName: string): string {
+  return fullName
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase())
+    .join("");
+}
+
+// The centre's SLT (Senior Teacher) names from the contact list's "Key
+// Senior Teacher" column, which is usually a first name only ("Marion", or
+// "Haylee/Vilna" for a shared centre). Each is expanded to a full name from
+// the Members directory or anywhere else one is recorded; unresolved first
+// names are returned as-is.
+async function resolveSltNames(locationDisplay: string, profiles: { seniorTeacherName: string }[]): Promise<string[]> {
+  const [contacts, members] = await Promise.all([
+    readCentreContactList(),
+    prisma.member.findMany({ where: { active: true }, select: { name: true } }),
+  ]);
+  const contact = matchCentreContact(locationDisplay, contacts);
+  if (!contact?.keySeniorTeacher) return [];
+
+  const knownFullNames = [
+    ...members.map((member) => member.name),
+    ...profiles.map((profile) => profile.seniorTeacherName),
+    ...contacts.flatMap((candidate) => candidate.keySeniorTeacher.split("/")),
+  ]
+    .map((name) => name.trim())
+    .filter((name) => /\s/.test(name));
+
+  return contact.keySeniorTeacher
+    .split("/")
+    .map((name) => name.trim())
+    .filter(Boolean)
+    .map((name) =>
+      /\s/.test(name)
+        ? name
+        : knownFullNames.find((candidate) => candidate.split(/\s+/)[0].toLowerCase() === name.toLowerCase()) ?? name,
+    );
+}
+
+// The centre's SLT as initials, e.g. "VVR". The centre profile's acronym wins.
+async function resolveSltInitials(centreKey: number | null, locationDisplay: string): Promise<string> {
+  const profiles = await prisma.jdCentreProfile.findMany({
+    select: { centreKey: true, seniorTeacherName: true, seniorTeacherAcronym: true },
+  });
+  const profileAcronym = profiles.find((profile) => profile.centreKey === centreKey)?.seniorTeacherAcronym.trim();
+  if (profileAcronym) return profileAcronym;
+
+  return (await resolveSltNames(locationDisplay, profiles)).map(initialsOf).join("/");
 }
 
 export type CreateJobDescriptionInput = {
@@ -605,6 +671,10 @@ export async function createJobDescription(input: CreateJobDescriptionInput): Pr
   const fte = positionType === "Part-time" ? (input.fte ?? 1) : null;
   const now = new Date();
   const dateAdvertised = parseDate(input.dateAdvertised) ?? now;
+  const sltInitials = await resolveSltInitials(
+    centreProfile?.centreKey ?? null,
+    centreProfile?.locationDisplay ?? emptyToNull(input.locationDisplay ?? null) ?? JD_OTHER_LOCATION_DISPLAY,
+  );
   const salaryRangeText = titleProfile.payScaleKey
     ? (await formatSalaryRange(titleProfile.payScaleKey, dateAdvertised, fte)) ?? ""
     : "";
@@ -630,13 +700,11 @@ export async function createJobDescription(input: CreateJobDescriptionInput): Pr
       introParagraph: centreProfile?.introParagraph ?? "",
       roleSections: toJsonInput(titleProfile.roleSections as object),
       extras: toJsonInput(titleProfile.extras ?? null),
-      seniorTeacherName: centreProfile?.seniorTeacherName ?? "",
-      reviewedByAcronym: centreProfile?.seniorTeacherAcronym ?? "",
+      seniorTeacherName: sltInitials,
+      reviewedByAcronym: sltInitials,
       approvedByAcronym: "PM",
-      // Falls back to the global "Last Reviewed by" setting so the PDF footer's
-      // Last Updated By row is populated rather than printing blank.
-      lastUpdatedByAcronym:
-        emptyToNull(input.lastUpdatedByAcronym) ?? (await getGlobalSettings()).lastReviewedByAcronym,
+      // Not prefilled: whoever updates the JD enters their own initials.
+      lastUpdatedByAcronym: emptyToNull(input.lastUpdatedByAcronym) ?? "",
     },
     select: { id: true },
   });

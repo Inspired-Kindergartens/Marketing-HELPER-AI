@@ -4,8 +4,9 @@ import {
   type JobDescriptionListItem,
   type JdTitleProfileView,
   type JdCentreProfileView,
+  defaultClosingDate,
 } from "../../storage/jd-store.js";
-import { formatNzDisplayDate } from "./jd-date.js";
+import { formatNzDateTimeInput, formatNzDisplayDate } from "./jd-date.js";
 import { formatJdLocationDisplay } from "./jd-email.js";
 
 function escapeHtml(value: string) {
@@ -45,8 +46,11 @@ function renderJdRow(jd: JobDescriptionListItem): string {
   `;
 }
 
+const JD_LIST_PAGE_SIZE = 10;
+
 export function renderJdListPanel(options: JdListPanelOptions): string {
   const rows = options.jobDescriptions.map(renderJdRow).join("");
+  const pageCount = Math.ceil(options.jobDescriptions.length / JD_LIST_PAGE_SIZE);
   // Both sets are rendered; the client script hides the ones that don't apply to
   // the selected location, so the Job Title list differs for "Other".
   const titleOptions = options.titleProfiles
@@ -66,14 +70,8 @@ export function renderJdListPanel(options: JdListPanelOptions): string {
 
   return `
     <div class="jd-list" data-jd-list>
+      <h3 class="jd-list__heading">New Job Description</h3>
       <form class="jd-list__create" data-jd-create>
-        <label>
-          <span>Job Title</span>
-          <select name="jobTitleProfileId" required>
-            <option value="" disabled selected>Select a job title</option>
-            ${titleOptions}
-          </select>
-        </label>
         <label data-jd-location-field>
           <span>Location</span>
           <select name="centreKey" required>
@@ -89,6 +87,13 @@ export function renderJdListPanel(options: JdListPanelOptions): string {
             placeholder="${escapeHtml(JD_OTHER_LOCATION_DISPLAY)}"
           />
         </label>
+        <label>
+          <span>Job Title</span>
+          <select name="jobTitleProfileId" required>
+            <option value="" disabled selected>Select a job title</option>
+            ${titleOptions}
+          </select>
+        </label>
         <label data-jd-other-title-field hidden>
           <span>Job title (optional override)</span>
           <input
@@ -98,7 +103,19 @@ export function renderJdListPanel(options: JdListPanelOptions): string {
             placeholder="Leave blank to use the selected title"
           />
         </label>
-        <button type="submit" data-jd-create-submit><i class="bi bi-plus-lg ui-icon" aria-hidden="true"></i><span>New Job Description</span></button>
+        <label>
+          <span>Closing Date</span>
+          <span class="jd-editor__date-combo">
+            <input type="text" name="closingAt" value="${formatNzDateTimeInput(defaultClosingDate(new Date()))}" placeholder="YYYY-MM-DDTHH:mm" inputmode="numeric" data-jd-date-text />
+            <button type="button" class="jd-editor__date-button" data-jd-open-date-picker title="Choose closing date and time" aria-label="Choose closing date and time"><i class="bi bi-calendar3 ui-icon" aria-hidden="true"></i></button>
+            <input type="date" class="jd-editor__date-picker" value="${formatNzDateTimeInput(defaultClosingDate(new Date())).slice(0, 10)}" data-jd-date-picker data-jd-keep-time tabindex="-1" aria-hidden="true" />
+          </span>
+        </label>
+        <label>
+          <span>Start Date</span>
+          <input type="text" name="startDateText" value="To be negotiated" />
+        </label>
+        <button type="submit" class="panel-action-button" data-jd-create-submit><i class="bi bi-plus-lg ui-icon" aria-hidden="true"></i><span>New Job Description</span></button>
         <div class="jd-list__create-busy" data-jd-create-busy role="status" aria-live="polite" hidden>
           <span class="jd-list__create-spinner" aria-hidden="true"></span>
           <span>Generating job description intro...</span>
@@ -153,9 +170,44 @@ export function renderJdListPanel(options: JdListPanelOptions): string {
           syncTitlesForLocation();
         })();
       </script>
-      <div class="jd-list__rows">
+      <h3 class="jd-list__heading">Generated Jobs List</h3>
+      <div class="jd-list__rows" data-jd-rows>
         ${rows || `<p class="jd-list__empty">No job descriptions yet. Create one above.</p>`}
       </div>
+      ${
+        pageCount > 1
+          ? `<nav class="comms-pagination" aria-label="Job description pages" data-jd-pagination>
+              <button type="button" data-jd-page="prev" disabled>Previous</button>
+              <span data-jd-page-label>Page 1 of ${pageCount}</span>
+              <button type="button" data-jd-page="next">Next</button>
+            </nav>
+            <script>
+              (function() {
+                var pageSize = ${JD_LIST_PAGE_SIZE};
+                var pageCount = ${pageCount};
+                var page = 1;
+                var rows = Array.prototype.slice.call(document.querySelectorAll("[data-jd-rows] > .jd-list__row"));
+                var nav = document.querySelector("[data-jd-pagination]");
+                var prev = nav.querySelector('[data-jd-page="prev"]');
+                var next = nav.querySelector('[data-jd-page="next"]');
+                var label = nav.querySelector("[data-jd-page-label]");
+
+                function show() {
+                  rows.forEach(function(row, index) {
+                    row.hidden = index < (page - 1) * pageSize || index >= page * pageSize;
+                  });
+                  prev.disabled = page <= 1;
+                  next.disabled = page >= pageCount;
+                  label.textContent = "Page " + page + " of " + pageCount;
+                }
+
+                prev.addEventListener("click", function() { if (page > 1) { page -= 1; show(); } });
+                next.addEventListener("click", function() { if (page < pageCount) { page += 1; show(); } });
+                show();
+              })();
+            </script>`
+          : ""
+      }
     </div>
   `;
 }

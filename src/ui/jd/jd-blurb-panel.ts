@@ -183,7 +183,7 @@ export function renderJdBlurbPanel(options: JdBlurbPanelOptions): string {
         ${jd.blurbHtml == null ? `
         (function pollForBlurb() {
           var attempts = 0;
-          var maxAttempts = 45; // ~2.25 minutes at 3s intervals, headroom over the server-side AI timeout
+          var maxAttempts = 90; // ~4.5 minutes at 3s intervals, headroom over the server-side AI timeout
           var interval = setInterval(function() {
             attempts++;
             if (attempts > maxAttempts) { clearInterval(interval); return; }
