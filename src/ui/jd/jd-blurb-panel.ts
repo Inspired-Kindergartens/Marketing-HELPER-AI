@@ -34,9 +34,9 @@ export function renderJdBlurbPanel(options: JdBlurbPanelOptions): string {
     .map(
       (version) => `
         <li class="jd-blurb__version">
-          <button type="button" class="jd-blurb__version-restore" data-blurb-restore="${version.id}">
-            <span class="jd-blurb__version-date">${escapeHtml(formatTimestamp(version.savedAt))}</span>
-            <span class="jd-blurb__version-preview">${escapeHtml(version.contentHtml.replace(/<[^>]+>/g, " ").trim().slice(0, 80))}</span>
+          <button type="button" class="jd-blurb__version-restore flex flex-col items-start text-body" data-blurb-restore="${version.id}">
+            <span class="jd-blurb__version-date text-ghost text-small">${escapeHtml(formatTimestamp(version.savedAt))}</span>
+            <span class="jd-blurb__version-preview text-muted text-small">${escapeHtml(version.contentHtml.replace(/<[^>]+>/g, " ").trim().slice(0, 80))}</span>
           </button>
         </li>
       `,
@@ -45,7 +45,7 @@ export function renderJdBlurbPanel(options: JdBlurbPanelOptions): string {
 
   return `
     <div class="jd-blurb" data-jd-blurb data-jd-id="${jd.id}">
-      <div class="jd-blurb__toolbar" data-blurb-toolbar>
+      <div class="jd-blurb__toolbar format-toolbar" data-blurb-toolbar>
         <button type="button" data-blurb-cmd="formatBlock" data-blurb-value="H1" title="Heading 1"><i class="bi bi-type-h1 ui-icon" aria-hidden="true"></i></button>
         <button type="button" data-blurb-cmd="formatBlock" data-blurb-value="H2" title="Heading 2"><i class="bi bi-type-h2 ui-icon" aria-hidden="true"></i></button>
         <button type="button" data-blurb-cmd="formatBlock" data-blurb-value="H3" title="Heading 3"><i class="bi bi-type-h3 ui-icon" aria-hidden="true"></i></button>
@@ -56,20 +56,20 @@ export function renderJdBlurbPanel(options: JdBlurbPanelOptions): string {
         <button type="button" data-blurb-cmd="createLink" title="Hyperlink"><i class="bi bi-link-45deg ui-icon" aria-hidden="true"></i></button>
         <button type="button" class="jd-blurb__generate" data-blurb-generate><i class="bi bi-stars ui-icon" aria-hidden="true"></i><span>Generate with AI</span></button>
         <button type="button" class="jd-blurb__copy" data-blurb-copy><i class="bi bi-clipboard ui-icon" aria-hidden="true"></i><span>Copy to clipboard</span></button>
-        <button type="button" class="jd-blurb__copy" data-blurb-copy-title data-page-title="${escapeHtml(buildJdWebsitePageTitle(jd))}"><i class="bi bi-clipboard ui-icon" aria-hidden="true"></i><span>Copy Website Page Title</span></button>
+        <button type="button" class="jd-blurb__copy" data-blurb-copy-title data-page-title="${escapeHtml(buildJdWebsitePageTitle(jd))}"><i class="bi bi-clipboard ui-icon" aria-hidden="true"></i><span>Copy Website Page Name</span></button>
       </div>
 
-      <div class="jd-blurb__editor" data-blurb-editor contenteditable="true">${jd.blurbHtml ?? "<p>No blurb yet — a first draft may still be generating in the background (usually under a minute), or click Generate with AI.</p>"}</div>
+      <div class="jd-blurb__editor text-body rich-text rich-text--editable" data-blurb-editor contenteditable="true">${jd.blurbHtml ?? "<p>No blurb yet — a first draft may still be generating in the background (usually under a minute), or click Generate with AI.</p>"}</div>
 
-      <div class="jd-blurb__boilerplate" data-blurb-boilerplate aria-label="Locked boilerplate (appended automatically)">
+      <div class="jd-blurb__boilerplate text-muted rich-text" data-blurb-boilerplate aria-label="Locked boilerplate (appended automatically)">
         ${options.boilerplateHtml}
       </div>
 
-      <button type="button" class="jd-blurb__save" data-blurb-save><i class="bi bi-save ui-icon" aria-hidden="true"></i><span>Save</span></button>
+      <button type="button" class="jd-blurb__save button-md" data-blurb-save><i class="bi bi-save ui-icon" aria-hidden="true"></i><span>Save</span></button>
 
       <div class="jd-blurb__versions">
-        <h3>Version history</h3>
-        <ul>${versionsList || `<li class="jd-blurb__version-empty">No saved versions yet.</li>`}</ul>
+        <h3 class="subheading">Version history</h3>
+        <ul>${versionsList || `<li class="jd-blurb__version-empty text-empty text-small">No saved versions yet.</li>`}</ul>
       </div>
     </div>
 
@@ -81,11 +81,6 @@ export function renderJdBlurbPanel(options: JdBlurbPanelOptions): string {
         var boilerplate = root.querySelector("[data-blurb-boilerplate]");
         if (!editor || !boilerplate) return;
         var jdId = root.getAttribute("data-jd-id");
-
-        function resizeEditor() {
-          editor.style.height = "auto";
-          editor.style.height = editor.scrollHeight + "px";
-        }
 
         function normalizeContainerMarkup(container) {
           container.querySelectorAll("div").forEach(function(div) {
@@ -163,17 +158,12 @@ export function renderJdBlurbPanel(options: JdBlurbPanelOptions): string {
 
         document.execCommand("defaultParagraphSeparator", false, "p");
         normalizeEditorMarkup();
-        resizeEditor();
-        editor.addEventListener("input", function() {
-          normalizeEditorMarkup();
-          resizeEditor();
-        });
+        editor.addEventListener("input", normalizeEditorMarkup);
         editor.addEventListener("paste", function(event) {
           event.preventDefault();
           var text = event.clipboardData ? event.clipboardData.getData("text/plain") : "";
           insertPlainText(text);
           normalizeEditorMarkup();
-          resizeEditor();
         });
 
         // If there's no blurb yet, a background auto-generation may still be
@@ -242,7 +232,6 @@ export function renderJdBlurbPanel(options: JdBlurbPanelOptions): string {
               .then(function(payload) {
                 if (payload.html) {
                   editor.innerHTML = payload.html;
-                  resizeEditor();
                 }
                 window.location.reload();
               })

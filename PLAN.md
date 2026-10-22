@@ -1,35 +1,39 @@
-# PLAN — Wiki page redesign (/wiki)
+# PLAN — Selectable UI themes
 
 ## Goal
-Make the category hierarchy immediately legible, strip the row down to title
-only, and fill the empty right-hand panel with the existing AI chat.
+Each user can pick the app's look from a drop-down menu: **Default** (the
+original dark, green, uppercase "matrix" look), **Light** or **Dark** (both
+contemporary: rounded, softer, sentence-case). Default stays the default; the
+choice is remembered the next time the app is opened.
 
 ## Build order
 
-- [x] 1. Category heading hierarchy — make headings unmistakable
-  - [x] `wiki-list__group-heading`: drop muted colour + small size; use
-        `--color-text-strong`, larger than body, accent rule under it
-  - [x] Keep the count badge but demote it visually
-- [x] 2. Strip the row down (`wiki-list-panel.ts` + CSS)
-  - [x] Remove the tag badges (`wiki-list__badges` / `wiki-list__tag`) from rows
-  - [x] Remove the `Updated …` meta line
-  - [x] Remove the inline summary; move it to a hover popup on the row
-  - [x] Delete the now-dead CSS (`__badges`, `__tag`, `__meta`, `__summary` as
-        inline block) and the `formatUpdated` helper
-- [x] 3. Summary hover popup
-  - [x] Render summary as a `wiki-list__tip` element inside the row
-  - [x] CSS-only reveal on row hover/focus-within, positioned so it never
-        pushes layout; falls back gracefully when there is no summary
-  - [x] Keep the "Tagging…" pending signal somewhere (row title affordance)
-- [x] 4. Right-hand AI chat panel
-  - [x] Add `{ id: "chat", title: "AI Chat with Beep Beep", className: "panel--chat" }`
-        to `PANEL_DEFINITIONS` in `wiki-app-shell.ts` (layout already routes
-        `panel--chat` to `app-shell__right`)
-  - [x] Reuse the tasks/comms `chat-shell` markup + script verbatim, pointed at
-        `/api/ai/chat/stream` (the endpoint already carrying wiki grounding)
-  - [x] Make sure the chat panel is exempt from the article/editor
-        visible-panel filter, and from the focus-panel id set
-- [x] 5. Build + restart + verify
-  - [x] `npm run build`
-  - [x] kill :3000 so the supervisor respawns
-  - [x] Load /wiki and confirm hierarchy, hover popup, chat panel
+- [x] 1. Inline styling moved to CSS
+  - [x] data-driven values passed as `data-*` and read with typed `attr()`: waitlist threshold bars and GA bars (`data-percent`), Gantt bars (`data-position`), recent-demand chart height (`data-chart-rows`)
+  - [x] task description/note fields and the JD blurb editor size to their content with `field-sizing: content` (the JS height-setting is gone)
+  - [x] copy-to-clipboard fallbacks use a `.clipboard-buffer` class instead of `style`
+  - [x] kept inline on purpose (content that leaves the app): the Postmark RSS item, the wiki's Word/Outlook clipboard HTML
+- [x] 2. Classes established for alike code (`app.css` "Shared building blocks")
+  - [x] surfaces: `card`, `stat-tile`, `note-box`, `panel--scroll`
+  - [x] headings: `section-header`, `section-title`, `subheading`
+  - [x] tables: `table-frame`, `data-table`, `data-table__numeric`
+  - [x] lists, forms, buttons: `list-row`, `badge`, `field-label`, `form-control`, `button-sm|md|icon|remove|danger`
+  - [x] rich text: `rich-text`, `rich-text--editable`, `format-toolbar`
+  - [x] layout/text utilities for the most repeated single declarations
+  - [x] theme tokens added (radius, shadow, label case, panel title, alert tones, chart colours) with Default values = the original look
+- [x] 3. Classes applied to the DOM elements (and duplicated declarations removed from the component rules)
+  - [x] verified by computed-style comparison of every element on 33 pages (desktop), 12 pages (700px) and 6 pages (print): Default renders the same, except the deliberate changes below
+  - [x] deliberate changes: task text fields fit their content exactly (12px shorter when empty); the checklist add-row calendar button matches the row buttons (28×28); a wiki article's last paragraph has no trailing margin (as in the editors)
+  - [x] tests updated to the new markup; no new failures (10 pre-existing failures unchanged; `task-store.test.ts` imports a removed `taskTimeMinutes`)
+- [x] 4. Light and Dark themes designed (`src/ui/themes.css`, served at `/themes.css`, linked after `app.css` on every page)
+  - [x] Light palette, Dark palette, shared contemporary shape/type
+  - [x] waitlist charts read colours from the theme tokens
+  - [x] landing animation blended into each theme's background
+  - [x] checked on landing, dashboard (+ focus panels), comms, tasks, JD, wiki, chat, sector, snippets, readme, and at 700px
+- [x] 5. Theme picker (`src/ui/theme.ts`)
+  - [x] **Look** drop-down (Default / Light / Dark) at the end of the landing page footer, standard `form-control` select
+  - [x] choice kept in `localStorage` (`marketing-helper-theme`); `THEME_HEAD_SCRIPT` in all 13 page heads applies it before the body is drawn, and follows changes made in other tabs
+  - [x] `themechange` event; the waitlist charts destroy and redraw with the new colours
+  - [x] tests (`test/theme.test.ts`): picker in the footer, head-script contract, every page head carries it, charts listen
+  - [x] docs: `docs/USER-GUIDE.md` (Appearance + landing footer) and `README.md` (Choosing a theme)
+  - [x] build + restart + verified in Chrome: pick, remember across pages, no flash on load, open dashboard tab follows and redraws charts, Default clears the choice

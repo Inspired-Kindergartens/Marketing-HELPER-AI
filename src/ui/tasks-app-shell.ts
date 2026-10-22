@@ -10,6 +10,7 @@ import { renderTaskBoardPanel } from "./tasks/task-board-panel.js";
 import { renderTaskDetailPanel, renderTaskDetailActions } from "./tasks/task-detail-panel.js";
 import { renderProjectsPanel } from "./tasks/projects-panel.js";
 import { renderMembersPanel } from "./tasks/members-panel.js";
+import { THEME_HEAD_SCRIPT } from "./theme.js";
 
 const PANEL_DEFINITIONS = [
   { id: "task-board", title: "Task Board", className: "panel--task-board" },
@@ -85,12 +86,12 @@ function renderPanelContent(panelId: string, options: TasksAppShellOptions): str
 
 function renderTasksAiChatPanel(): string {
   return `
-    <div class="chat-shell" data-ai-chat data-ai-chat-endpoint="/api/tasks/ai/chat/stream">
+    <div class="chat-shell grid gap-8" data-ai-chat data-ai-chat-endpoint="/api/tasks/ai/chat/stream">
       <div class="chat-shell__messages"></div>
       <div class="chat-shell__composer">
-        <label class="chat-shell__prompt-label" for="tasks-chat-prompt">Prompt</label>
+        <label class="chat-shell__prompt-label text-small text-ghost label-case" for="tasks-chat-prompt">Prompt</label>
         <textarea id="tasks-chat-prompt" class="chat-shell__prompt-input" placeholder="Ask about overdue tasks, project progress, or team workload."></textarea>
-        <button class="chat-shell__send" type="button" data-ai-chat-send><i class="bi bi-send ui-icon" aria-hidden="true"></i><span>Send</span></button>
+        <button class="chat-shell__send inline-flex items-center justify-center gap-6" type="button" data-ai-chat-send><i class="bi bi-send ui-icon" aria-hidden="true"></i><span>Send</span></button>
       </div>
     </div>
   `;
@@ -108,9 +109,9 @@ function renderTasksChatScript(): string {
         var history = [];
         function append(role, text) {
           var row = document.createElement("div");
-          row.className = "chat-message chat-message--" + role;
+          row.className = "chat-message text-body chat-message--" + role;
           var title = document.createElement("span");
-          title.className = "chat-message__role";
+          title.className = "chat-message__role text-small text-ghost label-case";
           title.textContent = role === "assistant" ? "Beep Beep" : "You";
           var body = document.createElement("p");
           body.className = "chat-message__body";
@@ -188,6 +189,63 @@ function renderTasksScript(): string {
         var body = document.body;
 
         function reload() { window.location.reload(); }
+
+        // Checklist changes save without a page reload, so the page stays exactly
+        // where it is. After the save, the server-rendered page is fetched and
+        // only the checklist rows, its done count and the board card's badges are
+        // swapped in. Focus is put back on the same field of the same row.
+        async function saveChecklist(url, payload) {
+          var saved = await postRaw(url, payload, false);
+          if (saved) await refreshChecklist();
+          return saved;
+        }
+
+        async function refreshChecklist() {
+          var list = document.querySelector(".task-checklist");
+          var host = list && list.closest("[data-task-id]");
+          if (!list || !host) return;
+          var html;
+          try {
+            var response = await fetch(window.location.href, { headers: { accept: "text/html" } });
+            if (!response.ok) throw new Error("Request failed");
+            html = await response.text();
+          } catch (error) {
+            reload();
+            return;
+          }
+          var fresh = new DOMParser().parseFromString(html, "text/html");
+          var freshList = fresh.querySelector(".task-checklist");
+          if (!freshList) return;
+
+          var active = document.activeElement;
+          var activeRow = active && list.contains(active) ? active.closest("[data-checklist-item]") : null;
+          var focusItem = activeRow ? activeRow.getAttribute("data-checklist-item") : null;
+          var focusName = focusItem ? active.getAttribute("name") : null;
+          // Anything typed into another row while the save was in flight is
+          // kept, not overwritten by the server's copy.
+          var typed = focusName && "value" in active && active.value !== active.defaultValue ? active.value : null;
+          var caret = typed != null ? active.selectionStart : null;
+
+          list.innerHTML = freshList.innerHTML;
+
+          var count = list.closest("section") && list.closest("section").querySelector(".task-detail__section-count");
+          var freshCount = freshList.closest("section") && freshList.closest("section").querySelector(".task-detail__section-count");
+          if (count && freshCount) count.textContent = freshCount.textContent;
+
+          var taskId = host.getAttribute("data-task-id");
+          var badges = document.querySelector('.task-card[data-task-id="' + taskId + '"] .task-card__badges');
+          var freshBadges = fresh.querySelector('.task-card[data-task-id="' + taskId + '"] .task-card__badges');
+          if (badges && freshBadges) badges.innerHTML = freshBadges.innerHTML;
+
+          if (focusItem && focusName) {
+            var refocus = list.querySelector('[data-checklist-item="' + focusItem + '"] [name="' + focusName + '"]');
+            if (refocus) {
+              if (typed != null) refocus.value = typed;
+              refocus.focus({ preventScroll: true });
+              if (caret != null && refocus.setSelectionRange) refocus.setSelectionRange(caret, caret);
+            }
+          }
+        }
 
         // Fires the JSON POST. When reloadOnSuccess is false the caller keeps
         // control of the page (used by "Open in Outlook", which must navigate to
@@ -313,12 +371,12 @@ function renderTasksScript(): string {
             return;
           }
           if (taskAction === "checklist-toggle") {
-            post("/api/tasks/" + taskId + "/checklist/" + el.getAttribute("data-item-id") + "/toggle", {});
+            saveChecklist("/api/tasks/" + taskId + "/checklist/" + el.getAttribute("data-item-id") + "/toggle", {});
             return;
           }
           if (taskAction === "checklist-delete") {
             event.preventDefault();
-            post("/api/tasks/" + taskId + "/checklist/" + el.getAttribute("data-item-id") + "/delete", {});
+            saveChecklist("/api/tasks/" + taskId + "/checklist/" + el.getAttribute("data-item-id") + "/delete", {});
             return;
           }
           if (taskAction === "attachment-delete") {
@@ -561,21 +619,6 @@ function renderTasksScript(): string {
           else form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
         });
 
-        // Description and note textareas grow to fit their content (#1), so a
-        // long description is fully visible without an inner scrollbar.
-        function autogrow(field) {
-          field.style.height = "auto";
-          field.style.height = field.scrollHeight + "px";
-        }
-
-        document.querySelectorAll("[data-task-autogrow]").forEach(autogrow);
-
-        document.addEventListener("input", function(event) {
-          var field = event.target instanceof Element ? event.target.closest("[data-task-autogrow]") : null;
-          if (!field) return;
-          autogrow(field);
-        });
-
         function formData(form) {
           var data = {};
           new FormData(form).forEach(function(value, key) {
@@ -584,6 +627,71 @@ function renderTasksScript(): string {
           });
           return data;
         }
+
+        // --- Checklist reordering --------------------------------------------
+        // Pressing the grip makes its row draggable for that one gesture; the
+        // new order is posted as a list of ids without a reload, as the DOM
+        // already shows it.
+        (function() {
+          var list = document.querySelector(".task-checklist");
+          var host = list && list.closest("[data-task-id]");
+          if (!list || !host) return;
+
+          var dragging = null;
+
+          list.addEventListener("pointerdown", function(event) {
+            var handle = event.target instanceof Element ? event.target.closest("[data-checklist-handle]") : null;
+            var row = handle && handle.closest("[data-checklist-item]");
+            if (row) row.setAttribute("draggable", "true");
+          });
+
+          list.addEventListener("dragstart", function(event) {
+            var row = event.target instanceof Element ? event.target.closest("[data-checklist-item]") : null;
+            if (!row || row.getAttribute("draggable") !== "true") return;
+            dragging = row;
+            row.classList.add("task-checklist__item--dragging");
+            if (event.dataTransfer) {
+              event.dataTransfer.effectAllowed = "move";
+              // Firefox will not start a drag without data set.
+              event.dataTransfer.setData("text/plain", row.getAttribute("data-checklist-item"));
+            }
+          });
+
+          list.addEventListener("dragover", function(event) {
+            if (!dragging) return;
+            event.preventDefault();
+            if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+            var over = event.target instanceof Element ? event.target.closest("[data-checklist-item]") : null;
+            if (!over || over === dragging) return;
+            var box = over.getBoundingClientRect();
+            var after = event.clientY > box.top + box.height / 2;
+            list.insertBefore(dragging, after ? over.nextSibling : over);
+          });
+
+          function finish() {
+            if (!dragging) return;
+            dragging.classList.remove("task-checklist__item--dragging");
+            dragging.removeAttribute("draggable");
+            dragging = null;
+            var ids = Array.prototype.map.call(list.querySelectorAll("[data-checklist-item]"), function(row) {
+              return Number(row.getAttribute("data-checklist-item"));
+            });
+            postRaw("/api/tasks/" + host.getAttribute("data-task-id") + "/checklist/reorder", { ids: ids }, false);
+          }
+
+          list.addEventListener("drop", function(event) {
+            if (!dragging) return;
+            event.preventDefault();
+            finish();
+          });
+          list.addEventListener("dragend", finish);
+          // A press on the grip that never became a drag must not leave the row draggable.
+          document.addEventListener("pointerup", function() {
+            if (dragging) return;
+            var armed = list.querySelector("[data-checklist-item][draggable]");
+            if (armed) armed.removeAttribute("draggable");
+          });
+        })();
 
         // Commit checklist edits when the field loses focus with a changed value
         // (Enter also works via the form's submit handler below).
@@ -631,7 +739,12 @@ function renderTasksScript(): string {
           if (form.hasAttribute("data-checklist-add")) {
             event.preventDefault();
             var clHost = form.closest("[data-task-id]");
-            post("/api/tasks/" + clHost.getAttribute("data-task-id") + "/checklist", formData(form));
+            saveChecklist("/api/tasks/" + clHost.getAttribute("data-task-id") + "/checklist", formData(form)).then(function(saved) {
+              if (!saved) return;
+              form.reset();
+              var addLabel = form.querySelector("[name=label]");
+              if (addLabel) addLabel.focus({ preventScroll: true });
+            });
             return;
           }
           if (form.hasAttribute("data-checklist-edit")) {
@@ -642,7 +755,7 @@ function renderTasksScript(): string {
             // "clear it" — send it explicitly so the server can unset the date.
             var dueField = form.querySelector("[name=dueDate]");
             if (dueField && !dueField.value.trim()) editPayload.dueDate = "";
-            post("/api/tasks/" + editHost.getAttribute("data-task-id") + "/checklist/" + form.getAttribute("data-item-id"), editPayload);
+            saveChecklist("/api/tasks/" + editHost.getAttribute("data-task-id") + "/checklist/" + form.getAttribute("data-item-id"), editPayload);
             return;
           }
           if (form.hasAttribute("data-task-attachment-upload")) {
@@ -680,7 +793,12 @@ function renderTasksScript(): string {
 export function renderTasksAppShell(options: TasksAppShellOptions): string {
   const focusPanelId = resolveTasksFocusPanelId(options.focusPanelId);
 
-  const panelContent = PANEL_DEFINITIONS.map((panel) => ({
+  // Projects and Members belong to the board view (/tasks). With a task open
+  // they only repeat it, so the task view leaves them out.
+  const hiddenWithTask = new Set<string>(["projects", "members"]);
+  const panelContent = PANEL_DEFINITIONS.filter(
+    (panel) => options.selectedTask == null || !hiddenWithTask.has(panel.id),
+  ).map((panel) => ({
     id: panel.id,
     title: panel.title,
     className: panel.className,
@@ -704,15 +822,17 @@ export function renderTasksAppShell(options: TasksAppShellOptions): string {
     <link rel="icon" href="/favicon.ico" type="image/png" />
     <link rel="stylesheet" href="/vendor/bootstrap-icons.css" />
     <link rel="stylesheet" href="/app.css" />
+    <link rel="stylesheet" href="/themes.css" />
+    ${THEME_HEAD_SCRIPT}
   </head>
   <body class="app-shell-body">
-    <aside class="nav-rail" aria-label="Primary navigation">
-      <a class="nav-rail__item" href="/" aria-label="Back to landing" title="Landing"><i class="bi bi-house-door" aria-hidden="true"></i></a>
-      <a class="nav-rail__item" href="/app" aria-label="Online Marketing dashboard" title="Online Marketing"><i class="bi bi-bar-chart-line" aria-hidden="true"></i></a>
-      <a class="nav-rail__item nav-rail__item--current" href="/tasks" aria-label="Tasks" title="Tasks" aria-current="page"><i class="bi bi-check2-square" aria-hidden="true"></i></a>
-      <a class="nav-rail__item" href="/comms" aria-label="Online Communications dashboard" title="Online Communications"><i class="bi bi-envelope-paper" aria-hidden="true"></i></a>
-      <a class="nav-rail__item" href="/jd" aria-label="Job Descriptions" title="Job Descriptions"><i class="bi bi-file-earmark-person" aria-hidden="true"></i></a>
-      <a class="nav-rail__item" href="/wiki" aria-label="Things To Know" title="Things To Know"><i class="bi bi-journal-bookmark" aria-hidden="true"></i></a>
+    <aside class="nav-rail flex flex-col items-center gap-6" aria-label="Primary navigation">
+      <a class="nav-rail__item inline-flex items-center justify-center text-muted" href="/" aria-label="Back to landing" title="Landing"><i class="bi bi-house-door" aria-hidden="true"></i></a>
+      <a class="nav-rail__item inline-flex items-center justify-center text-muted" href="/app" aria-label="Online Marketing dashboard" title="Online Marketing"><i class="bi bi-bar-chart-line" aria-hidden="true"></i></a>
+      <a class="nav-rail__item inline-flex items-center justify-center text-muted nav-rail__item--current" href="/tasks" aria-label="Tasks" title="Tasks" aria-current="page"><i class="bi bi-check2-square" aria-hidden="true"></i></a>
+      <a class="nav-rail__item inline-flex items-center justify-center text-muted" href="/comms" aria-label="Online Communications dashboard" title="Online Communications"><i class="bi bi-envelope-paper" aria-hidden="true"></i></a>
+      <a class="nav-rail__item inline-flex items-center justify-center text-muted" href="/jd" aria-label="Job Descriptions" title="Job Descriptions"><i class="bi bi-file-earmark-person" aria-hidden="true"></i></a>
+      <a class="nav-rail__item inline-flex items-center justify-center text-muted" href="/wiki" aria-label="Things To Know" title="Things To Know"><i class="bi bi-journal-bookmark" aria-hidden="true"></i></a>
     </aside>
     ${layout}
     ${renderTasksScript()}

@@ -234,9 +234,39 @@ function Start-MarketingHelperServer {
   }
 }
 
+# The AI chats' help knowledge retrieval needs a small embedding model. If
+# it is missing, pull it in the background so the launch is never held up; the
+# server falls back to full-text search until it lands.
+function Start-EmbedModelPullIfMissing {
+  $embedModel = Read-DotEnvValue -Name "AI_EMBED_MODEL" -DefaultValue "nomic-embed-text"
+  try {
+    $baseUrl = (Read-DotEnvValue -Name "AI_BASE_URL" -DefaultValue $ollamaUrl).TrimEnd("/")
+    $tags = Invoke-RestMethod -Uri "$baseUrl/api/tags" -Method Get -TimeoutSec 3
+    $present = $tags.models | Where-Object { $_.name -eq $embedModel -or $_.name -eq "$($embedModel):latest" }
+    if ($present) {
+      return
+    }
+  } catch {
+    return
+  }
+
+  $ollamaPath = Find-Ollama
+  if (-not $ollamaPath) {
+    return
+  }
+
+  Write-Host "Downloading AI embedding model $embedModel in the background..."
+  Start-Process `
+    -FilePath $ollamaPath `
+    -ArgumentList "pull", $embedModel `
+    -WorkingDirectory $repoRoot `
+    -WindowStyle Hidden | Out-Null
+}
+
 $aiProvider = Read-DotEnvValue -Name "AI_PROVIDER" -DefaultValue "builtin"
 if ($aiProvider -eq "ollama") {
   Start-OllamaServer
+  Start-EmbedModelPullIfMissing
 }
 
 Start-MarketingHelperServer

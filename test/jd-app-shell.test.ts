@@ -9,12 +9,12 @@ import { renderJdBlurbPanel } from "../src/ui/jd/jd-blurb-panel.js";
 import { buildJdEmailText, buildJdWebsitePageTitle } from "../src/ui/jd/jd-email.js";
 import {
   buildImmovableBoilerplateHtml,
+  buildJdApplicationFormUrl,
   buildJdBlurbSystemPrompt,
   buildJdBlurbUserPrompt,
   buildJdIntroSystemPrompt,
   buildJdIntroUserPrompt,
 } from "../src/ai/jd-context.js";
-import { jdPdfAssetUrl } from "../src/ui/jd/jd-pdf.js";
 import { readFileSync } from "node:fs";
 import type { JobDescriptionView, JdTitleProfileView, JdCentreProfileView } from "../src/storage/jd-store.js";
 
@@ -139,7 +139,7 @@ test("JD create flow opens the new editor after the server returns the generated
       titleProfiles: [],
       knowledgeDocs: [],
       agreementStatus: { latest: null, expired: false, expiringSoon: false, daysUntilExpiry: null },
-      globalSettings: { lastReviewedByAcronym: "" },
+      globalSettings: { lastReviewedByAcronym: "", jobPositionsFolder: "D:/Jobs" },
     },
   });
 
@@ -187,7 +187,7 @@ test("JD list panel title-cases the location and collapses the duplicated Kinder
     centreProfiles: [],
   });
 
-  assert.match(html, /<span class="jd-list__meta">Gwen Rogers Kindergarten · Full Time<\/span>/);
+  assert.match(html, /<span class="jd-list__meta[^"]*">Gwen Rogers Kindergarten · Full Time<\/span>/);
   assert.doesNotMatch(html, /KINDERGARTEN Kindergarten/);
 });
 
@@ -203,7 +203,7 @@ test("JD back link title-cases the location and collapses the duplicated Kinderg
       titleProfiles: [],
       knowledgeDocs: [],
       agreementStatus: { latest: null, expired: false, expiringSoon: false, daysUntilExpiry: null },
-      globalSettings: { lastReviewedByAcronym: "" },
+      globalSettings: { lastReviewedByAcronym: "", jobPositionsFolder: "D:/Jobs" },
     },
   });
 
@@ -294,13 +294,13 @@ test("JD editor navigation renders in the panel header actions", () => {
       titleProfiles: [],
       knowledgeDocs: [],
       agreementStatus: { latest: null, expired: false, expiringSoon: false, daysUntilExpiry: null },
-      globalSettings: { lastReviewedByAcronym: "" },
+      globalSettings: { lastReviewedByAcronym: "", jobPositionsFolder: "D:/Jobs" },
     },
   });
 
   assert.match(
     html,
-    /<div class="panel__actions">[\s\S]*class="panel-action-link" href="\/jd"[\s\S]*Back to Job Descriptions[\s\S]*class="panel-action-link" href="\/jd\?panel=jd-blurb&jd=1"[\s\S]*Website blurb for this JD/,
+    /<div class="panel__actions[^"]*">[\s\S]*class="panel-action-link" href="\/jd"[\s\S]*Back to Job Descriptions[\s\S]*class="panel-action-link" href="\/jd\?panel=jd-blurb&jd=1"[\s\S]*Website blurb for this JD/,
   );
 });
 
@@ -320,7 +320,7 @@ test("JD list and settings panels carry no cross-navigation, and back links targ
       titleProfiles: [],
       knowledgeDocs: [],
       agreementStatus: { latest: null, expired: false, expiringSoon: false, daysUntilExpiry: null },
-      globalSettings: { lastReviewedByAcronym: "" },
+      globalSettings: { lastReviewedByAcronym: "", jobPositionsFolder: "D:/Jobs" },
     },
   };
 
@@ -331,17 +331,21 @@ test("JD list and settings panels carry no cross-navigation, and back links targ
 
   // List and settings sit side by side on /jd, so neither links to the other.
   assert.doesNotMatch(listHtml, /panel-action-link/);
+  // The list panel header carries the Job Positions folder button.
+  assert.match(listHtml, /<div class="panel__actions[^"]*">[\s\S]*data-jd-open-folder[\s\S]*<span>Job Positions<\/span>/);
   assert.doesNotMatch(settingsHtml, /panel-action-link/);
 
   // The editor and blurb replace the whole view, so they keep a way back.
   assert.match(
     editorHtml,
-    /<div class="panel__actions">[\s\S]*class="panel-action-link" href="\/jd"[\s\S]*Back to Job Descriptions/,
+    /<div class="panel__actions[^"]*">[\s\S]*class="panel-action-link" href="\/jd"[\s\S]*Back to Job Descriptions/,
   );
   assert.match(
     blurbHtml,
-    /<div class="panel__actions">[\s\S]*class="panel-action-link" href="\/jd\?panel=jd-editor&jd=17"[\s\S]*Back to Teacher - Gwen Rogers Kindergarten/,
+    /<div class="panel__actions[^"]*">[\s\S]*class="panel-action-link" href="\/jd\?panel=jd-editor&jd=17"[\s\S]*Back to Teacher - Gwen Rogers Kindergarten/,
   );
+  // The blurb panel also carries the Job Positions folder button.
+  assert.match(blurbHtml, /<div class="panel__actions[^"]*">[\s\S]*data-jd-open-folder[\s\S]*<span>Job Positions<\/span>/);
 
   // Nothing anywhere points back at the old ?panel=jd-list route.
   assert.doesNotMatch(
@@ -359,13 +363,14 @@ ${settingsHtml}`, /class="jd-back-link"/);
 test("JD panel bodies scroll outside focus mode so the list and settings are reachable", () => {
   const css = readFileSync("src/ui/app.css", "utf8");
 
-  // The scroll rules must not be scoped to .panel--focus, or the two-column
+  // The scroll rule must not be scoped to .panel--focus, or the two-column
   // /jd view clips the list and settings panels with no way to scroll them.
-  assert.match(
-    css,
-    /\.panel--jd-list \.panel__body,\s*\.panel--jd-editor \.panel__body,\s*\.panel--jd-blurb \.panel__body,\s*\.panel--jd-settings \.panel__body \{\s*overflow: auto;/,
-  );
+  assert.match(css, /\.panel--scroll \.panel__body \{\s*overflow: auto;/);
   assert.doesNotMatch(css, /\.panel--jd-settings\.panel--focus \.panel__body \{\s*overflow: auto;/);
+  const shell = readFileSync("src/ui/jd-app-shell.ts", "utf8");
+  for (const panel of ["panel--jd-list", "panel--jd-editor", "panel--jd-blurb", "panel--jd-settings"]) {
+    assert.match(shell, new RegExp(`${panel} panel--scroll`), `${panel} should scroll`);
+  }
 });
 
 test("JD website page title states position type once, pairs Kaiako only for teaching roles, and carries the advertised month", () => {
@@ -395,7 +400,7 @@ test("JD website page title states position type once, pairs Kaiako only for tea
   );
 });
 
-test("JD blurb panel offers a Copy Website Page Title action carrying the page title", () => {
+test("JD blurb panel offers a Copy Website Page Name action carrying the page title", () => {
   const jd = buildJobDescription({
     jobTitle: "Teacher",
     locationDisplay: "GWEN ROGERS  KINDERGARTEN Kindergarten",
@@ -404,7 +409,7 @@ test("JD blurb panel offers a Copy Website Page Title action carrying the page t
   });
   const html = renderJdBlurbPanel({ jobDescription: jd, boilerplateHtml: "", versions: [] });
 
-  assert.match(html, /<span>Copy Website Page Title<\/span>/);
+  assert.match(html, /<span>Copy Website Page Name<\/span>/);
   assert.match(
     html,
     /data-blurb-copy-title data-page-title="Full-time Teacher \/ Kaiako Position - Gwen Rogers Kindergarten August 2026"/,
@@ -422,10 +427,14 @@ test("JD settings exposes Last Reviewed by and per-title centre-specific control
     ],
     knowledgeDocs: [],
     agreementStatus: { latest: null, expired: false, expiringSoon: false, daysUntilExpiry: null },
-    globalSettings: { lastReviewedByAcronym: "VVR" },
+    globalSettings: { lastReviewedByAcronym: "VVR", jobPositionsFolder: "D:/Jobs" },
   });
 
   assert.match(html, /name="lastReviewedByAcronym" value="VVR"/);
+  // The folder the list panel's Job Positions button opens is editable.
+  assert.match(html, /data-jd-folder-settings[\s\S]*name="jobPositionsFolder" value="D:\/Jobs"/);
+  // Each settings group is a section of one exclusive accordion.
+  assert.equal((html.match(/<details class="wiki-list__group[^"]*wiki-list__group--collapsible jd-settings__section" name="jd-settings-sections">/g) ?? []).length, 6);
   assert.match(html, /data-jd-global-settings/);
   // The centre-specific box reflects each title's stored value.
   assert.match(html, /value="Teacher"[\s\S]*?name="isCentreSpecific" checked/);
@@ -469,7 +478,7 @@ test("JD editor Generate Email action opens a corrected mailto draft", () => {
       titleProfiles: [],
       knowledgeDocs: [],
       agreementStatus: { latest: null, expired: false, expiringSoon: false, daysUntilExpiry: null },
-      globalSettings: { lastReviewedByAcronym: "" },
+      globalSettings: { lastReviewedByAcronym: "", jobPositionsFolder: "D:/Jobs" },
     },
   });
   const hrefMatch = /href="([^"]+)"[^>]*>\s*<i class="bi bi-envelope-plus[\s\S]*?<span>Generate Email<\/span>/.exec(html);
@@ -528,7 +537,7 @@ test("JD editor date fields are text-editable with native picker buttons", () =>
       titleProfiles: [],
       knowledgeDocs: [],
       agreementStatus: { latest: null, expired: false, expiringSoon: false, daysUntilExpiry: null },
-      globalSettings: { lastReviewedByAcronym: "" },
+      globalSettings: { lastReviewedByAcronym: "", jobPositionsFolder: "D:/Jobs" },
     },
   });
   const css = readFileSync("src/ui/app.css", "utf8");
@@ -595,7 +604,7 @@ test("JD blurb panel renders the boilerplate as a locked block separate from the
 
 test("JD blurb boilerplate applies fixed bold and italic emphasis", () => {
   const jd = buildJobDescription();
-  const html = buildImmovableBoilerplateHtml(jd, jdPdfAssetUrl(jd));
+  const html = buildImmovableBoilerplateHtml(jd);
 
   assert.match(
     html,
@@ -605,13 +614,12 @@ test("JD blurb boilerplate applies fixed bold and italic emphasis", () => {
     html,
     /By applying for this role you acknowledge that you are eligible to work in New Zealand\. If you are not eligible to work in New Zealand then do not apply\./,
   );
+  // The job-description title is plain text, not a link to the PDF.
+  assert.match(html, /<p>Job Description - Full time - Teacher \/ Kaiako [^<]+<\/p>/);
+  assert.doesNotMatch(html, /Job-Descriptions\/PD-Teacher/);
   assert.match(
     html,
-    /href="https:\/\/inspiredkindergartens\.nz\/assets\/Job-Descriptions\/PD-Teacher-PAENGAROA-July-14-2026-20260714-120000\.pdf"/,
-  );
-  assert.match(
-    html,
-    /href="https:\/\/inspiredkindergartens\.nz\/employment-and-careers\/how-to-apply\/how-to-apply-kindergarten"/,
+    /<a href="https:\/\/inspiredkindergartens\.formstack\.com\/forms\/job_application_form_2026\?service_location=[^"]+&amp;role=[^"]+">Please apply online here<\/a>/,
   );
   assert.match(html, /<p><strong>Start Date: To be negotiated<\/strong><\/p>/);
   assert.match(html, /<p><strong>Closing Date: 28\/07\/2026 at 4pm<\/strong><\/p>/);
@@ -623,15 +631,33 @@ test("JD blurb boilerplate applies fixed bold and italic emphasis", () => {
 
 test("JD blurb boilerplate title-cases the location and collapses the duplicated Kindergarten", () => {
   const jd = { ...buildJobDescription(), locationDisplay: "GWEN ROGERS  KINDERGARTEN Kindergarten" };
-  const html = buildImmovableBoilerplateHtml(jd, jdPdfAssetUrl(jd));
+  const html = buildImmovableBoilerplateHtml(jd);
 
   assert.match(
     html,
-    /Job Description - Full time - Teacher \/ Kaiako Gwen Rogers Kindergarten<\/a>/,
+    /Job Description - Full time - Teacher \/ Kaiako Gwen Rogers Kindergarten<\/p>/,
   );
-  // The PDF href keeps its upper-cased published filename; only the link text is reformatted.
   assert.doesNotMatch(html, />[^<]*KINDERGARTEN[^<]*</);
   assert.doesNotMatch(html, /Kindergarten Kindergarten/);
+});
+
+test("JD apply link prefills the Formstack form for teaching roles and uses the generic form otherwise", () => {
+  const formUrl = (jobTitle: string) =>
+    buildJdApplicationFormUrl({ jobTitle, locationDisplay: "GWEN ROGERS  KINDERGARTEN Kindergarten" });
+
+  assert.equal(
+    formUrl("Teacher"),
+    "https://inspiredkindergartens.formstack.com/forms/job_application_form_2026?service_location=Gwen%20Rogers&role=Teacher",
+  );
+  assert.equal(
+    formUrl("Head Teacher"),
+    "https://inspiredkindergartens.formstack.com/forms/job_application_form_2026?service_location=Gwen%20Rogers&role=Head%20Teacher",
+  );
+  assert.equal(
+    formUrl("Part-time Teacher"),
+    "https://inspiredkindergartens.formstack.com/forms/job_application_form_2026?service_location=Gwen%20Rogers&role=Teacher",
+  );
+  assert.equal(formUrl("Administrator"), "https://inspiredkindergartens.formstack.com/forms/job_application_form_copy");
 });
 
 test("JD blurb prompt uses fallback blurbs as style examples only when centre history is empty", () => {
@@ -688,17 +714,15 @@ test("JD intro prompt only allows centre operating facts from Infocare or select
   assert.match(userPrompt, /other-centre intro paragraphs for structure and tone only, not facts/);
 });
 
-test("JD blurb editor resizes to fit typed and generated content", () => {
+test("JD blurb editor grows with its content through CSS, not inline heights", () => {
   const html = renderJdBlurbPanel({
     jobDescription: buildJobDescription(),
     boilerplateHtml: "<p>Boilerplate</p>",
     versions: [],
   });
 
-  assert.match(html, /function resizeEditor\(\)/);
-  assert.match(html, /editor\.style\.height = "auto"/);
-  assert.match(html, /editor\.style\.height = editor\.scrollHeight \+ "px"/);
-  assert.match(html, /editor\.addEventListener\("input", function\(\)/);
+  assert.doesNotMatch(html, /\.style\./);
+  assert.match(html, /editor\.addEventListener\("input", normalizeEditorMarkup\)/);
 });
 
 test("JD blurb editor pastes clipboard content as plain text", () => {
@@ -729,7 +753,7 @@ test("JD blurb editor normalizes browser-created div blocks to paragraphs", () =
   assert.match(html, /container\.querySelectorAll\("div"\)/);
   assert.match(html, /document\.createElement\("p"\)/);
   assert.match(html, /div\.replaceWith\(paragraph\)/);
-  assert.match(html, /normalizeEditorMarkup\(\);\s*resizeEditor\(\);/);
+  assert.match(html, /normalizeEditorMarkup\(\);\s*editor\.addEventListener/);
 });
 
 test("JD blurb editor wraps loose AI text nodes in paragraphs and exports cleaned HTML", () => {
@@ -773,10 +797,10 @@ test("JD app shell wires the nav-rail JD link and titles the page", () => {
       titleProfiles: [],
       knowledgeDocs: [],
       agreementStatus: { latest: null, expired: false, expiringSoon: false, daysUntilExpiry: null },
-      globalSettings: { lastReviewedByAcronym: "" },
+      globalSettings: { lastReviewedByAcronym: "", jobPositionsFolder: "D:/Jobs" },
     },
   });
 
   assert.match(html, /<title>Marketing Helper - Job Descriptions<\/title>/);
-  assert.match(html, /nav-rail__item nav-rail__item--current" href="\/jd"/);
+  assert.match(html, /nav-rail__item[^"]*nav-rail__item--current" href="\/jd"/);
 });

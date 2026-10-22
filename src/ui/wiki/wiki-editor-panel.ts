@@ -52,26 +52,26 @@ export function renderWikiEditorPanel(options: WikiEditorPanelOptions): string {
 
   return `
     <div class="wiki-editor" data-wiki-editor data-wiki-id="${article.id}">
-      <form class="wiki-editor__fields" data-wiki-edit>
-        <label class="wiki-editor__field wiki-editor__field--title">
+      <form class="wiki-editor__fields flex flex-col gap-10" data-wiki-edit>
+        <label class="wiki-editor__field field-label wiki-editor__field--title">
           <span>Title</span>
-          <input type="text" name="title" maxlength="200" value="${escapeHtml(article.title)}" required />
+          <input class="form-control" type="text" name="title" maxlength="200" value="${escapeHtml(article.title)}" required />
         </label>
-        <label class="wiki-editor__field">
+        <label class="wiki-editor__field field-label">
           <span>Summary <small>written by AI when you finish editing — always sent to the AI</small></span>
-          <input type="text" name="summary" maxlength="400" value="${escapeHtml(article.summary)}" placeholder="Generated when you finish editing" />
+          <input class="form-control" type="text" name="summary" maxlength="400" value="${escapeHtml(article.summary)}" placeholder="Generated when you finish editing" />
         </label>
-        <div class="wiki-editor__field-row">
-          <label class="wiki-editor__field">
+        <div class="wiki-editor__field-row grid gap-10">
+          <label class="wiki-editor__field field-label">
             <span>Category <small>${article.isCategoryLocked ? "set by you — the AI will not change it" : "set by AI until you choose one"}</small></span>
-            <select name="category">${categoryOptions}</select>
+            <select class="form-control" name="category">${categoryOptions}</select>
           </label>
-          <label class="wiki-editor__field">
+          <label class="wiki-editor__field field-label">
             <span>Tags <small>set by AI — these drive what it finds</small></span>
-            <input type="text" name="tags" maxlength="400" value="${escapeHtml(article.tags.join(", "))}" data-wiki-tags-field placeholder="Generated once the article has content" />
+            <input class="form-control" type="text" name="tags" maxlength="400" value="${escapeHtml(article.tags.join(", "))}" data-wiki-tags-field placeholder="Generated once the article has content" />
           </label>
         </div>
-        <label class="wiki-editor__pin">
+        <label class="wiki-editor__pin flex items-center gap-8 text-muted text-small">
           <input type="checkbox" name="isPinned" value="true"${article.isPinned ? " checked" : ""} />
           <span>Pin to AI chat — always include this article, whatever the question</span>
         </label>
@@ -86,9 +86,9 @@ export function renderWikiEditorPanel(options: WikiEditorPanelOptions): string {
         `,
       })}
 
-      <div class="wiki-editor__footer">
-        <button type="button" class="wiki-editor__save" data-wiki-save><i class="bi bi-save ui-icon" aria-hidden="true"></i><span>Save</span></button>
-        <span class="wiki-editor__status" data-wiki-status role="status" aria-live="polite">Last saved ${escapeHtml(formatTimestamp(article.updatedAt))}</span>
+      <div class="wiki-editor__footer flex items-center justify-end gap-12">
+        <button type="button" class="wiki-editor__save button-md" data-wiki-save><i class="bi bi-save ui-icon" aria-hidden="true"></i><span>Save</span></button>
+        <span class="wiki-editor__status text-ghost text-small" data-wiki-status role="status" aria-live="polite">Last saved ${escapeHtml(formatTimestamp(article.updatedAt))}</span>
       </div>
     </div>
   `;

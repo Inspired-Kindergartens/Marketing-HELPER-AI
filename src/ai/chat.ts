@@ -253,3 +253,11 @@ export function buildDeterministicChatAnswer(context: AiDashboardContext, prompt
     `${formatWaitlistTimingSentence(centre)} ${formatCampaignNextStep(centre)}`,
   ].join(" ");
 }
+
+// Help-knowledge retrieval runs on the question plus the previous user turn,
+// so a short follow-up like "and on mobile?" still finds the topic it follows.
+export function buildRetrievalQuery(prompt: string, history: AiChatHistoryMessageInput[] | undefined): string {
+  const previousUser = [...(history ?? [])].reverse().find((message) => message?.role === "user");
+  const previous = typeof previousUser?.content === "string" ? previousUser.content.slice(0, 500) : "";
+  return previous && prompt.length < 120 ? `${previous}\n${prompt}` : prompt;
+}

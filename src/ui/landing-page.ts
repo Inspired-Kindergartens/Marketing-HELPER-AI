@@ -1,5 +1,6 @@
 import type { TaskReminderFeed, TaskReminderView } from "../storage/task-store.js";
 import type { LandingIntelligenceFeed, LandingIntelligenceItem } from "../landing-intelligence.js";
+import { THEME_HEAD_SCRIPT, renderThemePicker } from "./theme.js";
 
 function escapeHtml(value: string) {
   return value
@@ -25,14 +26,14 @@ function renderReminderChecklist(reminder: TaskReminderView): string {
   const items = reminder.nextChecklist ?? [];
   if (items.length === 0) return "";
   return `
-      <ul class="landing-reminder__checklist" aria-label="Next checklist items">
+      <ul class="landing-reminder__checklist flex flex-col gap-6" aria-label="Next checklist items">
         ${items
           .map(
             (item) => `
-          <li class="landing-reminder__check${item.daysUntilDue != null && item.daysUntilDue < 0 ? " landing-reminder__check--overdue" : ""}">
+          <li class="landing-reminder__check grid${item.daysUntilDue != null && item.daysUntilDue < 0 ? " landing-reminder__check--overdue" : ""}">
             <i class="bi bi-square" aria-hidden="true"></i>
             <span class="landing-reminder__check-label">${escapeHtml(item.label)}</span>
-            ${item.daysUntilDue != null ? `<span class="landing-reminder__check-due">${escapeHtml(dueLabelFromDays(item.daysUntilDue))}</span>` : ""}
+            ${item.daysUntilDue != null ? `<span class="landing-reminder__check-due text-muted">${escapeHtml(dueLabelFromDays(item.daysUntilDue))}</span>` : ""}
           </li>`,
           )
           .join("")}
@@ -46,10 +47,10 @@ function renderReminderItem(reminder: TaskReminderView, overdue: boolean): strin
     .map((value) => escapeHtml(value))
     .join(" · ");
   return `
-    <a class="landing-reminder${overdue ? " landing-reminder--overdue" : ""}" href="/tasks?task=${reminder.id}">
-      <span class="landing-reminder__due">${escapeHtml(dueLabelFromDays(reminder.daysUntilDue))}</span>
-      <span class="landing-reminder__title">${escapeHtml(reminder.title)}</span>
-      ${meta ? `<span class="landing-reminder__meta">${meta}</span>` : ""}
+    <a class="landing-reminder flex flex-col gap-4 text-body${overdue ? " landing-reminder--overdue" : ""}" href="/tasks?task=${reminder.id}">
+      <span class="landing-reminder__due label-case text-muted">${escapeHtml(dueLabelFromDays(reminder.daysUntilDue))}</span>
+      <span class="landing-reminder__title font-strong text-strong">${escapeHtml(reminder.title)}</span>
+      ${meta ? `<span class="landing-reminder__meta text-muted">${meta}</span>` : ""}
       ${renderReminderChecklist(reminder)}
     </a>
   `;
@@ -60,10 +61,10 @@ function renderKtcaReminderItem(reminder: KtcaReminder): string {
     ? `Expired ${Math.abs(reminder.daysUntilExpiry)} day${Math.abs(reminder.daysUntilExpiry) === 1 ? "" : "s"} ago`
     : `Expires in ${reminder.daysUntilExpiry} day${reminder.daysUntilExpiry === 1 ? "" : "s"}`;
   return `
-    <a class="landing-reminder landing-reminder--overdue" href="/jd?panel=jd-settings">
-      <span class="landing-reminder__due">${escapeHtml(label)}</span>
-      <span class="landing-reminder__title">KTCA agreement needs updating</span>
-      <span class="landing-reminder__meta">Import the new Kindergarten Teachers Collective Agreement</span>
+    <a class="landing-reminder flex flex-col gap-4 text-body landing-reminder--overdue" href="/jd?panel=jd-settings">
+      <span class="landing-reminder__due label-case text-muted">${escapeHtml(label)}</span>
+      <span class="landing-reminder__title font-strong text-strong">KTCA agreement needs updating</span>
+      <span class="landing-reminder__meta text-muted">Import the new Kindergarten Teachers Collective Agreement</span>
     </a>
   `;
 }
@@ -95,10 +96,10 @@ function renderPostmarkAlert(alert: PostmarkAlert | null | undefined): string {
     alert.level === "red" ? "Postmark webhooks have stopped" : "Postmark webhooks look quiet";
   return `
     <section class="landing-alert landing-alert--${alert.level}" role="alert" aria-label="Postmark webhook alert">
-      <a class="landing-alert__link" href="/comms?panel=postmark">
+      <a class="landing-alert__link flex items-start gap-12" href="/comms?panel=postmark">
         <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
-        <span class="landing-alert__body">
-          <span class="landing-alert__heading">${escapeHtml(heading)}</span>
+        <span class="landing-alert__body flex flex-col">
+          <span class="landing-alert__heading font-strong">${escapeHtml(heading)}</span>
           <span class="landing-alert__detail">${escapeHtml(detail)} Check the Cloudflare tunnel and the Postmark webhook settings.</span>
         </span>
       </a>
@@ -119,9 +120,9 @@ function renderReminders(reminders: TaskReminderFeed | undefined, ktcaReminder?:
   const overdueCount = (reminders?.overdue.length ?? 0) + (ktcaReminder ? 1 : 0);
   const heading = overdueCount > 0 ? `${overdueCount} overdue · ${total} need attention` : `${total} due soon`;
   return `
-    <aside class="landing__reminders" aria-label="Task reminders">
-      <h2 class="landing-reminders__heading">${escapeHtml(heading)}</h2>
-      <div class="landing-reminders__list">${items}</div>
+    <aside class="landing__reminders flex flex-col gap-10" aria-label="Task reminders">
+      <h2 class="landing-reminders__heading font-strong label-case text-muted">${escapeHtml(heading)}</h2>
+      <div class="landing-reminders__list flex flex-col gap-10">${items}</div>
     </aside>
   `;
 }
@@ -150,23 +151,23 @@ function renderFeedItem(item: LandingIntelligenceItem) {
           ? "bi-info-circle"
           : "bi-newspaper";
   const body = `
-    <span class="landing-feed-item__icon"><i class="bi ${icon}" aria-hidden="true"></i></span>
-    <span class="landing-feed-item__content">
-      <span class="landing-feed-item__title">${escapeHtml(item.title)}</span>
-      <span class="landing-feed-item__meta">${escapeHtml(item.source)}${item.publishedAt ? ` · ${escapeHtml(formatFeedTime(item.publishedAt))}` : ""}</span>
+    <span class="landing-feed-item__icon inline-flex justify-center"><i class="bi ${icon}" aria-hidden="true"></i></span>
+    <span class="landing-feed-item__content min-w-0 flex items-center gap-8 nowrap">
+      <span class="landing-feed-item__title min-w-0 nowrap font-strong">${escapeHtml(item.title)}</span>
+      <span class="landing-feed-item__meta min-w-0 nowrap text-body">${escapeHtml(item.source)}${item.publishedAt ? ` · ${escapeHtml(formatFeedTime(item.publishedAt))}` : ""}</span>
     </span>
   `;
 
   if (item.href) {
     return `
-      <a class="landing-feed-item${item.urgent ? " landing-feed-item--urgent" : ""}" href="${escapeHtml(item.href)}" target="_blank" rel="noopener noreferrer" data-feed-href="${escapeHtml(item.href)}">
+      <a class="landing-feed-item min-w-0 flex items-center gap-8 text-body nowrap${item.urgent ? " landing-feed-item--urgent" : ""}" href="${escapeHtml(item.href)}" target="_blank" rel="noopener noreferrer" data-feed-href="${escapeHtml(item.href)}">
         ${body}
       </a>
     `;
   }
 
   return `
-    <div class="landing-feed-item${item.urgent ? " landing-feed-item--urgent" : ""}">
+    <div class="landing-feed-item min-w-0 flex items-center gap-8 text-body nowrap${item.urgent ? " landing-feed-item--urgent" : ""}">
       ${body}
     </div>
   `;
@@ -177,7 +178,7 @@ function renderSearchTextControls(searchTexts: string[]) {
     ? searchTexts
         .map(
           (text) => `
-            <li class="landing-feed-search__item">
+            <li class="landing-feed-search__item inline-flex items-center min-w-0 text-body text-small">
               <span>${escapeHtml(text)}</span>
               <button type="button" data-remove-landing-search-text="${escapeHtml(text)}" aria-label="Remove ${escapeHtml(text)}">
                 <i class="bi bi-x-lg" aria-hidden="true"></i>
@@ -186,16 +187,16 @@ function renderSearchTextControls(searchTexts: string[]) {
           `,
         )
         .join("")
-    : `<li class="landing-feed-search__empty">No extra search text saved</li>`;
+    : `<li class="landing-feed-search__empty text-muted text-small">No extra search text saved</li>`;
 
   return `
-    <div class="landing-feed-search" data-landing-search-panel hidden>
-      <form class="landing-feed-search__form" data-landing-search-form>
+    <div class="landing-feed-search grid gap-8" data-landing-search-panel hidden>
+      <form class="landing-feed-search__form grid gap-6" data-landing-search-form>
         <input type="text" name="text" maxlength="180" autocomplete="off" placeholder="Add search text" aria-label="Search text" required />
         <button type="submit" aria-label="Add search text"><i class="bi bi-plus-lg" aria-hidden="true"></i></button>
       </form>
-      <ul class="landing-feed-search__list" data-landing-search-list>${items}</ul>
-      <p class="landing-feed-search__status" data-landing-search-status aria-live="polite"></p>
+      <ul class="landing-feed-search__list flex flex-wrap gap-6" data-landing-search-list>${items}</ul>
+      <p class="landing-feed-search__status text-muted text-small" data-landing-search-status aria-live="polite"></p>
     </div>
   `;
 }
@@ -221,17 +222,17 @@ export function renderLandingIntelligenceFeed(feed: LandingIntelligenceFeed | un
   const searchTexts = feed?.searchTexts ?? [];
 
   return `
-    <section class="landing-feed" aria-label="Local intelligence feed" data-landing-feed>
-      <header class="landing-feed__header">
+    <section class="landing-feed grid gap-8 text-body" aria-label="Local intelligence feed" data-landing-feed>
+      <header class="landing-feed__header flex justify-between items-start gap-16">
         <div>
           <p class="landing-feed__meta">Updated ${escapeHtml(formatFeedTime(feed?.generatedAt ?? null))} · ${escapeHtml(statusLabel)}</p>
         </div>
-        <div class="landing-feed__actions">
-          <button type="button" class="landing-feed__copy" data-toggle-landing-search aria-expanded="false" aria-label="Open RSS search text">
+        <div class="landing-feed__actions flex flex-wrap justify-end gap-6">
+          <button type="button" class="landing-feed__copy text-small nowrap" data-toggle-landing-search aria-expanded="false" aria-label="Open RSS search text">
             <i class="bi bi-search" aria-hidden="true"></i>
             <span>Search text</span>
           </button>
-          <button type="button" class="landing-feed__copy" data-copy-landing-feed aria-label="Copy RSS feed to clipboard">
+          <button type="button" class="landing-feed__copy text-small nowrap" data-copy-landing-feed aria-label="Copy RSS feed to clipboard">
             <i class="bi bi-clipboard" aria-hidden="true"></i>
             <span>Copy to clipboard</span>
           </button>
@@ -240,7 +241,7 @@ export function renderLandingIntelligenceFeed(feed: LandingIntelligenceFeed | un
       ${renderSearchTextControls(searchTexts)}
       ${feed?.error ? `<p class="landing-feed__error">${escapeHtml(feed.error)}</p>` : ""}
       <div class="landing-feed__viewport" tabindex="0" aria-label="Scrolling local intelligence stories">
-        <div class="landing-feed__list landing-feed__list--scroll">
+        <div class="landing-feed__list grid landing-feed__list--scroll">
           ${[...items, ...items].map(renderFeedItem).join("")}
         </div>
       </div>
@@ -267,11 +268,12 @@ export function renderLandingPage(options: LandingPageOptions = {}) {
 
   const secondaryTiles = [
     { label: "Read Me", href: "/readme", external: false },
-    { label: "Upload Contacts", href: "/contacts/upload", external: false },
     { label: "Open Upscalar", href: "upscalar://open", external: false },
     { label: "SharePoint", href: "https://ikindergartens.sharepoint.com/", external: true },
     { label: "Website", href: "https://inspiredkindergartens.nz/admin/", external: true },
     { label: "Code Snippets", href: "/snippets", external: false },
+    { label: "Links", href: "/subscriptions", external: false },
+    { label: "Sector Insight", href: "/sector", external: false },
   ];
 
   const placeholderTiles: string[] = [];
@@ -281,7 +283,7 @@ export function renderLandingPage(options: LandingPageOptions = {}) {
   const secondaryTileRow = secondaryTiles
     .map(
       (tile) => `
-        <a class="landing-tile landing-tile--link" href="${escapeHtml(tile.href)}"${tile.external ? ' target="_blank" rel="noopener noreferrer"' : ""}>
+        <a class="landing-tile flex items-center justify-center text-muted label-case landing-tile--link" href="${escapeHtml(tile.href)}"${tile.external ? ' target="_blank" rel="noopener noreferrer"' : ""}>
           <span>${escapeHtml(tile.label)}</span>
         </a>
       `,
@@ -291,9 +293,9 @@ export function renderLandingPage(options: LandingPageOptions = {}) {
   const buttonRow = tiles
     .map(
       (tile) => `
-        <a class="landing-button${tile.primary ? " landing-button--primary" : ""}" href="${escapeHtml(tile.href)}">
-          <span class="landing-button__label">${escapeHtml(tile.label)}</span>
-          <span class="landing-button__description">${escapeHtml(tile.description)}</span>
+        <a class="landing-button flex flex-col gap-6 text-body${tile.primary ? " landing-button--primary" : ""}" href="${escapeHtml(tile.href)}">
+          <span class="landing-button__label font-strong text-strong">${escapeHtml(tile.label)}</span>
+          <span class="landing-button__description text-muted">${escapeHtml(tile.description)}</span>
         </a>
       `,
     )
@@ -308,47 +310,50 @@ export function renderLandingPage(options: LandingPageOptions = {}) {
     <link rel="icon" href="/favicon.ico" type="image/png" />
     <link rel="stylesheet" href="/vendor/bootstrap-icons.css" />
     <link rel="stylesheet" href="/app.css" />
+    <link rel="stylesheet" href="/themes.css" />
+    ${THEME_HEAD_SCRIPT}
   </head>
   <body class="landing-body">
     <div class="landing-layout${remindersHtml ? " landing-layout--with-sidebar" : ""}">
     <main class="landing">
       ${renderPostmarkAlert(options.postmarkAlert)}
-      <header class="landing__header">
-        <h1 class="landing__title">Marketing Helper AI</h1>
+      <header class="landing__header flex justify-center">
+        <h1 class="landing__title font-strong label-case text-strong">Marketing Helper AI</h1>
       </header>
       <video class="landing__hero" autoplay muted playsinline preload="auto" aria-hidden="true">
         <source src="/assets/beepbeep-intro.mp4" type="video/mp4" />
       </video>
-      <p class="landing__tagline">Local marketing &amp; enrolment intelligence for kindergartens.</p>
-      <nav class="landing__buttons" aria-label="Primary navigation">
+      <p class="landing__tagline text-muted">Local marketing &amp; enrolment intelligence for kindergartens.</p>
+      <nav class="landing__buttons grid" aria-label="Primary navigation">
         ${buttonRow}
       </nav>
-      <section class="landing__tiles" aria-label="Upcoming tools">
+      <section class="landing__tiles flex flex-wrap justify-center gap-12" aria-label="Upcoming tools">
         ${secondaryTileRow}
         ${placeholderTiles.join("")}
       </section>
       ${renderLandingIntelligenceFeed(options.intelligenceFeed)}
-      <footer class="landing__footer">
-        <button type="button" class="landing__restart" data-restart aria-label="Restart the server">
+      <footer class="landing__footer flex justify-center flex-wrap gap-12">
+        <a class="landing__github inline-flex items-center gap-8 text-muted" href="/contacts/upload">
+          <i class="bi bi-person-lines-fill" aria-hidden="true"></i>
+          <span>Upload Contacts</span>
+        </a>
+        <button type="button" class="landing__restart inline-flex items-center gap-8 text-muted" data-restart aria-label="Restart the server">
           <i class="bi bi-arrow-clockwise" aria-hidden="true"></i>
           <span class="landing__restart-label">Restart server</span>
         </button>
-        ${(options.intelligenceFeed?.aiModel?.isUpgrade ?? true) ? `<button type="button" class="landing__restart" data-update-ai-model aria-label="Update the local AI model">
+        ${(options.intelligenceFeed?.aiModel?.isUpgrade ?? true) ? `<button type="button" class="landing__restart inline-flex items-center gap-8 text-muted" data-update-ai-model aria-label="Update the local AI model">
           <i class="bi bi-cpu" aria-hidden="true"></i>
           <span class="landing__update-ai-label">Update AI model</span>
         </button>` : ""}
-        <button type="button" class="landing__restart" data-rollback-ai-model aria-label="Rollback the local AI model"${options.intelligenceFeed?.aiModel?.fallbackModel ? "" : " disabled"}>
+        <button type="button" class="landing__restart inline-flex items-center gap-8 text-muted" data-rollback-ai-model aria-label="Rollback the local AI model"${options.intelligenceFeed?.aiModel?.fallbackModel ? "" : " disabled"}>
           <i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i>
           <span class="landing__rollback-ai-label">Rollback AI model</span>
         </button>
-        <button type="button" class="landing__restart" data-delete-ai-rollback aria-label="Delete the older rollback AI model"${options.intelligenceFeed?.aiModel?.secondaryFallbackModel ? "" : " disabled"}>
-          <i class="bi bi-trash3" aria-hidden="true"></i>
-          <span class="landing__delete-ai-label">Delete old fallback</span>
-        </button>
-        <a class="landing__github" href="https://github.com/Inspired-Kindergartens/Marketing-HELPER-AI" target="_blank" rel="noopener noreferrer">
+        <a class="landing__github inline-flex items-center gap-8 text-muted" href="https://github.com/Inspired-Kindergartens/Marketing-HELPER-AI" target="_blank" rel="noopener noreferrer">
           <i class="bi bi-github" aria-hidden="true"></i>
           <span>View on GitHub</span>
         </a>
+        ${renderThemePicker()}
       </footer>
     </main>
     ${remindersHtml}
@@ -431,14 +436,6 @@ export function renderLandingPage(options: LandingPageOptions = {}) {
           "/actions/rollback-ai-model",
           "Rolling back...",
           "Rolled back"
-        );
-        bindAction(
-          "[data-delete-ai-rollback]",
-          ".landing__delete-ai-label",
-          "Delete the older secondary fallback model from Ollama? The active rollback fallback will be kept.",
-          "/actions/delete-ai-rollback-model",
-          "Deleting...",
-          "Delete started"
         );
       })();
       (function () {
@@ -567,8 +564,7 @@ export function renderLandingPage(options: LandingPageOptions = {}) {
           var textarea = document.createElement("textarea");
           textarea.value = text;
           textarea.setAttribute("readonly", "");
-          textarea.style.position = "fixed";
-          textarea.style.top = "-1000px";
+          textarea.className = "clipboard-buffer";
           document.body.appendChild(textarea);
           textarea.select();
           var copied = document.execCommand("copy");
@@ -578,8 +574,7 @@ export function renderLandingPage(options: LandingPageOptions = {}) {
         function copyHtmlFallback(html) {
           var container = document.createElement("div");
           container.contentEditable = "true";
-          container.style.position = "fixed";
-          container.style.top = "-1000px";
+          container.className = "clipboard-buffer";
           container.innerHTML = html;
           document.body.appendChild(container);
           var range = document.createRange();

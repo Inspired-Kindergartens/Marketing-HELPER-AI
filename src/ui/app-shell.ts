@@ -12,6 +12,7 @@ import type {
   GoogleAnalyticsPageSnapshotView,
 } from "../storage/google-analytics-store.js";
 import type { MetaAdsDashboardData } from "../storage/meta-store.js";
+import { renderChatSourcesFunction } from "./chat-sources-script.js";
 import type {
   MetaNotificationHistoryPage,
   MetaNotificationHistoryRow,
@@ -25,6 +26,7 @@ import {
 } from "../analytics/waitlist-profile.js";
 import { calculateUrgencyScore, determineUrgencyBand } from "../analytics/compute.js";
 import { renderLayout } from "./layout.js";
+import { THEME_HEAD_SCRIPT } from "./theme.js";
 
 type AnalyticsRow = NonNullable<LatestSnapshotSet>["snapshots"][number];
 type ServiceSort = "critical" | "asc" | "desc";
@@ -137,9 +139,9 @@ function escapeHtml(value: string) {
 
 function renderInfoTooltip(content: string, label = "More information", placement: "start" | "end" = "end") {
   return `
-    <span class="ui-info-tooltip ui-info-tooltip--${placement}" tabindex="0" aria-label="${escapeHtml(label)}">
+    <span class="ui-info-tooltip inline-flex items-center justify-center text-muted ui-info-tooltip--${placement}" tabindex="0" aria-label="${escapeHtml(label)}">
       <i class="bi bi-info-circle ui-info-tooltip__icon" aria-hidden="true"></i>
-      <span class="ui-info-tooltip__content" role="tooltip">${escapeHtml(content)}</span>
+      <span class="ui-info-tooltip__content text-body" role="tooltip">${escapeHtml(content)}</span>
     </span>
   `;
 }
@@ -919,14 +921,14 @@ type WaitlistHierarchyRow = {
 
 function renderWaitlistChart(chartId: string, config: WaitlistChartConfig | null, emptyText: string) {
   if (!config || config.labels.length === 0) {
-    return `<p class="waitlist-chart__empty">${escapeHtml(emptyText)}</p>`;
+    return `<p class="waitlist-chart__empty text-ghost">${escapeHtml(emptyText)}</p>`;
   }
 
   const chartClass = chartId.startsWith("waitlist-recent-") ? " waitlist-chart--recent-demand" : "";
 
   return `
-    <div class="waitlist-chart${chartClass}">
-      <div class="waitlist-chart__canvas-wrap" style="--waitlist-chart-rows: ${config.labels.length}">
+    <div class="waitlist-chart flex flex-col gap-8${chartClass}">
+      <div class="waitlist-chart__canvas-wrap" data-chart-rows="${config.labels.length}">
         <canvas id="${escapeHtml(chartId)}"></canvas>
       </div>
       <script type="application/json" data-waitlist-chart="${escapeHtml(chartId)}">${serializeJsonForScript(config)}</script>
@@ -1076,12 +1078,12 @@ function renderWaitlistAgeProfileTable(report: WaitlistDiscoveryReport) {
   const rows = report.ageProfileByThreshold;
 
   if (rows.length === 0) {
-    return `<p class="waitlist-chart__empty">Refresh the waitlist report to show DOB profile by wait category.</p>`;
+    return `<p class="waitlist-chart__empty text-ghost">Refresh the waitlist report to show DOB profile by wait category.</p>`;
   }
 
   return `
-    <div class="waitlist-table-wrap waitlist-age-profile-table-wrap">
-      <table class="waitlist-table waitlist-age-profile-table">
+    <div class="waitlist-table-wrap table-frame table-frame--scroll waitlist-age-profile-table-wrap">
+      <table class="waitlist-table data-table waitlist-age-profile-table">
         <thead>
           <tr>
             <th>Wait category</th>
@@ -1184,20 +1186,20 @@ function renderThresholdChart(
   const longPercent = total > 0 ? Math.max(0, 100 - goodPercent) : 0;
 
   return `
-    <div class="waitlist-threshold-state">
-      <div class="waitlist-threshold-state__bars" aria-label="Current aggregate waitlist split">
-        <div class="waitlist-threshold-state__track">
-          <span class="waitlist-threshold-state__bar waitlist-threshold-state__bar--good" style="width: ${goodPercent}%"></span>
-          <span class="waitlist-threshold-state__bar waitlist-threshold-state__bar--long" style="width: ${longPercent}%"></span>
+    <div class="waitlist-threshold-state grid gap-12">
+      <div class="waitlist-threshold-state__bars grid gap-8" aria-label="Current aggregate waitlist split">
+        <div class="waitlist-threshold-state__track flex">
+          <span class="waitlist-threshold-state__bar min-w-0 waitlist-threshold-state__bar--good" data-percent="${goodPercent}"></span>
+          <span class="waitlist-threshold-state__bar min-w-0 waitlist-threshold-state__bar--long" data-percent="${longPercent}"></span>
         </div>
-        <div class="waitlist-threshold-state__legend">
+        <div class="waitlist-threshold-state__legend flex flex-wrap text-ghost text-small">
           <span><i class="waitlist-threshold-state__swatch waitlist-threshold-state__swatch--good"></i>&lt;163 ${good}/${total}</span>
           <span><i class="waitlist-threshold-state__swatch waitlist-threshold-state__swatch--long"></i>163+ ${longRunning}/${total}</span>
         </div>
       </div>
-      <div class="waitlist-threshold-state__body">
+      <div class="waitlist-threshold-state__body grid gap-10">
         <p>Per-centre distribution bars need the threshold columns from the waitlist pull.</p>
-        <div class="waitlist-threshold-state__required">
+        <div class="waitlist-threshold-state__required grid gap-6">
           <span>Short wait: 0-76 days</span>
           <span>Typical wait: 77-370 days</span>
           <span>Long-running wait: 371-537 days</span>
@@ -1225,12 +1227,12 @@ function renderWaitlistHierarchyTable(rows: WaitlistHierarchyRow[], showAllRows:
   const visibleRows = showAllRows ? sortedRows : sortedRows.slice(0, 8);
 
   if (visibleRows.length === 0) {
-    return `<p class="waitlist-chart__empty">No waitlist hierarchy rows stored.</p>`;
+    return `<p class="waitlist-chart__empty text-ghost">No waitlist hierarchy rows stored.</p>`;
   }
 
   return `
-    <div class="waitlist-table-wrap">
-      <table class="waitlist-table">
+    <div class="waitlist-table-wrap table-frame table-frame--scroll">
+      <table class="waitlist-table data-table">
         <thead>
           <tr>
             <th>Centre</th>
@@ -1308,9 +1310,9 @@ function renderRecentDemandPanel(
   };
 
   return `
-    <section class="waitlist-quality__section waitlist-quality__section--wide waitlist-quality__section--recent">
-      <h3>Recent Demand Activity</h3>
-      <div class="recent-demand-grid">
+    <section class="waitlist-quality__section flex flex-col gap-8 card waitlist-quality__section--wide waitlist-quality__section--recent">
+      <h3 class="section-title">Recent Demand Activity</h3>
+      <div class="recent-demand-grid grid gap-10">
         <section>
           <h4>Last Month</h4>
           ${renderWaitlistChart("waitlist-recent-month-chart", buildRecentDemandChartConfig(limitRows(recentDemand.lastMonth)), "No last-month recent demand rows stored.")}
@@ -1368,8 +1370,8 @@ function renderWaitlistSectionHeader(
     : "";
 
   return `
-    <div class="waitlist-quality__section-header">
-      <h3>${escapeHtml(title)}</h3>
+    <div class="waitlist-quality__section-header flex items-center justify-between gap-8">
+      <h3 class="section-title">${escapeHtml(title)}</h3>
       ${button}
     </div>
   `;
@@ -1395,12 +1397,12 @@ function renderCompactStat(
   placement: "start" | "end" = "end",
 ) {
   return `
-    <div class="compact-stats__item">
-      <span class="compact-stats__label">
+    <div class="compact-stats__item grid gap-6 card">
+      <span class="compact-stats__label inline-flex items-center min-w-0 text-small text-ghost label-case">
         <span>${escapeHtml(label)}</span>
         ${renderInfoTooltip(info, `${label} information`, placement)}
       </span>
-      <span class="compact-stats__value">${escapeHtml(value)}</span>
+      <span class="compact-stats__value text-strong">${escapeHtml(value)}</span>
     </div>
   `;
 }
@@ -1418,13 +1420,13 @@ function renderWaitlistReportPanel(
   const over163Count = Math.max(totalWaitlistCount - under163Count, 0);
   const distributionRows = buildWaitlistAgeCategoryRows(report);
   const thresholdSection = `
-    <section class="waitlist-quality__section">
+    <section class="waitlist-quality__section flex flex-col gap-8 card">
       ${renderWaitlistSectionHeader("Waitlist by Distribution Days", selectedCentreKey, selectedWindowKey, serviceSort, "threshold", false)}
       ${renderThresholdChart(report, showAllRows, selectedCentreKey, selectedWindowKey, serviceSort)}
     </section>
   `;
   const hierarchySection = `
-    <section class="waitlist-quality__section">
+    <section class="waitlist-quality__section flex flex-col gap-8 card">
       ${renderWaitlistSectionHeader("Waitlist Quality Hierarchy", selectedCentreKey, selectedWindowKey, serviceSort, "hierarchy", false)}
       ${renderLongRunningTable(report, showAllRows)}
     </section>
@@ -1437,20 +1439,20 @@ function renderWaitlistReportPanel(
         : `
           ${thresholdSection}
           ${hierarchySection}
-          <section class="waitlist-quality__section">
-            <h3>Waitlist Age Distribution</h3>
+          <section class="waitlist-quality__section flex flex-col gap-8 card">
+            <h3 class="section-title">Waitlist Age Distribution</h3>
             ${renderWaitlistChart("waitlist-distribution-chart", buildWaitlistAgeDistributionChartConfig(distributionRows), "No distribution rows stored.")}
           </section>
-          <section class="waitlist-quality__section">
-            <h3>DOB Profile By Wait Category</h3>
+          <section class="waitlist-quality__section flex flex-col gap-8 card">
+            <h3 class="section-title">DOB Profile By Wait Category</h3>
             ${renderWaitlistAgeProfileTable(report)}
           </section>
           ${renderRecentDemandPanel(report, showAllRows)}
         `;
 
   return `
-    <div class="waitlist-quality${waitlistSection ? " waitlist-quality--section-focus" : ""}">
-      <div class="waitlist-quality__stats">
+    <div class="waitlist-quality grid gap-10${waitlistSection ? " waitlist-quality--section-focus" : ""}">
+      <div class="waitlist-quality__stats grid gap-8">
         ${renderCompactStat("<163d/Total", `${under163Count}/${totalWaitlistCount}`, waitlistQualityStatInfo.under163, "start")}
         ${renderCompactStat("163+d/Total", `${over163Count}/${totalWaitlistCount}`, waitlistQualityStatInfo.over163, "start")}
         ${
@@ -1466,7 +1468,7 @@ function renderWaitlistReportPanel(
         ${renderCompactStat("Oldest", `${report.oldestDays ?? 0}d`, waitlistQualityStatInfo.oldest)}
         ${renderCompactStat("Median", formatAverageDays(report.medianDays), waitlistQualityStatInfo.median)}
       </div>
-      <div class="waitlist-quality__grid">
+      <div class="waitlist-quality__grid grid gap-10">
         ${waitlistBody}
       </div>
     </div>
@@ -1508,13 +1510,13 @@ function renderWaitlistQualityPanel(
     .sort((left, right) => right.value - left.value)
     .slice(0, 8);
   const thresholdSection = `
-    <section class="waitlist-quality__section">
+    <section class="waitlist-quality__section flex flex-col gap-8 card">
       ${renderWaitlistSectionHeader("Waitlist by Distribution Days", selectedCentreKey, selectedWindowKey, serviceSort, "threshold", false)}
       ${renderWaitlistChart("waitlist-threshold-chart", buildFallbackThresholdChartConfig(rows, showAllRows), "No waitlist rows stored.")}
     </section>
   `;
   const hierarchySection = `
-    <section class="waitlist-quality__section">
+    <section class="waitlist-quality__section flex flex-col gap-8 card">
       ${renderWaitlistSectionHeader("Waitlist Quality Hierarchy", selectedCentreKey, selectedWindowKey, serviceSort, "hierarchy", false)}
       ${renderWaitlistHierarchyTable(
         rows.map((row) => ({
@@ -1535,8 +1537,8 @@ function renderWaitlistQualityPanel(
         : `
           ${thresholdSection}
           ${hierarchySection}
-          <section class="waitlist-quality__section">
-            <h3>Waitlist Age Distribution</h3>
+          <section class="waitlist-quality__section flex flex-col gap-8 card">
+            <h3 class="section-title">Waitlist Age Distribution</h3>
             ${renderWaitlistChart("waitlist-older-children-chart", buildSimpleChartConfig("doughnut", olderChildRows), "No older-child waitlist rows stored.")}
           </section>
           ${renderRecentDemandPanel(null, showAllRows)}
@@ -1544,22 +1546,22 @@ function renderWaitlistQualityPanel(
 
   if (rows.length === 0) {
     return `
-      <div class="waitlist-quality waitlist-quality--empty">
+      <div class="waitlist-quality grid gap-10 waitlist-quality--empty">
         <p>No stored waitlist analytics are available yet.</p>
       </div>
     `;
   }
 
   return `
-    <div class="waitlist-quality${waitlistSection ? " waitlist-quality--section-focus" : ""}">
-      <div class="waitlist-quality__stats">
+    <div class="waitlist-quality grid gap-10${waitlistSection ? " waitlist-quality--section-focus" : ""}">
+      <div class="waitlist-quality__stats grid gap-8">
         ${renderCompactStat("<163d/Total", `${under163Count}/${totalWaitlistCount}`, waitlistQualityStatInfo.under163, "start")}
         ${renderCompactStat("163+d/Total", `${over163Count}/${totalWaitlistCount}`, waitlistQualityStatInfo.over163, "start")}
         ${renderCompactStat("Starting date", "snapshot", waitlistQualityStatInfo.startingDate, "start")}
         ${renderCompactStat("Oldest", `${oldestEntryDays}d`, waitlistQualityStatInfo.oldest)}
         ${renderCompactStat("Median", "-", waitlistQualityStatInfo.median)}
       </div>
-      <div class="waitlist-quality__grid">
+      <div class="waitlist-quality__grid grid gap-10">
         ${waitlistBody}
       </div>
     </div>
@@ -1650,7 +1652,7 @@ function renderAnalyticsToolbarActions(
   const descSortHref = `/app?${buildQueryString(selectedCentreValue, selectedWindowKey, "desc")}`;
 
   return `
-    <div class="analytics-toolbar__actions">
+    <div class="analytics-toolbar__actions flex flex-wrap gap-4 items-center">
       <a
         class="analytics-toolbar__icon-action"
         href="/app?${buildQueryString(selectedCentreValue, "3M", "critical")}"
@@ -1922,7 +1924,7 @@ const analyticsColumnInfo = {
 } as const;
 
 function renderAnalyticsHeaderLabel(label: string, info: string, placement: "start" | "end" = "end") {
-  return `<span class="analytics-table__heading-label"><span>${escapeHtml(label)}</span>${renderInfoTooltip(info, `${label} column information`, placement)}</span>`;
+  return `<span class="analytics-table__heading-label inline-flex items-center"><span>${escapeHtml(label)}</span>${renderInfoTooltip(info, `${label} column information`, placement)}</span>`;
 }
 
 function renderAnalyticsTable(
@@ -1951,23 +1953,23 @@ function renderAnalyticsTable(
         const centreCoverage = coverage.get(row.centreKey);
         const metaMessage = `${row.serviceName}: ${openPlaces} open, ${actionableWaitlist}/${row.waitlistCount} actionable waitlist, ${replacementPressure} pressure, ${centreCoverage?.activeCampaignCount ?? 0} active campaigns, ${formatMoney(centreCoverage?.spend30d ?? 0)} spend.`;
         const emailAction = contact
-          ? `<a class="analytics-table__email-action" ${renderMetaEmailActionAttributes(contact, row, notificationId)} href="${escapeHtml(buildMetaInitiateEmailHref(contact))}" title="Email centre about a Facebook advert" aria-label="Email ${escapeHtml(row.serviceName)} about a Facebook advert"><i class="bi bi-envelope ui-icon" aria-hidden="true"></i></a>`
+          ? `<a class="analytics-table__email-action inline-flex items-center justify-center" ${renderMetaEmailActionAttributes(contact, row, notificationId)} href="${escapeHtml(buildMetaInitiateEmailHref(contact))}" title="Email centre about a Facebook advert" aria-label="Email ${escapeHtml(row.serviceName)} about a Facebook advert"><i class="bi bi-envelope ui-icon" aria-hidden="true"></i></a>`
           : "";
-        const noteAction = `<button type="button" class="analytics-table__note-action" data-analytics-meta-note data-notification-id="${escapeHtml(notificationId)}" data-centre-key="${row.centreKey}" data-window-key="${escapeHtml(selectedWindowKey)}" data-meta-history-heading="${escapeHtml(recommendation)}" data-meta-history-message="${escapeHtml(metaMessage)}" data-centre-name="${escapeHtml(row.serviceName)}" data-open-places="${openPlaces}" data-actionable-waitlist="${actionableWaitlist}" data-waitlist-count="${row.waitlistCount}" data-replacement-pressure="${replacementPressure}" data-active-campaign-count="${centreCoverage?.activeCampaignCount ?? 0}" data-spend-30d="${centreCoverage?.spend30d ?? 0}" title="Add Meta Ads note" aria-label="Add Meta Ads note for ${escapeHtml(row.serviceName)}"><i class="bi bi-journal-plus ui-icon" aria-hidden="true"></i></button>`;
+        const noteAction = `<button type="button" class="analytics-table__note-action inline-flex items-center justify-center" data-analytics-meta-note data-notification-id="${escapeHtml(notificationId)}" data-centre-key="${row.centreKey}" data-window-key="${escapeHtml(selectedWindowKey)}" data-meta-history-heading="${escapeHtml(recommendation)}" data-meta-history-message="${escapeHtml(metaMessage)}" data-centre-name="${escapeHtml(row.serviceName)}" data-open-places="${openPlaces}" data-actionable-waitlist="${actionableWaitlist}" data-waitlist-count="${row.waitlistCount}" data-replacement-pressure="${replacementPressure}" data-active-campaign-count="${centreCoverage?.activeCampaignCount ?? 0}" data-spend-30d="${centreCoverage?.spend30d ?? 0}" title="Add Meta Ads note" aria-label="Add Meta Ads note for ${escapeHtml(row.serviceName)}"><i class="bi bi-journal-plus ui-icon" aria-hidden="true"></i></button>`;
 
         return `
         <tr class="${row.centreKey === selectedCentreKey ? "analytics-table__row--selected analytics-table__row--clickable" : "analytics-table__row--clickable"}" data-row-href="/app?${buildQueryString(row.centreKey, selectedWindowKey, serviceSort)}">
-          <td class="analytics-table__service">
+          <td class="analytics-table__service text-strong nowrap">
             <span title="${escapeHtml(row.serviceName)}">${escapeHtml(formatAnalyticsServiceDisplayName(row.serviceName))}</span>
           </td>
-          <td class="analytics-table__numeric">${formatEnrolmentCapacity(row)}</td>
-          <td class="analytics-table__numeric">${formatEstimatedPlaces(row)}</td>
-          <td class="analytics-table__numeric">${formatAgeBandCapacity(row.enrolledUnder2Count, row.licensedUnder2Capacity)}</td>
-          <td class="analytics-table__numeric">${formatAgeBandCapacity(row.enrolledOver2Count, row.licensedOver2Capacity)}</td>
-          <td class="analytics-table__numeric">${formatWaitlistCoverage(row)}</td>
-          <td class="analytics-table__numeric">${row.agedOutCount}</td>
-          <td class="analytics-table__numeric">${getScopedApproachingFiveCount(row, selectedWindowKey)}</td>
-          <td class="analytics-table__numeric">${getScopedKnownLeavingCount(row, selectedWindowKey)}</td>
+          <td class="analytics-table__numeric data-table__numeric">${formatEnrolmentCapacity(row)}</td>
+          <td class="analytics-table__numeric data-table__numeric">${formatEstimatedPlaces(row)}</td>
+          <td class="analytics-table__numeric data-table__numeric">${formatAgeBandCapacity(row.enrolledUnder2Count, row.licensedUnder2Capacity)}</td>
+          <td class="analytics-table__numeric data-table__numeric">${formatAgeBandCapacity(row.enrolledOver2Count, row.licensedOver2Capacity)}</td>
+          <td class="analytics-table__numeric data-table__numeric">${formatWaitlistCoverage(row)}</td>
+          <td class="analytics-table__numeric data-table__numeric">${row.agedOutCount}</td>
+          <td class="analytics-table__numeric data-table__numeric">${getScopedApproachingFiveCount(row, selectedWindowKey)}</td>
+          <td class="analytics-table__numeric data-table__numeric">${getScopedKnownLeavingCount(row, selectedWindowKey)}</td>
           <td class="analytics-table__action">${noteAction}</td>
           <td class="analytics-table__action">${emailAction}</td>
         </tr>
@@ -1979,19 +1981,19 @@ function renderAnalyticsTable(
     rows ||
     `
       <tr>
-        <td colspan="11" class="analytics-table__empty">No analytics snapshot rows are available yet.</td>
+        <td colspan="11" class="analytics-table__empty text-empty">No analytics snapshot rows are available yet.</td>
       </tr>
     `;
 
   return `
-    <div class="analytics-table-shell">
-      <div class="analytics-table-wrap">
-        <table class="analytics-table">
+    <div class="analytics-table-shell grid gap-12">
+      <div class="analytics-table-wrap table-frame table-frame--scroll">
+        <table class="analytics-table data-table">
           <thead>
             <tr>
               <th>
                 <div class="analytics-table__service-header">
-                  <span class="analytics-table__service-heading">
+                  <span class="analytics-table__service-heading inline-flex items-center">
                     <a class="analytics-table__sort-link${serviceSort === "critical" ? " analytics-table__sort-link--active" : ""}" href="${criticalSortHref}">Service</a>
                     ${renderInfoTooltip(analyticsColumnInfo.service, "Service column information", "start")}
                   </span>
@@ -2001,14 +2003,14 @@ function renderAnalyticsTable(
                   </span>
                 </div>
               </th>
-              <th class="analytics-table__numeric">${renderAnalyticsHeaderLabel("ENROL/MAX", analyticsColumnInfo.enrolMax, "start")}</th>
-              <th class="analytics-table__numeric">${renderAnalyticsHeaderLabel("EST", analyticsColumnInfo.est, "start")}</th>
-              <th class="analytics-table__numeric">${renderAnalyticsHeaderLabel("U2", analyticsColumnInfo.u2, "start")}</th>
-              <th class="analytics-table__numeric">${renderAnalyticsHeaderLabel("O2", analyticsColumnInfo.o2, "start")}</th>
-              <th class="analytics-table__numeric">${renderAnalyticsHeaderLabel("Waitlist", analyticsColumnInfo.waitlist)}</th>
-              <th class="analytics-table__numeric">${renderAnalyticsHeaderLabel("Age 5+", analyticsColumnInfo.age5)}</th>
-              <th class="analytics-table__numeric">${renderAnalyticsHeaderLabel("Near 5", analyticsColumnInfo.near5)}</th>
-              <th class="analytics-table__numeric">${renderAnalyticsHeaderLabel("Leaving", analyticsColumnInfo.leaving)}</th>
+              <th class="analytics-table__numeric data-table__numeric">${renderAnalyticsHeaderLabel("ENROL/MAX", analyticsColumnInfo.enrolMax, "start")}</th>
+              <th class="analytics-table__numeric data-table__numeric">${renderAnalyticsHeaderLabel("EST", analyticsColumnInfo.est, "start")}</th>
+              <th class="analytics-table__numeric data-table__numeric">${renderAnalyticsHeaderLabel("U2", analyticsColumnInfo.u2, "start")}</th>
+              <th class="analytics-table__numeric data-table__numeric">${renderAnalyticsHeaderLabel("O2", analyticsColumnInfo.o2, "start")}</th>
+              <th class="analytics-table__numeric data-table__numeric">${renderAnalyticsHeaderLabel("Waitlist", analyticsColumnInfo.waitlist)}</th>
+              <th class="analytics-table__numeric data-table__numeric">${renderAnalyticsHeaderLabel("Age 5+", analyticsColumnInfo.age5)}</th>
+              <th class="analytics-table__numeric data-table__numeric">${renderAnalyticsHeaderLabel("Near 5", analyticsColumnInfo.near5)}</th>
+              <th class="analytics-table__numeric data-table__numeric">${renderAnalyticsHeaderLabel("Leaving", analyticsColumnInfo.leaving)}</th>
               <th class="analytics-table__action">${renderAnalyticsHeaderLabel("Note", analyticsColumnInfo.note)}</th>
               <th class="analytics-table__action">${renderAnalyticsHeaderLabel("Email", analyticsColumnInfo.email)}</th>
             </tr>
@@ -2027,18 +2029,18 @@ function renderCompactStats(snapshotSet: LatestSnapshotSet | null, selectedWindo
     0;
 
   return `
-    <div class="compact-stats">
-      <div class="compact-stats__item">
-        <span class="compact-stats__label">Rows</span>
-        <span class="compact-stats__value">${rowCount}</span>
+    <div class="compact-stats grid gap-8">
+      <div class="compact-stats__item grid gap-6 card">
+        <span class="compact-stats__label inline-flex items-center min-w-0 text-small text-ghost label-case">Rows</span>
+        <span class="compact-stats__value text-strong">${rowCount}</span>
       </div>
-      <div class="compact-stats__item">
-        <span class="compact-stats__label">Selected Window</span>
-        <span class="compact-stats__value">${getWindowOption(selectedWindowKey).label}</span>
+      <div class="compact-stats__item grid gap-6 card">
+        <span class="compact-stats__label inline-flex items-center min-w-0 text-small text-ghost label-case">Selected Window</span>
+        <span class="compact-stats__value text-strong">${getWindowOption(selectedWindowKey).label}</span>
       </div>
-      <div class="compact-stats__item">
-        <span class="compact-stats__label">Waitlist + Space</span>
-        <span class="compact-stats__value">${dualPathCount}</span>
+      <div class="compact-stats__item grid gap-6 card">
+        <span class="compact-stats__label inline-flex items-center min-w-0 text-small text-ghost label-case">Waitlist + Space</span>
+        <span class="compact-stats__value text-strong">${dualPathCount}</span>
       </div>
     </div>
   `;
@@ -2057,8 +2059,8 @@ function renderSelectedCentreNarrative(
 
   if (!selectedRow) {
     return `
-      <div class="chat-message">
-        <span class="chat-message__role">Beep Beep</span>
+      <div class="chat-message text-body">
+        <span class="chat-message__role text-small text-ghost label-case">Beep Beep</span>
         <p>No snapshot row selected yet. Choose a centre from the analytics table to see a plain-language summary here.</p>
       </div>
     `;
@@ -2076,9 +2078,9 @@ function renderSelectedCentreNarrative(
   const supportingGuidance = `Latest stored snapshot: <strong>${snapshotSet ? formatTimestamp(snapshotSet.createdAt) : "Pending"}</strong>`;
 
   return `
-    <div class="chat-message">
+    <div class="chat-message text-body">
       <p class="chat-message__guidance-summary">${[openingNarrative, ...primaryGuidanceItems].join(" ")}</p>
-      <p class="chat-message__guidance-support">${supportingGuidance}</p>
+      <p class="chat-message__guidance-support text-ghost text-small">${supportingGuidance}</p>
       ${renderLatestMetaRecommendationNotesForChat(latestMetaRecommendationNotesForCentre)}
     </div>
   `;
@@ -2124,7 +2126,7 @@ function renderAiChatPanel(
     "";
 
   return `
-    <div class="chat-shell" data-ai-chat data-centre-key="${escapeHtml(String(resolvedSelectedCentreKey))}" data-window-key="${escapeHtml(selectedWindowKey)}">
+    <div class="chat-shell grid gap-8" data-ai-chat data-centre-key="${escapeHtml(String(resolvedSelectedCentreKey))}" data-window-key="${escapeHtml(selectedWindowKey)}">
       <div class="chat-shell__messages">
         ${renderSelectedCentreNarrative(
           snapshotSet,
@@ -2137,9 +2139,9 @@ function renderAiChatPanel(
         )}
       </div>
       <div class="chat-shell__composer">
-        <label class="chat-shell__prompt-label" for="chat-prompt">Prompt</label>
+        <label class="chat-shell__prompt-label text-small text-ghost label-case" for="chat-prompt">Prompt</label>
         <textarea id="chat-prompt" class="chat-shell__prompt-input" placeholder="Ask about centre demand, adverts, waitlist quality, or next actions."></textarea>
-        <button class="chat-shell__send" type="button" data-ai-chat-send><i class="bi bi-send ui-icon" aria-hidden="true"></i><span>Send</span></button>
+        <button class="chat-shell__send inline-flex items-center justify-center gap-6" type="button" data-ai-chat-send><i class="bi bi-send ui-icon" aria-hidden="true"></i><span>Send</span></button>
       </div>
     </div>
   `;
@@ -2155,6 +2157,7 @@ function renderAiChatScript() {
           return;
         }
 
+        ${renderChatSourcesFunction()}
         const messages = shell.querySelector(".chat-shell__messages");
         const promptInput = shell.querySelector("#chat-prompt");
         const sendButton = shell.querySelector("[data-ai-chat-send]");
@@ -2170,7 +2173,7 @@ function renderAiChatScript() {
         function appendMessage(role, text, state) {
           const message = document.createElement("div");
           const roleKey = role === "Beep Beep" ? "assistant" : role.toLowerCase();
-          message.className = "chat-message chat-message--" + roleKey;
+          message.className = "chat-message text-body chat-message--" + roleKey;
           message.dataset.messageRole = roleKey;
 
           if (state) {
@@ -2178,7 +2181,7 @@ function renderAiChatScript() {
           }
 
           const roleLabel = document.createElement("span");
-          roleLabel.className = "chat-message__role";
+          roleLabel.className = "chat-message__role text-small text-ghost label-case";
           roleLabel.textContent = role;
 
           const body = document.createElement("p");
@@ -2254,6 +2257,7 @@ function renderAiChatScript() {
           let buffer = "";
           let answer = "";
           let hasStarted = false;
+          let sources = [];
 
           while (true) {
             const result = await reader.read();
@@ -2279,6 +2283,10 @@ function renderAiChatScript() {
                 throw new Error(payload.error || "AI request failed.");
               }
 
+              if (parsed.event === "sources") {
+                sources = payload.sources || [];
+              }
+
               if (parsed.event === "chunk") {
                 answer += payload.chunk || "";
                 bodyElement.textContent = answer;
@@ -2289,6 +2297,7 @@ function renderAiChatScript() {
             }
           }
 
+          if (hasStarted) renderChatSources(bodyElement, sources);
           return hasStarted ? answer.trim() : "";
         }
 
@@ -2431,7 +2440,7 @@ function renderMetaCoverageRows(
   if ((snapshotSet?.snapshots ?? []).length === 0) {
     return `
       <tr>
-        <td colspan="9" class="meta-ads-table__empty">Refresh Infocare analytics before comparing centre demand with Meta advertising coverage.</td>
+        <td colspan="9" class="meta-ads-table__empty text-ghost">Refresh Infocare analytics before comparing centre demand with Meta advertising coverage.</td>
       </tr>
     `;
   }
@@ -2439,7 +2448,7 @@ function renderMetaCoverageRows(
   if (rows.length === 0) {
     return `
       <tr>
-        <td colspan="9" class="meta-ads-table__empty">No matched adverts found for the selected period and Meta delivery states.</td>
+        <td colspan="9" class="meta-ads-table__empty text-ghost">No matched adverts found for the selected period and Meta delivery states.</td>
       </tr>
     `;
   }
@@ -2456,10 +2465,10 @@ function renderMetaCoverageRows(
           <td>${escapeHtml(`${row.adName}${row.advertType ? ` - ${row.advertType}` : ""}`)}</td>
           <td>${escapeHtml(row.status)}</td>
           <td>${row.resultCount == null ? "-" : `${formatInteger(row.resultCount)} ${escapeHtml(row.resultLabel)}`}</td>
-          <td class="meta-ads-table__numeric">${formatInteger(row.impressions)}</td>
-          <td class="meta-ads-table__numeric">${formatMoney(row.spend)}</td>
-          <td class="meta-ads-table__numeric">${formatMoney(row.cpr)}</td>
-          <td class="meta-ads-table__numeric">${formatMoney(row.budget)}</td>
+          <td class="meta-ads-table__numeric data-table__numeric">${formatInteger(row.impressions)}</td>
+          <td class="meta-ads-table__numeric data-table__numeric">${formatMoney(row.spend)}</td>
+          <td class="meta-ads-table__numeric data-table__numeric">${formatMoney(row.cpr)}</td>
+          <td class="meta-ads-table__numeric data-table__numeric">${formatMoney(row.budget)}</td>
           <td>${formatDateOnly(row.endsAt)}</td>
         </tr>
       `;
@@ -2474,7 +2483,7 @@ function renderMetaConfigEmptyState(metaConfigStatus?: MetaConfigStatus | null) 
   }
 
   return `
-    <div class="meta-ads-config-state">
+    <div class="meta-ads-config-state flex items-center justify-between gap-12 card card--inset">
       <strong>Meta Ads refresh is not configured.</strong>
       <span>Server-side Meta Ads credentials are required before data can be pulled.</span>
     </div>
@@ -2496,7 +2505,7 @@ function renderMetaDeliveryNotices(metaAdsDashboardData?: MetaAdsDashboardData |
     rejectedCount > 0 ? `<li><strong>${rejectedCount} Rejected</strong><span>Policy issue.</span></li>` : "",
   ].join("");
 
-  return `<ul class="meta-ads-delivery-notices">${notices}</ul>`;
+  return `<ul class="meta-ads-delivery-notices grid gap-8">${notices}</ul>`;
 }
 
 function renderMetaRecommendations(
@@ -2548,14 +2557,14 @@ function renderMetaRecommendations(
 
   if (recommendations.length === 0) {
     return `
-      <p class="meta-ads-empty" data-meta-recommendations-empty>No urgent campaign changes found from the current Infocare demand and matched Meta coverage.</p>
-      <ul class="meta-ads-recommendations" data-meta-recommendations-list></ul>
+      <p class="meta-ads-empty text-ghost" data-meta-recommendations-empty>No urgent campaign changes found from the current Infocare demand and matched Meta coverage.</p>
+      <ul class="meta-ads-recommendations grid gap-8" data-meta-recommendations-list></ul>
     `;
   }
 
   return `
-    <p class="meta-ads-empty" data-meta-recommendations-empty hidden>No urgent campaign changes found from the current Infocare demand and matched Meta coverage.</p>
-    <ul class="meta-ads-recommendations" data-meta-recommendations-list>
+    <p class="meta-ads-empty text-ghost" data-meta-recommendations-empty hidden>No urgent campaign changes found from the current Infocare demand and matched Meta coverage.</p>
+    <ul class="meta-ads-recommendations grid gap-8" data-meta-recommendations-list>
       ${recommendations
         .map((entry) => {
           const notes = notesByNotificationId.get(entry.notificationId) ?? [];
@@ -2563,13 +2572,13 @@ function renderMetaRecommendations(
 
           return `
             <li class="meta-ads-notification" data-meta-notification-id="${escapeHtml(entry.notificationId)}">
-              <div class="meta-ads-notification__content">
-                <div class="meta-ads-notification__title">
+              <div class="meta-ads-notification__content grid gap-4 min-w-0">
+                <div class="meta-ads-notification__title flex items-center justify-between gap-8">
                   <strong>${escapeHtml(entry.recommendation)}</strong>
-                  <div class="meta-ads-notification__title-actions">
+                  <div class="meta-ads-notification__title-actions inline-flex items-center gap-6">
                     ${
                       contact
-                        ? `<a class="meta-ads-notification__email" ${renderMetaEmailActionAttributes(contact, entry.row, entry.notificationId)} href="${escapeHtml(buildMetaInitiateEmailHref(contact))}" title="Email centre about a Facebook advert" aria-label="Email ${escapeHtml(entry.row.serviceName)} about a Facebook advert"><i class="bi bi-envelope ui-icon" aria-hidden="true"></i></a>`
+                        ? `<a class="meta-ads-notification__email inline-flex items-center justify-center" ${renderMetaEmailActionAttributes(contact, entry.row, entry.notificationId)} href="${escapeHtml(buildMetaInitiateEmailHref(contact))}" title="Email centre about a Facebook advert" aria-label="Email ${escapeHtml(entry.row.serviceName)} about a Facebook advert"><i class="bi bi-envelope ui-icon" aria-hidden="true"></i></a>`
                         : ""
                     }
                     <button type="button" data-meta-notification-dismiss title="Dismiss notification" aria-label="Dismiss notification">
@@ -2579,14 +2588,14 @@ function renderMetaRecommendations(
                 </div>
                 <span>${escapeHtml(entry.row.serviceName)}: ${entry.openPlaces} open, ${entry.actionableWaitlist}/${entry.row.waitlistCount} actionable waitlist, ${entry.replacementPressure} pressure, ${entry.centreCoverage?.activeCampaignCount ?? 0} active campaigns, ${formatMoney(entry.centreCoverage?.spend30d ?? 0)} spend.</span>
               </div>
-              <div class="meta-ads-notification__actions">
-                <div class="meta-ads-notification__controls">
+              <div class="meta-ads-notification__actions grid gap-8 min-w-0">
+                <div class="meta-ads-notification__controls grid gap-8 min-w-0">
                   <textarea data-meta-note-text placeholder="Add a note" aria-label="Add a note" rows="1"></textarea>
                   <button type="button" data-meta-note-add title="Add note" aria-label="Add note">
                     <i class="bi bi-plus-lg ui-icon" aria-hidden="true"></i>
                   </button>
                 </div>
-                <ol class="meta-ads-notification__notes" data-meta-notes>${notes.map(renderMetaRecommendationNote).join("")}</ol>
+                <ol class="meta-ads-notification__notes grid gap-4" data-meta-notes>${notes.map(renderMetaRecommendationNote).join("")}</ol>
               </div>
             </li>
           `;
@@ -2599,21 +2608,21 @@ function renderMetaRecommendations(
 function renderNotesPanel(notes: MetaRecommendationNoteView[]) {
   return `
     <div class="notes-panel">
-      <div class="meta-ads-table-wrap">
-        <table class="meta-ads-table meta-ads-table--latest-notes">
+      <div class="meta-ads-table-wrap table-frame">
+        <table class="meta-ads-table data-table meta-ads-table--latest-notes">
         <thead>
           <tr>
             <th>Timestamp</th>
             <th>Centre</th>
             <th>Recommendation</th>
             <th>Note</th>
-            <th class="meta-ads-table__actions">Edit</th>
+            <th class="meta-ads-table__actions nowrap">Edit</th>
           </tr>
         </thead>
         <tbody data-latest-meta-notes-body>
           ${
             notes.length === 0
-              ? `<tr><td colspan="5" class="meta-ads-table__empty">No notes have been recorded yet.</td></tr>`
+              ? `<tr><td colspan="5" class="meta-ads-table__empty text-ghost">No notes have been recorded yet.</td></tr>`
               : notes
                 .map(
                   (note) => `
@@ -2626,7 +2635,7 @@ function renderNotesPanel(notes: MetaRecommendationNoteView[]) {
                     <textarea data-latest-meta-note-input rows="3" hidden>${escapeHtml(note.text)}</textarea>
                     <span data-latest-meta-note-status role="status"></span>
                   </td>
-                  <td class="meta-ads-table__actions">
+                  <td class="meta-ads-table__actions nowrap">
                     <button type="button" data-latest-meta-note-edit title="Edit note" aria-label="Edit note">
                       <i class="bi bi-pencil ui-icon" aria-hidden="true"></i>
                     </button>
@@ -2653,8 +2662,8 @@ function renderMetaNotificationHistory(
   notificationCount: number,
 ) {
   return `
-    <div class="meta-ads-history" data-meta-history data-page-size="25">
-      <div class="meta-ads-history__toolbar">
+    <div class="meta-ads-history grid gap-8" data-meta-history data-page-size="25">
+      <div class="meta-ads-history__toolbar flex justify-end gap-8">
         <select data-meta-history-centre-filter aria-label="Filter notification history by centre">
           <option value="">All centres</option>
         </select>
@@ -2664,8 +2673,8 @@ function renderMetaNotificationHistory(
           <option value="Note">Note</option>
         </select>
       </div>
-      <div class="meta-ads-table-wrap">
-        <table class="meta-ads-table meta-ads-table--history">
+      <div class="meta-ads-table-wrap table-frame">
+        <table class="meta-ads-table data-table meta-ads-table--history">
           <thead>
             <tr>
               <th>Centre</th>
@@ -2673,28 +2682,28 @@ function renderMetaNotificationHistory(
               <th>Heading</th>
               <th>Message</th>
               <th>Status</th>
-              <th class="meta-ads-table__numeric">Open</th>
-              <th class="meta-ads-table__numeric">Waitlist</th>
-              <th class="meta-ads-table__numeric">Pressure</th>
+              <th class="meta-ads-table__numeric data-table__numeric">Open</th>
+              <th class="meta-ads-table__numeric data-table__numeric">Waitlist</th>
+              <th class="meta-ads-table__numeric data-table__numeric">Pressure</th>
               <th>When</th>
             </tr>
           </thead>
           <tbody data-meta-history-body>
             <tr>
-              <td colspan="9" class="meta-ads-table__empty" data-meta-history-loading>Loading notification history...</td>
+              <td colspan="9" class="meta-ads-table__empty text-ghost" data-meta-history-loading>Loading notification history...</td>
             </tr>
           </tbody>
         </table>
       </div>
-      <div class="meta-ads-history__pagination" data-meta-history-pagination></div>
-      <p class="meta-ads-empty" data-meta-history-empty${notificationCount > 0 ? " hidden" : ""}>No recommendation notifications have been recorded yet.</p>
+      <div class="meta-ads-history__pagination flex items-center justify-end gap-8 text-ghost" data-meta-history-pagination></div>
+      <p class="meta-ads-empty text-ghost" data-meta-history-empty${notificationCount > 0 ? " hidden" : ""}>No recommendation notifications have been recorded yet.</p>
     </div>
   `;
 }
 
 export function renderMetaNotificationHistoryRows(rows: MetaNotificationHistoryRow[]) {
   if (rows.length === 0) {
-    return `<tr><td colspan="9" class="meta-ads-table__empty">No history rows found.</td></tr>`;
+    return `<tr><td colspan="9" class="meta-ads-table__empty text-ghost">No history rows found.</td></tr>`;
   }
 
   return rows
@@ -2706,9 +2715,9 @@ export function renderMetaNotificationHistoryRows(rows: MetaNotificationHistoryR
           <td>${escapeHtml(row.heading)}</td>
           <td class="meta-ads-history__message">${escapeHtml(row.message)}</td>
           <td data-meta-history-status>${row.status}</td>
-          <td class="meta-ads-table__numeric">${row.openPlaces}</td>
-          <td class="meta-ads-table__numeric">${row.waitlist}</td>
-          <td class="meta-ads-table__numeric">${row.pressure}</td>
+          <td class="meta-ads-table__numeric data-table__numeric">${row.openPlaces}</td>
+          <td class="meta-ads-table__numeric data-table__numeric">${row.waitlist}</td>
+          <td class="meta-ads-table__numeric data-table__numeric">${row.pressure}</td>
           <td>${formatTimestamp(row.occurredAt)}</td>
         </tr>
       `,
@@ -2765,7 +2774,7 @@ export function renderMetaRecommendationNotePopup(input: {
   };
   const noteItems =
     input.notes.length === 0
-      ? `<li class="meta-note-popup__empty" data-popup-empty>No notes recorded for this recommendation yet.</li>`
+      ? `<li class="meta-note-popup__empty text-empty" data-popup-empty>No notes recorded for this recommendation yet.</li>`
       : input.notes
           .map(
             (note) => `
@@ -2785,22 +2794,24 @@ export function renderMetaRecommendationNotePopup(input: {
     <title>${escapeHtml(input.centreName ? `Add Note - ${input.centreName}` : "Add Meta Ads Note")}</title>
     <link rel="stylesheet" href="/vendor/bootstrap-icons.css" />
     <link rel="stylesheet" href="/app.css" />
+    <link rel="stylesheet" href="/themes.css" />
+    ${THEME_HEAD_SCRIPT}
   </head>
   <body class="meta-note-popup-page">
     <main class="meta-note-popup" data-notification-id="${escapeHtml(input.notificationId)}">
-      <header class="meta-note-popup__header">
+      <header class="meta-note-popup__header grid gap-10">
         <h1>${escapeHtml(input.centreName || input.heading || "Recommendation")}</h1>
       </header>
-      <form class="meta-note-popup__form" data-popup-note-form>
+      <form class="meta-note-popup__form grid gap-10" data-popup-note-form>
         <label for="meta-note-popup-text">Add note</label>
         <textarea id="meta-note-popup-text" data-popup-note-text rows="5" autofocus></textarea>
-        <div class="meta-note-popup__actions">
+        <div class="meta-note-popup__actions flex justify-end gap-8">
           <button type="button" data-popup-close>Close</button>
           <button type="submit">Save note</button>
         </div>
         <p class="meta-note-popup__status" data-popup-status role="status"></p>
       </form>
-      <section class="meta-note-popup__reference" aria-labelledby="meta-note-popup-reference-title">
+      <section class="meta-note-popup__reference grid gap-10" aria-labelledby="meta-note-popup-reference-title">
         <h2 id="meta-note-popup-reference-title">Latest notes</h2>
         <ol data-popup-notes>${noteItems}</ol>
       </section>
@@ -2922,39 +2933,39 @@ function renderMetaAdsPanel(
   centreContacts: CentreContact[] = [],
 ) {
   return `
-    <div class="meta-ads-panel">
-      <div class="meta-ads-summary">
-        <div class="meta-ads-summary__item">
+    <div class="meta-ads-panel grid gap-10 text-small">
+      <div class="meta-ads-summary grid gap-8">
+        <div class="meta-ads-summary__item card stat-tile">
           <span>Active</span>
           <strong>${metaAdsDashboardData?.activeHealthyCampaignCount ?? 0}</strong>
           <small>Healthy</small>
         </div>
-        <div class="meta-ads-summary__item">
+        <div class="meta-ads-summary__item card stat-tile">
           <span>Learning</span>
           <strong>${metaAdsDashboardData?.learningCampaignCount ?? 0}</strong>
           <small>Normal optimisation period</small>
         </div>
-        <div class="meta-ads-summary__item">
+        <div class="meta-ads-summary__item card stat-tile">
           <span>Learning Limited</span>
           <strong>${metaAdsDashboardData?.learningLimitedCampaignCount ?? 0}</strong>
           <small>Usually a problem</small>
         </div>
-        <div class="meta-ads-summary__item">
+        <div class="meta-ads-summary__item card stat-tile">
           <span>Completed</span>
           <strong>${metaAdsDashboardData?.completedCampaignCount ?? 0}</strong>
           <small>Ended adverts</small>
         </div>
-        <div class="meta-ads-summary__item">
+        <div class="meta-ads-summary__item card stat-tile">
           <span>Not Delivering</span>
           <strong>${metaAdsDashboardData?.notDeliveringCampaignCount ?? 0}</strong>
           <small>Something is blocking spend</small>
         </div>
-        <div class="meta-ads-summary__item">
+        <div class="meta-ads-summary__item card stat-tile">
           <span>Rejected</span>
           <strong>${metaAdsDashboardData?.rejectedCampaignCount ?? 0}</strong>
           <small>Policy issue</small>
         </div>
-        <div class="meta-ads-summary__item">
+        <div class="meta-ads-summary__item card stat-tile">
           <span>Amount spent</span>
           <strong>${formatMoney(metaAdsDashboardData?.totalSpend30d ?? 0)}</strong>
           <small>${escapeHtml(formatWindowPeriodLabel(selectedWindowKey))}</small>
@@ -2963,23 +2974,23 @@ function renderMetaAdsPanel(
 
       ${renderMetaConfigEmptyState(metaConfigStatus)}
 
-      <section class="meta-ads-section meta-ads-section--wide meta-ads-section--recent">
-        <div class="meta-ads-section__header">
-          <h3>Ads In Period</h3>
+      <section class="meta-ads-section flex flex-col gap-8 card meta-ads-section--wide meta-ads-section--recent">
+        <div class="meta-ads-section__header section-header">
+          <h3 class="section-title">Ads In Period</h3>
           <span>${metaAdsDashboardData?.latestPullAt ? `last Meta pull ${formatTimestamp(metaAdsDashboardData.latestPullAt)}` : "no pull yet"}</span>
         </div>
-        <div class="meta-ads-table-wrap">
-          <table class="meta-ads-table">
+        <div class="meta-ads-table-wrap table-frame">
+          <table class="meta-ads-table data-table">
             <thead>
               <tr>
                 <th>Centre</th>
                 <th>Advert</th>
                 <th>Delivery</th>
                 <th>Results</th>
-                <th class="meta-ads-table__numeric">Impressions</th>
-                <th class="meta-ads-table__numeric">Amount spent</th>
-                <th class="meta-ads-table__numeric" title="Cost per result">CPR</th>
-                <th class="meta-ads-table__numeric">Budget</th>
+                <th class="meta-ads-table__numeric data-table__numeric">Impressions</th>
+                <th class="meta-ads-table__numeric data-table__numeric">Amount spent</th>
+                <th class="meta-ads-table__numeric data-table__numeric" title="Cost per result">CPR</th>
+                <th class="meta-ads-table__numeric data-table__numeric">Budget</th>
                 <th>Ends</th>
               </tr>
             </thead>
@@ -2988,17 +2999,17 @@ function renderMetaAdsPanel(
         </div>
       </section>
 
-      <section class="meta-ads-section meta-ads-section--wide meta-ads-section--recommendations">
-        <div class="meta-ads-section__header">
-          <h3>Recommendations</h3>
+      <section class="meta-ads-section flex flex-col gap-8 card meta-ads-section--wide meta-ads-section--recommendations">
+        <div class="meta-ads-section__header section-header">
+          <h3 class="section-title">Recommendations</h3>
           <span>${metaAdsDashboardData?.unmatchedCampaignCount ?? 0} unmatched campaigns</span>
         </div>
         ${renderMetaRecommendations(snapshotSet, selectedWindowKey, metaAdsDashboardData, metaRecommendationNotifications, metaRecommendationNotes, centreContacts)}
       </section>
 
-      <section class="meta-ads-section meta-ads-section--wide">
-        <div class="meta-ads-section__header">
-          <h3>Notification History</h3>
+      <section class="meta-ads-section flex flex-col gap-8 card meta-ads-section--wide">
+        <div class="meta-ads-section__header section-header">
+          <h3 class="section-title">Notification History</h3>
           <span>${metaRecommendationNotificationCount} stored</span>
         </div>
         ${renderMetaNotificationHistory(metaRecommendationNotificationCount)}
@@ -3063,7 +3074,7 @@ function renderGoogleAnalyticsPageRows(pages: GoogleAnalyticsPageSnapshotView[],
   const maxViews = Math.max(...visiblePages.map((page) => page.screenPageViews ?? 0), 1);
 
   if (visiblePages.length === 0) {
-    return `<tr><td colspan="5" class="google-analytics-table__empty">No page data stored yet.</td></tr>`;
+    return `<tr><td colspan="5" class="google-analytics-table__empty text-ghost">No page data stored yet.</td></tr>`;
   }
 
   return visiblePages
@@ -3077,10 +3088,10 @@ function renderGoogleAnalyticsPageRows(pages: GoogleAnalyticsPageSnapshotView[],
             <strong>${escapeHtml(page.pageTitle || page.pagePath)}</strong>
             <span>${escapeHtml(page.pagePath)}</span>
           </td>
-          <td class="google-analytics-table__numeric">${formatInteger(views)}</td>
-          <td class="google-analytics-table__numeric">${formatInteger(page.activeUsers)}</td>
-          <td class="google-analytics-table__numeric">${formatInteger(page.sessions)}</td>
-          <td class="google-analytics-table__volume"><span class="google-analytics-bar" style="--bar-width: ${width}%"></span></td>
+          <td class="google-analytics-table__numeric data-table__numeric">${formatInteger(views)}</td>
+          <td class="google-analytics-table__numeric data-table__numeric">${formatInteger(page.activeUsers)}</td>
+          <td class="google-analytics-table__numeric data-table__numeric">${formatInteger(page.sessions)}</td>
+          <td class="google-analytics-table__volume"><span class="google-analytics-bar" data-percent="${width}"></span></td>
         </tr>
       `;
     })
@@ -3204,7 +3215,7 @@ function renderMetaRelatedGoogleAnalyticsRows(
   const rows = buildMetaRelatedGoogleAnalyticsPages(snapshotSet, metaAdsDashboardData, googleAnalyticsSnapshot);
 
   if (rows.length === 0) {
-    return `<tr><td colspan="7" class="google-analytics-table__empty">No Meta ad centre pages matched for the selected period yet.</td></tr>`;
+    return `<tr><td colspan="7" class="google-analytics-table__empty text-ghost">No Meta ad centre pages matched for the selected period yet.</td></tr>`;
   }
 
   return rows
@@ -3220,9 +3231,9 @@ function renderMetaRelatedGoogleAnalyticsRows(
               : `<span>No matching page in top 100</span>`
           }
         </td>
-        <td class="google-analytics-table__numeric">${formatInteger(row.page?.screenPageViews)}</td>
-        <td class="google-analytics-table__numeric">${formatInteger(row.page?.activeUsers)}</td>
-        <td class="google-analytics-table__numeric">${formatDecimalPercent(row.page?.engagementRate)}</td>
+        <td class="google-analytics-table__numeric data-table__numeric">${formatInteger(row.page?.screenPageViews)}</td>
+        <td class="google-analytics-table__numeric data-table__numeric">${formatInteger(row.page?.activeUsers)}</td>
+        <td class="google-analytics-table__numeric data-table__numeric">${formatDecimalPercent(row.page?.engagementRate)}</td>
       </tr>
     `)
     .join("");
@@ -3234,7 +3245,7 @@ function renderGoogleAnalyticsConfigEmptyState(configStatus?: GoogleAnalyticsCon
   }
 
   return `
-    <div class="google-analytics-config-state">
+    <div class="google-analytics-config-state flex items-center justify-between gap-12 card card--inset">
       <strong>Google Analytics is not ready.</strong>
       <span>Missing ${configStatus.missingKeys.map(escapeHtml).join(", ")}.</span>
     </div>
@@ -3267,7 +3278,7 @@ function renderGoogleAnalyticsRangeFilter(
       .join("");
 
   return `
-    <form class="google-analytics-filter" method="get" action="/app" autocomplete="off">
+    <form class="google-analytics-filter flex flex-wrap gap-8" method="get" action="/app" autocomplete="off">
       ${selectedCentreKey != null ? `<input type="hidden" name="centre" value="${selectedCentreKey}">` : ""}
       <input type="hidden" name="window" value="${selectedWindowKey}">
       ${serviceSort !== "critical" ? `<input type="hidden" name="sort" value="${serviceSort}">` : ""}
@@ -3358,28 +3369,28 @@ function renderGoogleAnalyticsPanel(
   const rangeLabel = snapshot ? formatGoogleAnalyticsRangeLabel(snapshot) : "No stored range";
   const pagesSection = snapshot
     ? `
-      <section class="google-analytics-section">
-        <div class="google-analytics-section__header">
-          <div class="google-analytics-section__title">
-            <h3>Most Visited Pages</h3>
+      <section class="google-analytics-section grid gap-8 card">
+        <div class="google-analytics-section__header section-header">
+          <div class="google-analytics-section__title flex items-center gap-8 min-w-0">
+            <h3 class="section-title">Most Visited Pages</h3>
             ${
               googleAnalyticsSection
                 ? ""
-                : `<button class="panel-action-button google-analytics-section-open" type="button" data-open-panel="google-analytics" data-panel-query="${escapeHtml(buildGoogleAnalyticsSectionQuery(selectedCentreKey, selectedWindowKey, serviceSort, "pages", googleAnalyticsRange))}" aria-label="Open Most Visited Pages window" title="Open window"><i class="bi bi-box-arrow-up-right ui-icon" aria-hidden="true"></i><span>Open</span></button>`
+                : `<button class="panel-action-button google-analytics-section-open nowrap" type="button" data-open-panel="google-analytics" data-panel-query="${escapeHtml(buildGoogleAnalyticsSectionQuery(selectedCentreKey, selectedWindowKey, serviceSort, "pages", googleAnalyticsRange))}" aria-label="Open Most Visited Pages window" title="Open window"><i class="bi bi-box-arrow-up-right ui-icon" aria-hidden="true"></i><span>Open</span></button>`
             }
           </div>
-          <div class="google-analytics-section__actions">
+          <div class="google-analytics-section__actions flex items-center gap-8">
             <span>${escapeHtml(rangeLabel)}</span>
           </div>
         </div>
-        <div class="google-analytics-table-wrap">
-          <table class="google-analytics-table">
+        <div class="google-analytics-table-wrap table-frame table-frame--scroll">
+          <table class="google-analytics-table data-table">
             <thead>
               <tr>
                 <th>Page</th>
-                <th class="google-analytics-table__numeric">Views</th>
-                <th class="google-analytics-table__numeric">Users</th>
-                <th class="google-analytics-table__numeric">Sessions</th>
+                <th class="google-analytics-table__numeric data-table__numeric">Views</th>
+                <th class="google-analytics-table__numeric data-table__numeric">Users</th>
+                <th class="google-analytics-table__numeric data-table__numeric">Sessions</th>
                 <th class="google-analytics-table__volume">Volume</th>
               </tr>
             </thead>
@@ -3391,22 +3402,22 @@ function renderGoogleAnalyticsPanel(
     : "";
   const metaCentrePagesSection = snapshot
     ? `
-      <section class="google-analytics-section">
-        <div class="google-analytics-section__header">
-          <h3>Meta Ad Centre Pages</h3>
+      <section class="google-analytics-section grid gap-8 card">
+        <div class="google-analytics-section__header section-header">
+          <h3 class="section-title">Meta Ad Centre Pages</h3>
           <span>Matched from active Meta ad centres</span>
         </div>
-        <div class="google-analytics-table-wrap">
-          <table class="google-analytics-table">
+        <div class="google-analytics-table-wrap table-frame table-frame--scroll">
+          <table class="google-analytics-table data-table">
             <thead>
               <tr>
                 <th>Centre</th>
                 <th>Ads</th>
                 <th>Delivery</th>
                 <th>Matched page</th>
-                <th class="google-analytics-table__numeric">Views</th>
-                <th class="google-analytics-table__numeric">Users</th>
-                <th class="google-analytics-table__numeric">Engagement</th>
+                <th class="google-analytics-table__numeric data-table__numeric">Views</th>
+                <th class="google-analytics-table__numeric data-table__numeric">Users</th>
+                <th class="google-analytics-table__numeric data-table__numeric">Engagement</th>
               </tr>
             </thead>
             <tbody>${renderMetaRelatedGoogleAnalyticsRows(snapshotSet ?? null, metaAdsDashboardData, snapshot)}</tbody>
@@ -3417,7 +3428,7 @@ function renderGoogleAnalyticsPanel(
     : "";
 
   return `
-    <div class="google-analytics-panel${googleAnalyticsSection ? " google-analytics-panel--section-focus" : ""}">
+    <div class="google-analytics-panel grid gap-10 text-small${googleAnalyticsSection ? " google-analytics-panel--section-focus" : ""}">
       ${renderGoogleAnalyticsConfigEmptyState(configStatus)}
       ${renderGoogleAnalyticsRangeFilter(selectedCentreKey, selectedWindowKey, serviceSort, googleAnalyticsRange, googleAnalyticsSection)}
       ${
@@ -3425,41 +3436,41 @@ function renderGoogleAnalyticsPanel(
           ? googleAnalyticsSection === "pages"
             ? pagesSection
             : `
-            <div class="google-analytics-summary">
-              <div class="google-analytics-summary__item">
+            <div class="google-analytics-summary grid gap-8">
+              <div class="google-analytics-summary__item card stat-tile">
                 <span>Active users</span>
                 <strong>${formatInteger(snapshot.activeUsers)}</strong>
               </div>
-              <div class="google-analytics-summary__item">
+              <div class="google-analytics-summary__item card stat-tile">
                 <span>Sessions</span>
                 <strong>${formatInteger(snapshot.sessions)}</strong>
               </div>
-              <div class="google-analytics-summary__item">
+              <div class="google-analytics-summary__item card stat-tile">
                 <span>Engaged sessions</span>
                 <strong>${formatInteger(snapshot.engagedSessions)}</strong>
               </div>
-              <div class="google-analytics-summary__item">
+              <div class="google-analytics-summary__item card stat-tile">
                 <span>Views</span>
                 <strong>${formatInteger(snapshot.screenPageViews)}</strong>
               </div>
-              <div class="google-analytics-summary__item">
+              <div class="google-analytics-summary__item card stat-tile">
                 <span>Conversions</span>
                 <strong>${formatMetaMetric(snapshot.conversions)}</strong>
               </div>
-              <div class="google-analytics-summary__item">
+              <div class="google-analytics-summary__item card stat-tile">
                 <span>Revenue</span>
                 <strong>${formatMoney(snapshot.totalRevenue)}</strong>
               </div>
-              <div class="google-analytics-summary__item">
+              <div class="google-analytics-summary__item card stat-tile">
                 <span>Engagement rate</span>
                 <strong>${formatDecimalPercent(snapshot.engagementRate)}</strong>
               </div>
-              <div class="google-analytics-summary__item">
+              <div class="google-analytics-summary__item card stat-tile">
                 <span>Avg session</span>
                 <strong>${formatDurationSeconds(snapshot.averageSessionDuration)}</strong>
               </div>
             </div>
-            <div class="google-analytics-panel__meta">
+            <div class="google-analytics-panel__meta flex flex-wrap gap-10">
               <span>Property ${escapeHtml(snapshot.propertyId)}</span>
               <span>Range ${escapeHtml(formatGoogleAnalyticsRangeLabel(snapshot))}</span>
               <span>Pulled ${formatTimestamp(snapshot.pulledAt)}</span>
@@ -3484,9 +3495,9 @@ function renderIntegrationErrorBanner(
     integrationError.source === "meta-ads" ? "Meta Ads refresh" : "Google Analytics refresh";
 
   return `
-    <div class="snapshot-outcome-banner snapshot-outcome-banner--error" role="alert" data-integration-error-banner>
+    <div class="snapshot-outcome-banner flex items-start justify-between snapshot-outcome-banner--error" role="alert" data-integration-error-banner>
       <div class="snapshot-outcome-banner__body">
-        <p class="snapshot-outcome-banner__heading">${escapeHtml(sourceLabel)} couldn't complete</p>
+        <p class="snapshot-outcome-banner__heading text-strong">${escapeHtml(sourceLabel)} couldn't complete</p>
         <p class="snapshot-outcome-banner__error">${escapeHtml(integrationError.message)}</p>
       </div>
       <button class="snapshot-outcome-banner__dismiss" type="button" data-integration-error-dismiss aria-label="Dismiss refresh error">Dismiss</button>
@@ -3545,9 +3556,9 @@ function renderSnapshotOutcomeBanner(
     : "";
 
   return `
-    <div class="snapshot-outcome-banner snapshot-outcome-banner--${variant}" role="alert">
+    <div class="snapshot-outcome-banner flex items-start justify-between snapshot-outcome-banner--${variant}" role="alert">
       <div class="snapshot-outcome-banner__body">
-        <p class="snapshot-outcome-banner__heading">${escapeHtml(heading)}</p>
+        <p class="snapshot-outcome-banner__heading text-strong">${escapeHtml(heading)}</p>
         ${errorDetail}
         ${failureDetail}
       </div>
@@ -3886,7 +3897,7 @@ function renderBreakoutScript() {
           }
 
           elements.history.setAttribute("aria-busy", "true");
-          elements.body.innerHTML = '<tr><td colspan="9" class="meta-ads-table__empty">Loading notification history...</td></tr>';
+          elements.body.innerHTML = '<tr><td colspan="9" class="meta-ads-table__empty text-ghost">Loading notification history...</td></tr>';
 
           try {
             const response = await fetch("/api/meta-recommendation-notifications/history?" + params.toString(), {
@@ -3907,7 +3918,7 @@ function renderBreakoutScript() {
               syncMetaHistoryCentreOptions(elements.centreFilter, payload.centreOptions);
             }
           } catch (error) {
-            elements.body.innerHTML = '<tr><td colspan="9" class="meta-ads-table__empty">Notification history could not be loaded.</td></tr>';
+            elements.body.innerHTML = '<tr><td colspan="9" class="meta-ads-table__empty text-ghost">Notification history could not be loaded.</td></tr>';
             elements.pagination.innerHTML = "";
           } finally {
             elements.history.removeAttribute("aria-busy");
@@ -3986,18 +3997,18 @@ function renderBreakoutScript() {
 
           item.className = "meta-ads-notification";
           item.setAttribute("data-meta-notification-id", id);
-          content.className = "meta-ads-notification__content";
-          title.className = "meta-ads-notification__title";
+          content.className = "meta-ads-notification__content grid gap-4 min-w-0";
+          title.className = "meta-ads-notification__title flex items-center justify-between gap-8";
           strong.textContent = heading;
-          titleActions.className = "meta-ads-notification__title-actions";
+          titleActions.className = "meta-ads-notification__title-actions inline-flex items-center gap-6";
           dismissButton.type = "button";
           dismissButton.setAttribute("data-meta-notification-dismiss", "");
           dismissButton.title = "Dismiss notification";
           dismissButton.setAttribute("aria-label", "Dismiss notification");
           dismissButton.innerHTML = '<i class="bi bi-x-lg ui-icon" aria-hidden="true"></i>';
           summary.textContent = message;
-          actions.className = "meta-ads-notification__actions";
-          controls.className = "meta-ads-notification__controls";
+          actions.className = "meta-ads-notification__actions grid gap-8 min-w-0";
+          controls.className = "meta-ads-notification__controls grid gap-8 min-w-0";
           textarea.setAttribute("data-meta-note-text", "");
           textarea.placeholder = "Add a note";
           textarea.setAttribute("aria-label", "Add a note");
@@ -4007,7 +4018,7 @@ function renderBreakoutScript() {
           addButton.title = "Add note";
           addButton.setAttribute("aria-label", "Add note");
           addButton.innerHTML = '<i class="bi bi-plus-lg ui-icon" aria-hidden="true"></i>';
-          notes.className = "meta-ads-notification__notes";
+          notes.className = "meta-ads-notification__notes grid gap-4";
           notes.setAttribute("data-meta-notes", "");
           titleActions.append(dismissButton);
           title.append(strong, titleActions);
@@ -4248,7 +4259,7 @@ function renderBreakoutScript() {
 
           if (!notes.length) {
             const empty = document.createElement("li");
-            empty.className = "meta-note-popup__empty";
+            empty.className = "meta-note-popup__empty text-empty";
             empty.setAttribute("data-popup-empty", "");
             empty.textContent = "No notes recorded for this recommendation yet.";
             notesList.append(empty);
@@ -4282,7 +4293,7 @@ function renderBreakoutScript() {
         function mountBlockingDialog(dialog) {
           const blocker = document.createElement("div");
 
-          blocker.className = "modal-page-blocker";
+          blocker.className = "modal-page-blocker grid";
           blocker.setAttribute("data-modal-page-blocker", "");
           blocker.addEventListener("keydown", (event) => {
             if (event.key !== "Tab") {
@@ -4346,24 +4357,24 @@ function renderBreakoutScript() {
           const referenceTitle = document.createElement("h2");
           const notes = document.createElement("ol");
 
-          overlay.className = "meta-note-modal";
+          overlay.className = "meta-note-modal grid";
           overlay.setAttribute("data-meta-note-modal", "");
           overlay.setAttribute("role", "dialog");
           overlay.setAttribute("aria-modal", "true");
           overlay.setAttribute("aria-labelledby", "meta-note-modal-title");
           modal.className = "meta-note-popup";
           modal.setAttribute("data-notification-id", context.notificationId);
-          header.className = "meta-note-popup__header";
+          header.className = "meta-note-popup__header grid gap-10";
           title.id = "meta-note-modal-title";
           title.textContent = context.centreName || context.heading || "Recommendation";
-          form.className = "meta-note-popup__form";
+          form.className = "meta-note-popup__form grid gap-10";
           form.setAttribute("data-popup-note-form", "");
           label.setAttribute("for", "meta-note-modal-text");
           label.textContent = "Add note";
           textarea.id = "meta-note-modal-text";
           textarea.setAttribute("data-popup-note-text", "");
           textarea.rows = 5;
-          actions.className = "meta-note-popup__actions";
+          actions.className = "meta-note-popup__actions flex justify-end gap-8";
           closeButton.type = "button";
           closeButton.setAttribute("data-popup-close", "");
           closeButton.textContent = "Close";
@@ -4372,7 +4383,7 @@ function renderBreakoutScript() {
           status.className = "meta-note-popup__status";
           status.setAttribute("data-popup-status", "");
           status.setAttribute("role", "status");
-          reference.className = "meta-note-popup__reference";
+          reference.className = "meta-note-popup__reference grid gap-10";
           referenceTitle.textContent = "Latest notes";
           notes.setAttribute("data-popup-notes", "");
 
@@ -4464,12 +4475,12 @@ function renderBreakoutScript() {
             const noButton = document.createElement("button");
             let resolved = false;
 
-            dialog.className = "email-confirm-dialog";
+            dialog.className = "email-confirm-dialog text-body grid gap-16";
             dialog.setAttribute("role", "dialog");
             dialog.setAttribute("aria-modal", "true");
             dialog.setAttribute("aria-label", "Email sent confirmation");
             message.textContent = "Did you send the email to " + centreName + "?";
-            actions.className = "email-confirm-dialog__actions";
+            actions.className = "email-confirm-dialog__actions flex justify-end gap-8";
             yesButton.type = "button";
             yesButton.textContent = "Yes";
             noButton.type = "button";
@@ -4515,12 +4526,12 @@ function renderBreakoutScript() {
             const cancelButton = document.createElement("button");
             let resolved = false;
 
-            dialog.className = "email-confirm-dialog email-confirm-dialog--choice";
+            dialog.className = "email-confirm-dialog text-body grid gap-16 email-confirm-dialog--choice";
             dialog.setAttribute("role", "dialog");
             dialog.setAttribute("aria-modal", "true");
             dialog.setAttribute("aria-label", "Choose email template");
             message.textContent = "Choose email type for " + centreName + ".";
-            actions.className = "email-confirm-dialog__actions email-confirm-dialog__actions--grid";
+            actions.className = "email-confirm-dialog__actions flex justify-end gap-8 email-confirm-dialog__actions--grid";
             initiateButton.type = "button";
             initiateButton.textContent = "Initiate";
             campaignButton.type = "button";
@@ -4572,7 +4583,7 @@ function renderBreakoutScript() {
             const continueButton = document.createElement("button");
             let resolved = false;
 
-            dialog.className = "email-confirm-dialog email-confirm-dialog--form";
+            dialog.className = "email-confirm-dialog text-body grid gap-16 email-confirm-dialog--form";
             dialog.setAttribute("role", "dialog");
             dialog.setAttribute("aria-modal", "true");
             dialog.setAttribute("aria-label", "Email advert text");
@@ -4583,7 +4594,7 @@ function renderBreakoutScript() {
             primaryLabel.textContent = "Primary text";
             primaryInput.rows = 5;
             primaryInput.value = initialContent?.primaryText || "";
-            actions.className = "email-confirm-dialog__actions";
+            actions.className = "email-confirm-dialog__actions flex justify-end gap-8";
             cancelButton.type = "button";
             cancelButton.textContent = "Cancel";
             continueButton.type = "button";
@@ -4631,7 +4642,7 @@ function renderBreakoutScript() {
             const continueButton = document.createElement("button");
             let resolved = false;
 
-            dialog.className = "email-confirm-dialog email-confirm-dialog--form";
+            dialog.className = "email-confirm-dialog text-body grid gap-16 email-confirm-dialog--form";
             dialog.setAttribute("role", "dialog");
             dialog.setAttribute("aria-modal", "true");
             dialog.setAttribute("aria-label", "New email");
@@ -4644,7 +4655,7 @@ function renderBreakoutScript() {
             // The "Kia ora <names>," greeting is prepended when the email is
             // opened in the mail app, so the body field starts empty here.
             bodyInput.value = "";
-            actions.className = "email-confirm-dialog__actions";
+            actions.className = "email-confirm-dialog__actions flex justify-end gap-8";
             cancelButton.type = "button";
             cancelButton.textContent = "Cancel";
             continueButton.type = "button";
@@ -5197,22 +5208,38 @@ function renderWaitlistChartScript() {
           return;
         }
 
-        const screenGridColor = "rgba(212, 212, 212, 0.12)";
-        const screenTickColor = "#d4d4d4";
+        // Chart colours follow the active theme's CSS tokens (app.css /
+        // themes.css); the fallbacks are the default theme's values. They are
+        // re-read, and the charts redrawn, when the theme changes.
+        const rootStyle = getComputedStyle(document.documentElement);
+        function token(name, fallback) {
+          return rootStyle.getPropertyValue(name).trim() || fallback;
+        }
         const printGridColor = "#e2e2e2";
         const printTickColor = "#000000";
         const charts = [];
-        const colorMap = {
-          short: "#7fbe6f",
-          typical: "#4bc2c3",
-          longRunning: "#eeaf38",
-          veryLongRunning: "#fb3640",
-          green: "#7fbe6f",
-          blue: "#4bc2c3",
-          orange: "#eeaf38",
-          red: "#fb3640",
-        };
-        const palette = [colorMap.short, colorMap.typical, colorMap.longRunning, colorMap.veryLongRunning, "#9d8fe3", "#d4d4d4"];
+        let screenGridColor;
+        let screenTickColor;
+        let colorMap;
+        let sliceBorderColor;
+        let palette;
+
+        function readThemeColors() {
+          screenGridColor = token("--color-chart-grid", "rgba(212, 212, 212, 0.12)");
+          screenTickColor = token("--color-chart-text", "#d4d4d4");
+          colorMap = {
+            short: token("--color-wait-short", "#7fbe6f"),
+            typical: token("--color-wait-typical", "#4bc2c3"),
+            longRunning: token("--color-wait-long", "#eeaf38"),
+            veryLongRunning: token("--color-wait-very-long", "#fb3640"),
+          };
+          colorMap.green = colorMap.short;
+          colorMap.blue = colorMap.typical;
+          colorMap.orange = colorMap.longRunning;
+          colorMap.red = colorMap.veryLongRunning;
+          sliceBorderColor = token("--color-panel-bg", "#050505");
+          palette = [colorMap.short, colorMap.typical, colorMap.longRunning, colorMap.veryLongRunning, "#9d8fe3", screenTickColor];
+        }
 
         function resolveColor(key, fallbackIndex) {
           return colorMap[key] || palette[fallbackIndex % palette.length];
@@ -5245,8 +5272,8 @@ function renderWaitlistChartScript() {
               labels: config.labels,
               datasets: [{
                 data: config.values,
-                backgroundColor: "#7fbe6f",
-                borderColor: "#d8f79a",
+                backgroundColor: colorMap.short,
+                borderColor: token("--color-active-soft", "#d8f79a"),
                 borderWidth: 1,
               }],
             },
@@ -5286,7 +5313,7 @@ function renderWaitlistChartScript() {
                 label: dataset.label,
                 data: dataset.values,
                 backgroundColor: resolveColor(dataset.color, index),
-                borderColor: "#050505",
+                borderColor: sliceBorderColor,
                 borderWidth: 1,
               })),
             },
@@ -5325,7 +5352,7 @@ function renderWaitlistChartScript() {
               datasets: [{
                 data: config.values,
                 backgroundColor: config.values.map((_, index) => config.colors?.[index] || palette[index % palette.length]),
-                borderColor: "#050505",
+                borderColor: sliceBorderColor,
                 borderWidth: 2,
               }],
             },
@@ -5347,25 +5374,36 @@ function renderWaitlistChartScript() {
           };
         }
 
-        for (const script of document.querySelectorAll("script[data-waitlist-chart]")) {
-          const chartId = script.getAttribute("data-waitlist-chart");
-          const canvas = chartId ? document.getElementById(chartId) : null;
-          const config = readConfig(script);
+        function renderCharts() {
+          readThemeColors();
 
-          if (!(canvas instanceof HTMLCanvasElement) || !config) {
-            continue;
+          for (const chart of charts.splice(0)) {
+            chart?.destroy();
           }
 
-          const chartConfig =
-            config.kind === "doughnut"
-              ? createDoughnutConfig(config)
-              : config.kind === "stackedBar"
-                ? createStackedBarConfig(config)
-                : createBarConfig(config);
+          for (const script of document.querySelectorAll("script[data-waitlist-chart]")) {
+            const chartId = script.getAttribute("data-waitlist-chart");
+            const canvas = chartId ? document.getElementById(chartId) : null;
+            const config = readConfig(script);
 
-          new Chart(canvas, chartConfig);
-          charts.push(Chart.getChart(canvas));
+            if (!(canvas instanceof HTMLCanvasElement) || !config) {
+              continue;
+            }
+
+            const chartConfig =
+              config.kind === "doughnut"
+                ? createDoughnutConfig(config)
+                : config.kind === "stackedBar"
+                  ? createStackedBarConfig(config)
+                  : createBarConfig(config);
+
+            new Chart(canvas, chartConfig);
+            charts.push(Chart.getChart(canvas));
+          }
         }
+
+        renderCharts();
+        document.addEventListener("themechange", renderCharts);
 
         function applyPrintChartColors(printMode) {
           document.documentElement.classList.toggle("is-printing", printMode);
@@ -5520,15 +5558,17 @@ export function renderAppShell(
     <link rel="icon" href="/favicon.ico" type="image/png" />
     <link rel="stylesheet" href="/vendor/bootstrap-icons.css" />
     <link rel="stylesheet" href="/app.css" />
+    <link rel="stylesheet" href="/themes.css" />
+    ${THEME_HEAD_SCRIPT}
   </head>
   <body class="app-shell-body">
-    <aside class="nav-rail" aria-label="Primary navigation">
-      <a class="nav-rail__item" href="/" aria-label="Back to landing" title="Landing"><i class="bi bi-house-door" aria-hidden="true"></i></a>
-      <a class="nav-rail__item nav-rail__item--current" href="/app" aria-label="Online Marketing dashboard" title="Online Marketing" aria-current="page"><i class="bi bi-bar-chart-line" aria-hidden="true"></i></a>
-      <a class="nav-rail__item" href="/tasks" aria-label="Tasks" title="Tasks"><i class="bi bi-check2-square" aria-hidden="true"></i></a>
-      <a class="nav-rail__item" href="/comms" aria-label="Online Communications dashboard" title="Online Communications"><i class="bi bi-envelope-paper" aria-hidden="true"></i></a>
-      <a class="nav-rail__item" href="/jd" aria-label="Job Descriptions" title="Job Descriptions"><i class="bi bi-file-earmark-person" aria-hidden="true"></i></a>
-      <a class="nav-rail__item" href="/wiki" aria-label="Things To Know" title="Things To Know"><i class="bi bi-journal-bookmark" aria-hidden="true"></i></a>
+    <aside class="nav-rail flex flex-col items-center gap-6" aria-label="Primary navigation">
+      <a class="nav-rail__item inline-flex items-center justify-center text-muted" href="/" aria-label="Back to landing" title="Landing"><i class="bi bi-house-door" aria-hidden="true"></i></a>
+      <a class="nav-rail__item inline-flex items-center justify-center text-muted nav-rail__item--current" href="/app" aria-label="Online Marketing dashboard" title="Online Marketing" aria-current="page"><i class="bi bi-bar-chart-line" aria-hidden="true"></i></a>
+      <a class="nav-rail__item inline-flex items-center justify-center text-muted" href="/tasks" aria-label="Tasks" title="Tasks"><i class="bi bi-check2-square" aria-hidden="true"></i></a>
+      <a class="nav-rail__item inline-flex items-center justify-center text-muted" href="/comms" aria-label="Online Communications dashboard" title="Online Communications"><i class="bi bi-envelope-paper" aria-hidden="true"></i></a>
+      <a class="nav-rail__item inline-flex items-center justify-center text-muted" href="/jd" aria-label="Job Descriptions" title="Job Descriptions"><i class="bi bi-file-earmark-person" aria-hidden="true"></i></a>
+      <a class="nav-rail__item inline-flex items-center justify-center text-muted" href="/wiki" aria-label="Things To Know" title="Things To Know"><i class="bi bi-journal-bookmark" aria-hidden="true"></i></a>
     </aside>
     ${renderSnapshotOutcomeBanner(options.snapshotRefreshOutcome ?? null)}
     ${renderIntegrationErrorBanner(options.integrationError ?? null)}

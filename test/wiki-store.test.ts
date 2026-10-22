@@ -315,7 +315,7 @@ test("the editor offers the rich text toolbar and a regenerate control", () => {
   assert.match(html, /data-wiki-cmd="bold"/);
   assert.match(html, /data-wiki-regenerate/);
   // Category is a closed list, never a free-text field.
-  assert.match(html, /<select name="category">/);
+  assert.match(html, /<select class="form-control" name="category">/);
   assert.match(html, /<option value="Brand &amp; Voice" selected>/);
 });
 // --- Local AI runtime --------------------------------------------------------
@@ -369,7 +369,7 @@ test("adding an article lives in a modal, not above the wiki itself", () => {
 
   // The create form must be inside the dialog, so the wiki list is what the
   // page actually shows.
-  assert.match(html, /<dialog class="wiki-modal" data-wiki-create-dialog/);
+  assert.match(html, /<dialog class="wiki-modal[^"]*" data-wiki-create-dialog/);
   const dialogStart = html.indexOf("data-wiki-create-dialog");
   const formStart = html.indexOf("data-wiki-create>");
   assert.ok(dialogStart !== -1 && formStart > dialogStart, "create form should sit inside the dialog");
@@ -631,12 +631,17 @@ test("rich-text surfaces restore the list indent the global reset removes", () =
   const css = readFileSync(new URL("../src/ui/app.css", import.meta.url), "utf8");
 
   // `ul, ol { padding: 0 }` near the top of app.css would otherwise leave
-  // bullets flush left with their markers clipped.
-  for (const selector of [".wiki-editor__content ul", ".wiki-article__body ul", ".jd-blurb__editor ul"]) {
-    const index = css.indexOf(`${selector},`);
-    assert.notEqual(index, -1, `${selector} should have list styling`);
+  // bullets flush left with their markers clipped. Every rich-text surface
+  // carries the shared .rich-text class that restores the indent.
+  assert.match(css, /\.rich-text ul,\s*\.rich-text ol \{\s*padding-left: 1\.6em;\s*list-style-position: outside;/);
+  for (const [file, surface] of [
+    ["src/ui/wiki/wiki-rich-text.ts", "wiki-editor__content"],
+    ["src/ui/wiki/wiki-article-panel.ts", "wiki-article__body"],
+    ["src/ui/jd/jd-blurb-panel.ts", "jd-blurb__editor"],
+  ]) {
+    const source = readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
+    assert.match(source, new RegExp(`class="${surface}[^"]*\\brich-text\\b`), `${surface} should be rich text`);
   }
-  assert.match(css, /padding-left: 1\.6em;\n  list-style-position: outside;/);
 });
 
 // --- Entity handling on save -------------------------------------------------
@@ -728,8 +733,7 @@ test("the editor offers bold, italic and underline controls", () => {
 test("bold is given a visible weight rather than inheriting the reset", () => {
   const css = readFileSync(new URL("../src/ui/app.css", import.meta.url), "utf8");
 
-  assert.match(css, /\.wiki-editor__content strong,/);
-  assert.match(css, /\.wiki-article__body strong,/);
+  assert.match(css, /\.rich-text strong \{\s*font-weight: var\(--font-weight-strong\);/);
 });
 
 test("allowing presentational tags does not let dangerous ones through", () => {
@@ -1016,7 +1020,7 @@ test("the editor title bar carries a Save alongside the footer one", () => {
   // Both buttons carry the same hook, so the one delegated handler saves either
   // way and a long article never has to be scrolled to save it.
   assert.match(editing, /<button class="panel-action-link" type="button" data-wiki-save>/);
-  assert.match(editing, /<button type="button" class="wiki-editor__save" data-wiki-save>/);
+  assert.match(editing, /<button type="button" class="wiki-editor__save[^"]*" data-wiki-save>/);
 });
 
 test("copy repairs lists nested directly inside a list", () => {

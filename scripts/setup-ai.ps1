@@ -1,5 +1,7 @@
 param(
   [string]$Model = "llama3.1:8b",
+  # Embedding model for the AI chats' help knowledge retrieval (AI_EMBED_MODEL).
+  [string]$EmbedModel = "nomic-embed-text",
   [string]$RuntimeDir = ".local\ollama",
   [string]$ModelsDir = ".local\ollama-models",
   [string]$InstallScriptUrl = "https://ollama.com/install.ps1"
@@ -119,6 +121,13 @@ Write-Host "Pulling model $Model..."
 
 if ($LASTEXITCODE -ne 0) {
   throw "Model pull failed for $Model."
+}
+
+Write-Host "Pulling embedding model $EmbedModel..."
+& $ollamaPath pull $EmbedModel
+
+if ($LASTEXITCODE -ne 0) {
+  throw "Model pull failed for $EmbedModel."
 }
 
 [pscustomobject]@{

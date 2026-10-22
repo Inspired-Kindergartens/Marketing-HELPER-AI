@@ -36,14 +36,14 @@ function renderWebhookCheck(data: PostmarkDashboardData) {
         : "No webhook events";
 
   return `
-      <section class="comms-section comms-webhook-check comms-webhook-check--${check.status}">
-        <header class="comms-section__header"><h3>Webhook check</h3><span>${escapeHtml(label)}</span></header>
+      <section class="comms-section grid gap-8 card comms-webhook-check comms-webhook-check--${check.status}">
+        <header class="comms-section__header section-header"><h3 class="section-title">Webhook check</h3><span>${escapeHtml(label)}</span></header>
         <p class="comms-panel__meta">${escapeHtml(check.message)}</p>
-        <div class="comms-summary comms-summary--four">
-          <div class="comms-summary__item"><span>Checked</span><strong>${escapeHtml(formatDate(check.checkedAt))}</strong></div>
-          <div class="comms-summary__item"><span>Last received</span><strong>${check.latestReceivedAt ? escapeHtml(formatDate(check.latestReceivedAt)) : "-"}</strong></div>
-          <div class="comms-summary__item"><span>Last 24h</span><strong>${check.eventsLast24h}</strong></div>
-          <div class="comms-summary__item"><span>Last 48h</span><strong>${check.eventsLast48h}</strong></div>
+        <div class="comms-summary grid gap-8 comms-summary--four">
+          <div class="comms-summary__item card stat-tile"><span>Checked</span><strong>${escapeHtml(formatDate(check.checkedAt))}</strong></div>
+          <div class="comms-summary__item card stat-tile"><span>Last received</span><strong>${check.latestReceivedAt ? escapeHtml(formatDate(check.latestReceivedAt)) : "-"}</strong></div>
+          <div class="comms-summary__item card stat-tile"><span>Last 24h</span><strong>${check.eventsLast24h}</strong></div>
+          <div class="comms-summary__item card stat-tile"><span>Last 48h</span><strong>${check.eventsLast48h}</strong></div>
         </div>
       </section>
   `;
@@ -80,26 +80,35 @@ export function renderPostmarkMessageList(data: PostmarkDashboardData, activeFil
   const hasTags = data.recentMessages.some((message) => message.tag != null && message.tag.trim().length > 0);
 
   return `
-      <section class="comms-section" id="comms-recent-messages">
-        <header class="comms-section__header"><h3>Recent messages</h3><span>${messageCountLabel(data)}</span></header>
+      <section class="comms-section grid gap-8 card" id="comms-recent-messages">
+        <header class="comms-section__header section-header">
+          <h3 class="section-title">Recent messages</h3>
+          <span>${messageCountLabel(data)}</span>
+          <label class="comms-sort-control text-small text-ghost flex items-baseline gap-6">Sort by
+            <select data-centre-activity-sort>
+              <option value="centre" selected>Centre</option>
+              <option value="last-sent">Last Sent</option>
+            </select>
+          </label>
+        </header>
         ${
           activeFilter
-            ? `<div class="comms-active-filter">
+            ? `<div class="comms-active-filter flex items-center justify-between gap-12">
                 <span>Filtered to <strong>${escapeHtml(activeFilter.label)}</strong></span>
                 <button type="button" data-postmark-clear-filter>Show all emails</button>
               </div>`
             : ""
         }
         <p class="comms-panel__meta">Centre messages and internal office staff messages are shown. External test activity is excluded from this list.</p>
-        <div class="comms-table-wrap">
-          <table class="comms-table">
+        <div class="comms-table-wrap table-frame table-frame--scroll">
+          <table class="comms-table data-table">
             <thead><tr><th>Status</th><th>Category</th><th>Recipient</th><th>${hasTags ? "Centre / Tag" : "Centre"}</th><th>Date &amp; Time</th></tr></thead>
             <tbody>${
               data.recentMessages.length === 0
                 ? `<tr><td class="comms-table__empty" colspan="5">No centre or office staff Postmark webhook messages have been received.</td></tr>`
                 : data.recentMessages.map((message) => `
                   <tr>
-                    <td><div class="comms-status-badges">${statusBadge("Delivered", message.delivered, "delivered")}${statusBadge("Opened", message.opened, "opened")}${statusBadge("Clicked", message.clicked, "clicked")}${statusBadge("Bounced", message.bounced, "bounced")}</div></td>
+                    <td><div class="comms-status-badges flex flex-wrap gap-4">${statusBadge("Delivered", message.delivered, "delivered")}${statusBadge("Opened", message.opened, "opened")}${statusBadge("Clicked", message.clicked, "clicked")}${statusBadge("Bounced", message.bounced, "bounced")}</div></td>
                     <td>${categoryBadge(message.category)}</td>
                     <td>${
                       message.recipient
@@ -121,7 +130,7 @@ export function renderPostmarkMessageList(data: PostmarkDashboardData, activeFil
         </div>
         ${
           pageCount > 1
-            ? `<nav class="comms-pagination" aria-label="Webmail message pages">
+            ? `<nav class="comms-pagination items-center flex gap-12 justify-end" aria-label="Webmail message pages">
                 <button type="button" data-postmark-page="${page - 1}"${page <= 1 ? " disabled" : ""}>Previous</button>
                 <span>Page ${page} of ${pageCount}</span>
                 <button type="button" data-postmark-page="${page + 1}"${page >= pageCount ? " disabled" : ""}>Next</button>
@@ -167,39 +176,33 @@ export function renderPostmarkPanel(options: PostmarkPanelOptions = {}) {
   const sortedCentreActivity = sortCentreActivity(data.centreActivity, centreActivitySort);
 
   return `
-    <div class="comms-mailchimp-panel comms-webmail-panel">
+    <div class="comms-mailchimp-panel grid gap-10 text-small comms-webmail-panel">
       ${renderWebhookCheck(data)}
-      <div class="comms-summary comms-summary--four">
-        <div class="comms-summary__item"><span>Delivered</span><strong>${data.delivered}</strong></div>
-        <div class="comms-summary__item"><span>Opened</span><strong>${data.opened}</strong></div>
-        <div class="comms-summary__item"><span>Open rate</span><strong>${rate(data.opened, data.delivered)}</strong></div>
-        <div class="comms-summary__item"><span>Centre</span><strong>${data.centreMessageCount ?? 0}</strong></div>
-        <div class="comms-summary__item"><span>Office</span><strong>${data.officeStaffMessageCount ?? 0}</strong></div>
+      <div class="comms-summary grid gap-8 comms-summary--four">
+        <div class="comms-summary__item card stat-tile"><span>Delivered</span><strong>${data.delivered}</strong></div>
+        <div class="comms-summary__item card stat-tile"><span>Opened</span><strong>${data.opened}</strong></div>
+        <div class="comms-summary__item card stat-tile"><span>Open rate</span><strong>${rate(data.opened, data.delivered)}</strong></div>
+        <div class="comms-summary__item card stat-tile"><span>Centre</span><strong>${data.centreMessageCount ?? 0}</strong></div>
+        <div class="comms-summary__item card stat-tile"><span>Office</span><strong>${data.officeStaffMessageCount ?? 0}</strong></div>
       </div>
       <div data-postmark-message-list>${renderPostmarkMessageList(data)}</div>
-      <section class="comms-section">
-        <header class="comms-section__header">
-          <h3>Email Count by Service</h3>
+      <section class="comms-section grid gap-8 card">
+        <header class="comms-section__header section-header">
+          <h3 class="section-title">Email Count by Service</h3>
           <span>${data.centreActivity.length} centres</span>
-          <label class="comms-sort-control">Sort by
-            <select data-centre-activity-sort>
-              <option value="centre"${centreActivitySort === "centre" ? " selected" : ""}>Centre</option>
-              <option value="last-sent"${centreActivitySort === "last-sent" ? " selected" : ""}>Last Sent</option>
-            </select>
-          </label>
         </header>
-        <div class="comms-table-wrap">
-          <table class="comms-table">
-            <thead><tr><th>Centre</th><th class="comms-table__numeric">Delivered</th><th class="comms-table__numeric">Opened</th><th class="comms-table__numeric">Bounced</th><th>Last Sent</th></tr></thead>
+        <div class="comms-table-wrap table-frame table-frame--scroll">
+          <table class="comms-table data-table">
+            <thead><tr><th>Centre</th><th class="comms-table__numeric data-table__numeric">Delivered</th><th class="comms-table__numeric data-table__numeric">Opened</th><th class="comms-table__numeric data-table__numeric">Bounced</th><th>Last Sent</th></tr></thead>
             <tbody>${
               data.centreActivity.length === 0
                 ? `<tr><td class="comms-table__empty" colspan="5">No webhook events are matched to a centre tag yet.</td></tr>`
                 : sortedCentreActivity.map((centre) => `
                   <tr class="comms-table__row--clickable" data-centre-key="${centre.centreKey}" data-centre-name="${escapeHtml(centre.centreName)}" tabindex="0" role="button" title="Show emails for ${escapeHtml(centre.centreName)}">
                     <td>${escapeHtml(centre.centreName)}</td>
-                    <td class="comms-table__numeric">${centre.delivered}</td>
-                    <td class="comms-table__numeric">${centre.opened}</td>
-                    <td class="comms-table__numeric">${centre.bounced}</td>
+                    <td class="comms-table__numeric data-table__numeric">${centre.delivered}</td>
+                    <td class="comms-table__numeric data-table__numeric">${centre.opened}</td>
+                    <td class="comms-table__numeric data-table__numeric">${centre.bounced}</td>
                     <td>${centre.lastSentAt ? escapeHtml(formatDate(centre.lastSentAt)) : "-"}</td>
                   </tr>
                 `).join("")

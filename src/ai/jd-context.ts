@@ -44,16 +44,38 @@ export type JdIntroContextInput = {
   fallbackExamples: JdIntroParagraphExample[];
 };
 
+const TEACHING_APPLICATION_FORM_URL = "https://inspiredkindergartens.formstack.com/forms/job_application_form_2026";
+const NON_TEACHING_APPLICATION_FORM_URL = "https://inspiredkindergartens.formstack.com/forms/job_application_form_copy";
+
+// Teaching roles go to the Formstack form prefilled with the centre (without
+// the "Kindergarten" suffix) and the role (without any Full/Part-time prefix),
+// e.g. ?service_location=Gwen%20Rogers&role=Teacher. Non-teaching roles use
+// the generic form with no prefill.
+export function buildJdApplicationFormUrl(
+  jobDescription: Pick<JobDescriptionView, "jobTitle" | "locationDisplay">,
+): string {
+  const role = jobDescription.jobTitle
+    .replace(/^\s*(full|part)[\s-]?time\s+/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!/teacher/i.test(role)) return NON_TEACHING_APPLICATION_FORM_URL;
+  const serviceLocation = formatJdLocationDisplay(jobDescription.locationDisplay)
+    .replace(/\s*Kindergarten\s*$/i, "")
+    .trim();
+  return `${TEACHING_APPLICATION_FORM_URL}?service_location=${encodeURIComponent(serviceLocation)}&role=${encodeURIComponent(role)}`;
+}
+
 // The fixed closing sentences appended below the AI-generated editorial
 // section. Rendered as a locked block in the blurb editor; included in
 // copy-to-clipboard.
-export function buildImmovableBoilerplateHtml(jobDescription: JobDescriptionView, jdPdfUrl: string): string {
+export function buildImmovableBoilerplateHtml(jobDescription: JobDescriptionView): string {
   const closing = formatNzClosingDate(jobDescription.closingAt);
   const location = formatJdLocationDisplay(jobDescription.locationDisplay);
+  const applyUrl = buildJdApplicationFormUrl(jobDescription).replace(/&/g, "&amp;");
   return [
     "<p><em>The terms and conditions of the Kindergarten Teachers Collective Agreement will apply. Inspired Kindergartens offers excellent employment conditions, supportive colleagues and a wide range of professional learning opportunities. By applying for this role you acknowledge that you are eligible to work in New Zealand. If you are not eligible to work in New Zealand then do not apply.</em></p>",
-    `<p><a href="${jdPdfUrl}">Job Description - Full time - Teacher / Kaiako ${location}</a></p>`,
-    `<p><a href="https://inspiredkindergartens.nz/employment-and-careers/how-to-apply/how-to-apply-kindergarten">Please apply online here</a></p>`,
+    `<p>Job Description - Full time - Teacher / Kaiako ${location}</p>`,
+    `<p><a href="${applyUrl}">Please apply online here</a></p>`,
     `<p><strong>Start Date: ${jobDescription.startDateText}</strong></p>`,
     closing ? `<p><strong>Closing Date: ${closing}</strong></p>` : "",
     "<p><strong><em>Be at the cutting edge &ndash; come work for Inspired Kindergartens</em></strong></p>",

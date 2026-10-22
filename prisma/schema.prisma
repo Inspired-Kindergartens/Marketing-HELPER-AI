@@ -792,11 +792,13 @@ model JdAgreement {
 // layouts (position hours, reports-to, remuneration text, etc). One row per
 // dropdown entry in the JD "Job Title" field.
 // Single-row store for JD settings that apply across every job description
-// (id is pinned to 1). Currently the "Last Reviewed by" acronym printed in the
-// PDF footer's Last Updated By row.
+// (id is pinned to 1): the "Last Reviewed by" acronym printed in the PDF
+// footer's Last Updated By row, and the Job Positions folder the list panel's
+// folder button opens (blank = the built-in default path).
 model JdGlobalSetting {
   id                   Int      @id @default(1)
   lastReviewedByAcronym String  @default("")
+  jobPositionsFolder   String   @default("")
   updatedAt            DateTime @updatedAt
 }
 
@@ -972,4 +974,154 @@ model CodeSnippetCategory {
   updatedAt   DateTime @updatedAt
 
   @@index([sortOrder, name])
+}
+
+// A titled link kept on the Subscriptions page (the services and accounts the
+// team subscribes to), including the Panui Tools links. Mirrors CodeSnippet.
+model Subscription {
+  id          Int      @id @default(autoincrement())
+  title       String
+  category    String   @default("General") // user-chosen; the list groups by it
+  url         String   @default("")
+  description String   @default("")
+  lastUsedAt  DateTime? // last opened, copied, added or edited; its category starts expanded
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([category, title])
+}
+
+// Subscriptions categories, managed from the Categories modal the same way
+// CodeSnippetCategory is. Subscriptions store the name, not an id.
+model SubscriptionCategory {
+  id          Int      @id @default(autoincrement())
+  name        String   @unique
+  sortOrder   Int      @default(0)
+  isProtected Boolean  @default(false) // the General fallback cannot be deleted
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([sortOrder, name])
+}
+
+// One help document in the AI chats' knowledge base (RAG): a crawled help-centre
+// page (Mailchimp, Google Analytics) or a local document from knowledge/<source>/.
+// contentHash lets a refresh skip re-embedding unchanged documents.
+model HelpArticle {
+  id          Int         @id @default(autoincrement())
+  source      String // mailchimp | google-analytics | infocare | meta
+  url         String      @unique // page URL, or "local:<path>" for a local document
+  title       String
+  section     String      @default("")
+  summary     String      @default("")
+  contentHash String
+  fetchedAt   DateTime
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  chunks      HelpChunk[]
+
+  @@index([source])
+}
+
+// A heading-sized piece of a help document. `embedding` is a nomic-embed-text
+// vector (cosine similarity is done in the app); `searchVector` is a generated
+// tsvector for the full-text half of the hybrid search.
+model HelpChunk {
+  id           Int                      @id @default(autoincrement())
+  articleId    Int
+  article      HelpArticle              @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  ordinal      Int
+  anchor       String                   @default("") // section id on the page, for deep links
+  heading      String                   @default("")
+  text         String
+  embedding    Float[]                  @db.Real
+  searchVector Unsupported("tsvector")?
+
+  @@index([articleId, ordinal])
+}
+
+// One competitor or other early childhood service on the Sector Insight page.
+// Most rows come from the Ministry of Education ECE directory (eceId is its
+// licence number); the BOP competitor CSV seeded operators, promotions, meals
+// and transport, and the monthly crawl keeps those up to date. Inspired's own
+// centres are kept too (isOwn) so the chat can compare, but are never counted
+// as competitors.
+model SectorCentre {
+  id                Int               @id @default(autoincrement())
+  eceId             Int?              @unique // MoE ECE_Id; null for a centre only known from the CSV
+  name              String
+  operator          String            @default("") // service group, e.g. "BestStart Educare"; "" when unverified
+  serviceType       String            @default("") // MoE Org_Type: Education & Care Service, Free Kindergarten, Homebased Network …
+  authority         String            @default("") // Privately owned | Community based
+  isOwn             Boolean           @default(false) // licence matches an Inspired CentreReference
+  address           String            @default("")
+  suburb            String            @default("")
+  city              String            @default("")
+  district          String            @default("") // MoE Territorial_Authority, e.g. "Tauranga City"
+  latitude          Float?
+  longitude         Float?
+  phone             String            @default("")
+  email             String            @default("")
+  website           String            @default("") // centre or operator page the crawl reads
+  promotionUrl      String            @default("") // page that published a promotion; crawled too
+  licensedPlaces    Int?
+  under2Places      Int?
+  roll              Int?
+  rollDate          DateTime?
+  twentyHoursEce    Boolean?
+  meals             String            @default("") // as published, e.g. "Morning tea, lunch & afternoon tea"
+  providesMeals     Boolean? // null = not known
+  transport         String            @default("")
+  providesTransport Boolean?
+  verified          Boolean           @default(false) // operator confirmed from an official source
+  inDirectory       Boolean           @default(false) // in the latest MoE directory pull
+  notes             String            @default("")
+  lastCrawledAt     DateTime?
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+  promotions        SectorPromotion[]
+
+  @@index([city])
+  @@index([operator])
+}
+
+// A promotion or incentive a centre advertises ("50% off for 4 months").
+// Crawled and CSV promotions end when the crawl no longer finds them on the
+// source page; manual ones only end by hand.
+model SectorPromotion {
+  id          Int          @id @default(autoincrement())
+  centreId    Int
+  centre      SectorCentre @relation(fields: [centreId], references: [id], onDelete: Cascade)
+  text        String
+  category    String       @default("other") // discount | free_hours | free_period | gift | other
+  sourceUrl   String       @default("")
+  origin      String       @default("crawl") // csv | crawl | manual
+  active      Boolean      @default(true)
+  firstSeenAt DateTime     @default(now())
+  lastSeenAt  DateTime     @default(now())
+  endedAt     DateTime?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  @@unique([centreId, text])
+  @@index([active])
+}
+
+// One Sector Insight update (scheduled monthly or run from the page).
+model SectorCrawlRun {
+  id              Int       @id @default(autoincrement())
+  trigger         String // scheduled | manual
+  status          String    @default("running") // running | completed | failed
+  startedAt       DateTime  @default(now())
+  finishedAt      DateTime?
+  centresAdded    Int       @default(0)
+  centresUpdated  Int       @default(0)
+  centresClosed   Int       @default(0)
+  sitesChecked    Int       @default(0)
+  sitesFailed     Int       @default(0)
+  promotionsAdded Int       @default(0)
+  promotionsEnded Int       @default(0)
+  message         String    @default("")
+
+  @@index([startedAt])
 }

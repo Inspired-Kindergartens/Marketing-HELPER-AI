@@ -13,7 +13,7 @@ export type WikiRichTextOptions = {
 
 export function renderWikiRichText(options: WikiRichTextOptions): string {
   return `
-    <div class="wiki-editor__toolbar" data-wiki-toolbar>
+    <div class="wiki-editor__toolbar format-toolbar" data-wiki-toolbar>
       <button type="button" data-wiki-cmd="formatBlock" data-wiki-value="H2" title="Heading"><i class="bi bi-type-h2 ui-icon" aria-hidden="true"></i></button>
       <button type="button" data-wiki-cmd="formatBlock" data-wiki-value="H3" title="Subheading"><i class="bi bi-type-h3 ui-icon" aria-hidden="true"></i></button>
       <button type="button" data-wiki-cmd="formatBlock" data-wiki-value="P" title="Paragraph"><i class="bi bi-paragraph ui-icon" aria-hidden="true"></i></button>
@@ -27,6 +27,6 @@ export function renderWikiRichText(options: WikiRichTextOptions): string {
       <button type="button" data-wiki-cmd="createLink" title="Hyperlink"><i class="bi bi-link-45deg ui-icon" aria-hidden="true"></i></button>
       ${options.trailingButtons ?? ""}
     </div>
-    <div class="wiki-editor__content" ${options.contentAttribute} contenteditable="true">${options.html || "<p></p>"}</div>
+    <div class="wiki-editor__content text-body rich-text rich-text--editable" ${options.contentAttribute} contenteditable="true">${options.html || "<p></p>"}</div>
   `;
 }

@@ -5,10 +5,11 @@ import {
   type SnippetListPanelOptions,
 } from "./snippets/snippet-list-panel.js";
 import { renderSnippetEditorPanel, type SnippetEditorPanelOptions } from "./snippets/snippet-editor-panel.js";
+import { THEME_HEAD_SCRIPT } from "./theme.js";
 
 const PANEL_DEFINITIONS = [
-  { id: "snippet-list", title: "Code Snippets", className: "panel--snippet-list" },
-  { id: "snippet-editor", title: "Edit Snippet", className: "panel--snippet-editor" },
+  { id: "snippet-list", title: "Code Snippets", className: "panel--snippet-list panel--scroll" },
+  { id: "snippet-editor", title: "Edit Snippet", className: "panel--snippet-editor panel--scroll" },
   { id: "chat", title: "AI Snippet Helper", className: "panel--chat" },
 ] as const;
 
@@ -39,10 +40,10 @@ function renderPanelActions(panelId: string, options: SnippetsAppShellOptions): 
 // endpoint. It reads the snippet open in the editor, so "fix this" works there.
 function renderSnippetsAiChatPanel(openSnippetId: number | null): string {
   return `
-    <div class="chat-shell" data-ai-chat data-ai-chat-endpoint="/api/snippets/ai/chat/stream"${openSnippetId != null ? ` data-snippet-open-id="${openSnippetId}"` : ""}>
+    <div class="chat-shell grid gap-8" data-ai-chat data-ai-chat-endpoint="/api/snippets/ai/chat/stream"${openSnippetId != null ? ` data-snippet-open-id="${openSnippetId}"` : ""}>
       <div class="chat-shell__messages">
-        <div class="chat-message chat-message--assistant">
-          <span class="chat-message__role">Beep Beep</span>
+        <div class="chat-message text-body chat-message--assistant">
+          <span class="chat-message__role text-small text-ghost label-case">Beep Beep</span>
           <p class="chat-message__body">${
             openSnippetId != null
               ? "I can see the snippet you're editing. Ask me to fix it, extend it, or explain it."
@@ -51,9 +52,9 @@ function renderSnippetsAiChatPanel(openSnippetId: number | null): string {
         </div>
       </div>
       <div class="chat-shell__composer">
-        <label class="chat-shell__prompt-label" for="snippets-chat-prompt">Prompt</label>
+        <label class="chat-shell__prompt-label text-small text-ghost label-case" for="snippets-chat-prompt">Prompt</label>
         <textarea id="snippets-chat-prompt" class="chat-shell__prompt-input" placeholder="e.g. A Meta Pixel lead event for the enrolment form's thank-you page."></textarea>
-        <button class="chat-shell__send" type="button" data-ai-chat-send><i class="bi bi-send ui-icon" aria-hidden="true"></i><span>Send</span></button>
+        <button class="chat-shell__send inline-flex items-center justify-center gap-6" type="button" data-ai-chat-send><i class="bi bi-send ui-icon" aria-hidden="true"></i><span>Send</span></button>
       </div>
     </div>
   `;
@@ -80,10 +81,10 @@ function renderSnippetsChatScript(): string {
         // that turns into the answer when the first chunk lands.
         function append(role, text, state) {
           var row = document.createElement("div");
-          row.className = "chat-message chat-message--" + role;
+          row.className = "chat-message text-body chat-message--" + role;
           if (state) row.dataset.messageState = state;
           var title = document.createElement("span");
-          title.className = "chat-message__role";
+          title.className = "chat-message__role text-small text-ghost label-case";
           title.textContent = role === "assistant" ? "Beep Beep" : "You";
           var body = document.createElement("p");
           body.className = "chat-message__body";
@@ -111,7 +112,7 @@ function renderSnippetsChatScript(): string {
           if (!block || !block.code.trim()) return;
           var save = document.createElement("button");
           save.type = "button";
-          save.className = "wiki-list__add";
+          save.className = "wiki-list__add nowrap button-md";
           save.innerHTML = '<i class="bi bi-plus-lg ui-icon" aria-hidden="true"></i><span>Save as snippet</span>';
           save.setAttribute("data-snippet-add", "");
           save.setAttribute("data-snippet-prefill-code", block.code);
@@ -308,7 +309,7 @@ function renderSnippetsScript(): string {
         function fallbackCopy(text) {
           var holder = document.createElement("textarea");
           holder.value = text;
-          holder.setAttribute("style", "position:fixed; left:0; top:0; width:1px; height:1px; opacity:0");
+          holder.className = "clipboard-buffer";
           document.body.appendChild(holder);
           holder.select();
           var copied = false;
@@ -558,16 +559,20 @@ export function renderSnippetsAppShell(options: SnippetsAppShellOptions): string
     <link rel="icon" href="/favicon.ico" type="image/png" />
     <link rel="stylesheet" href="/vendor/bootstrap-icons.css" />
     <link rel="stylesheet" href="/app.css" />
+    <link rel="stylesheet" href="/themes.css" />
+    ${THEME_HEAD_SCRIPT}
   </head>
   <body class="app-shell-body">
-    <aside class="nav-rail" aria-label="Primary navigation">
-      <a class="nav-rail__item" href="/" aria-label="Back to landing" title="Landing"><i class="bi bi-house-door" aria-hidden="true"></i></a>
-      <a class="nav-rail__item" href="/app" aria-label="Online Marketing dashboard" title="Online Marketing"><i class="bi bi-bar-chart-line" aria-hidden="true"></i></a>
-      <a class="nav-rail__item" href="/tasks" aria-label="Tasks" title="Tasks"><i class="bi bi-check2-square" aria-hidden="true"></i></a>
-      <a class="nav-rail__item" href="/comms" aria-label="Online Communications dashboard" title="Online Communications"><i class="bi bi-envelope-paper" aria-hidden="true"></i></a>
-      <a class="nav-rail__item" href="/jd" aria-label="Job Descriptions" title="Job Descriptions"><i class="bi bi-file-earmark-person" aria-hidden="true"></i></a>
-      <a class="nav-rail__item" href="/wiki" aria-label="Things To Know" title="Things To Know"><i class="bi bi-journal-bookmark" aria-hidden="true"></i></a>
-      <a class="nav-rail__item nav-rail__item--current" href="/snippets" aria-label="Code Snippets" title="Code Snippets" aria-current="page"><i class="bi bi-code-slash" aria-hidden="true"></i></a>
+    <aside class="nav-rail flex flex-col items-center gap-6" aria-label="Primary navigation">
+      <a class="nav-rail__item inline-flex items-center justify-center text-muted" href="/" aria-label="Back to landing" title="Landing"><i class="bi bi-house-door" aria-hidden="true"></i></a>
+      <a class="nav-rail__item inline-flex items-center justify-center text-muted" href="/app" aria-label="Online Marketing dashboard" title="Online Marketing"><i class="bi bi-bar-chart-line" aria-hidden="true"></i></a>
+      <a class="nav-rail__item inline-flex items-center justify-center text-muted" href="/tasks" aria-label="Tasks" title="Tasks"><i class="bi bi-check2-square" aria-hidden="true"></i></a>
+      <a class="nav-rail__item inline-flex items-center justify-center text-muted" href="/comms" aria-label="Online Communications dashboard" title="Online Communications"><i class="bi bi-envelope-paper" aria-hidden="true"></i></a>
+      <a class="nav-rail__item inline-flex items-center justify-center text-muted" href="/jd" aria-label="Job Descriptions" title="Job Descriptions"><i class="bi bi-file-earmark-person" aria-hidden="true"></i></a>
+      <a class="nav-rail__item inline-flex items-center justify-center text-muted" href="/wiki" aria-label="Things To Know" title="Things To Know"><i class="bi bi-journal-bookmark" aria-hidden="true"></i></a>
+      <a class="nav-rail__item inline-flex items-center justify-center text-muted nav-rail__item--current" href="/snippets" aria-label="Code Snippets" title="Code Snippets" aria-current="page"><i class="bi bi-code-slash" aria-hidden="true"></i></a>
+      <a class="nav-rail__item inline-flex items-center justify-center text-muted" href="/subscriptions" aria-label="Links" title="Links"><i class="bi bi-credit-card" aria-hidden="true"></i></a>
+      <a class="nav-rail__item inline-flex items-center justify-center text-muted" href="/sector" aria-label="Sector Insight" title="Sector Insight"><i class="bi bi-binoculars" aria-hidden="true"></i></a>
     </aside>
     ${layout}
     ${renderSnippetCreateDialog(options.editor.categories)}

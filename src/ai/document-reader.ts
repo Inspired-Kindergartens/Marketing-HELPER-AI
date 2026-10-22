@@ -69,7 +69,8 @@ function isTextLike(filename: string, mimeType: string) {
   return TEXT_MIME_TYPES.has(mimeType.toLowerCase()) || TEXT_EXTENSIONS.has(extname(filename).toLowerCase());
 }
 
-async function extractPdfText(buffer: Buffer) {
+// Exported for the help knowledge base, which indexes whole PDFs untruncated.
+export async function extractPdfText(buffer: Buffer) {
   const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
   const loadingTask = pdfjs.getDocument({
     data: new Uint8Array(buffer),

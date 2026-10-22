@@ -11,12 +11,13 @@ import {
   formatJdLocationDisplay,
 } from "./jd/jd-email.js";
 import type { CentreContact } from "../storage/centre-contact-store.js";
+import { THEME_HEAD_SCRIPT } from "./theme.js";
 
 const PANEL_DEFINITIONS = [
-  { id: "jd-list", title: "Job Descriptions", className: "panel--jd-list" },
-  { id: "jd-editor", title: "JD Editor", className: "panel--jd-editor" },
-  { id: "jd-blurb", title: "Website Blurb", className: "panel--jd-blurb" },
-  { id: "jd-settings", title: "Settings", className: "panel--jd-settings" },
+  { id: "jd-list", title: "Job Descriptions", className: "panel--jd-list panel--scroll" },
+  { id: "jd-editor", title: "JD Editor", className: "panel--jd-editor panel--scroll" },
+  { id: "jd-blurb", title: "Website Blurb", className: "panel--jd-blurb panel--scroll" },
+  { id: "jd-settings", title: "Settings", className: "panel--jd-settings panel--scroll" },
 ] as const;
 
 const VALID_JD_PANEL_IDS = new Set<string>(PANEL_DEFINITIONS.map((panel) => panel.id));
@@ -79,11 +80,22 @@ function renderPanelActions(panelId: string, options: JdAppShellOptions): string
     `;
   }
 
+  // Browsers block file:// links from an http page, so this asks the server to
+  // open the folder (set under Settings > Folder shortcuts) in Explorer.
+  const jobPositionsButton = `<button type="button" class="panel-action-button" data-jd-open-folder title="${escapeHtml(options.settings.globalSettings.jobPositionsFolder)}"><i class="bi bi-folder2-open ui-icon" aria-hidden="true"></i><span>Job Positions</span></button>`;
+
+  if (panelId === "jd-list") {
+    return `
+      ${jobPositionsButton}
+    `;
+  }
+
   if (panelId === "jd-blurb" && options.blurb.jobDescription) {
     const jd = options.blurb.jobDescription;
 
     return `
       <a class="panel-action-link" href="/jd?panel=jd-editor&jd=${jd.id}"><i class="bi bi-arrow-left ui-icon" aria-hidden="true"></i><span>Back to ${escapeHtml(jd.jobTitle)} - ${escapeHtml(formatJdLocationDisplay(jd.locationDisplay))}</span></a>
+      ${jobPositionsButton}
     `;
   }
 
@@ -179,13 +191,13 @@ function renderJdScript(): string {
 
         function roleSectionMarkup(sectionIndex) {
           return [
-            '<section class="jd-editor__role-section" data-section-index="' + sectionIndex + '">',
-            '<div class="jd-editor__role-section-actions">',
-            '<input type="text" class="jd-editor__role-heading" name="roleSections[' + sectionIndex + '][heading]" value="" placeholder="Section heading" />',
+            '<section class="jd-editor__role-section flex flex-col gap-8" data-section-index="' + sectionIndex + '">',
+            '<div class="jd-editor__role-section-actions flex gap-6 items-center">',
+            '<input type="text" class="jd-editor__role-heading form-control" name="roleSections[' + sectionIndex + '][heading]" value="" placeholder="Section heading" />',
             '<button type="button" class="jd-editor__mini-button" data-jd-remove-role-section title="Remove section"><i class="bi bi-trash ui-icon" aria-hidden="true"></i></button>',
             '</div>',
-            '<textarea name="roleSections[' + sectionIndex + '][intro]" placeholder="Intro sentence"></textarea>',
-            '<ul class="jd-editor__role-bullets"></ul>',
+            '<textarea class="form-control" name="roleSections[' + sectionIndex + '][intro]" placeholder="Intro sentence"></textarea>',
+            '<ul class="jd-editor__role-bullets flex flex-col gap-6"></ul>',
             '<button type="button" class="jd-editor__inline-button" data-jd-add-role-bullet><i class="bi bi-plus-lg ui-icon" aria-hidden="true"></i><span>Add bullet</span></button>',
             '</section>'
           ].join("");
@@ -194,7 +206,7 @@ function renderJdScript(): string {
         function roleBulletMarkup(sectionIndex, bulletIndex) {
           return [
             '<li>',
-            '<input type="text" class="jd-editor__bullet-text" name="roleSections[' + sectionIndex + '][bullets][' + bulletIndex + '][text]" value="" placeholder="Bullet text" />',
+            '<input type="text" class="jd-editor__bullet-text form-control" name="roleSections[' + sectionIndex + '][bullets][' + bulletIndex + '][text]" value="" placeholder="Bullet text" />',
             '<button type="button" class="jd-editor__mini-button" data-jd-remove-role-bullet title="Remove bullet"><i class="bi bi-x-lg ui-icon" aria-hidden="true"></i></button>',
             '</li>'
           ].join("");
@@ -247,13 +259,13 @@ function renderJdScript(): string {
           var approvalButton = document.createElement("button");
           var officeButton = document.createElement("button");
 
-          blocker.className = "modal-page-blocker";
-          dialog.className = "email-confirm-dialog email-confirm-dialog--choice";
+          blocker.className = "modal-page-blocker grid";
+          dialog.className = "email-confirm-dialog text-body grid gap-16 email-confirm-dialog--choice";
           dialog.setAttribute("role", "dialog");
           dialog.setAttribute("aria-modal", "true");
           dialog.setAttribute("aria-label", "Choose which email to send");
           message.textContent = "Choose which email to send";
-          actions.className = "email-confirm-dialog__actions email-confirm-dialog__actions--grid";
+          actions.className = "email-confirm-dialog__actions flex justify-end gap-8 email-confirm-dialog__actions--grid";
           approvalButton.type = "button";
           approvalButton.textContent = "For Approval";
           officeButton.type = "button";
@@ -401,6 +413,41 @@ function renderJdScript(): string {
           }
         });
 
+        // Settings forms save without reloading so the open accordion section
+        // stays open; a status line under the Save button confirms it.
+        async function saveSettingsInPlace(form, url) {
+          var status = form.querySelector("[data-jd-settings-status]");
+          if (!status) {
+            status = document.createElement("p");
+            status.className = "jd-settings__ktca-status text-ghost text-small";
+            status.setAttribute("data-jd-settings-status", "");
+            form.appendChild(status);
+          }
+          status.textContent = "Saving...";
+          var result = await postSilent(url, formData(form));
+          status.textContent = result ? "Saved." : "";
+          if (result && form.hasAttribute("data-jd-folder-settings")) {
+            // The server swaps a blank entry for the default path; show it
+            // and keep the list button's tooltip in step.
+            var settings = await fetch("/api/jd/settings/global").then(function(r) { return r.json(); }).catch(function() { return null; });
+            if (settings && settings.jobPositionsFolder) {
+              form.querySelector("[name=jobPositionsFolder]").value = settings.jobPositionsFolder;
+              var folderButton = document.querySelector("[data-jd-open-folder]");
+              if (folderButton) folderButton.title = settings.jobPositionsFolder;
+            }
+          }
+        }
+
+        document.addEventListener("click", function(event) {
+          var folderButton = event.target instanceof Element ? event.target.closest("[data-jd-open-folder]") : null;
+          if (!folderButton) return;
+          event.preventDefault();
+          fetch("/api/jd/open-folder", { method: "POST" })
+            .then(function(response) { return response.json(); })
+            .then(function(payload) { if (payload && payload.error) window.alert(payload.error); })
+            .catch(function() { window.alert("Couldn't open the Job Positions folder. Please try again."); });
+        });
+
         document.addEventListener("submit", function(event) {
           var form = event.target;
           if (!(form instanceof HTMLFormElement)) return;
@@ -419,17 +466,17 @@ function renderJdScript(): string {
           if (form.hasAttribute("data-jd-centre-profile")) {
             event.preventDefault();
             var centreKey = form.getAttribute("data-centre-key");
-            post("/api/jd/settings/centre/" + centreKey, formData(form));
+            saveSettingsInPlace(form, "/api/jd/settings/centre/" + centreKey);
             return;
           }
           if (form.hasAttribute("data-jd-title-profile")) {
             event.preventDefault();
-            post("/api/jd/settings/title", formData(form));
+            saveSettingsInPlace(form, "/api/jd/settings/title");
             return;
           }
-          if (form.hasAttribute("data-jd-global-settings")) {
+          if (form.hasAttribute("data-jd-global-settings") || form.hasAttribute("data-jd-folder-settings")) {
             event.preventDefault();
-            post("/api/jd/settings/global", formData(form));
+            saveSettingsInPlace(form, "/api/jd/settings/global");
             return;
           }
           if (form.hasAttribute("data-jd-title-create")) {
@@ -455,7 +502,7 @@ function renderJdScript(): string {
           }
           if (form.hasAttribute("data-jd-knowledge-doc")) {
             event.preventDefault();
-            post("/api/jd/settings/knowledge-doc", formData(form));
+            saveSettingsInPlace(form, "/api/jd/settings/knowledge-doc");
             return;
           }
           if (form.hasAttribute("data-jd-ktca-import")) {
@@ -501,8 +548,24 @@ function renderJdScript(): string {
             syncDatePickerValue(field);
             return;
           }
+          if (field instanceof HTMLSelectElement && field.name === "positionType") syncIntroPositionType(field);
           autosaveJdEdit(field);
         });
+
+        // Swap "Full Time" <-> "Part Time" in the intro paragraph so it matches
+        // the selected Position Type, keeping the existing separator and casing.
+        function syncIntroPositionType(select) {
+          var form = select.closest("[data-jd-edit]");
+          var intro = form ? form.querySelector('textarea[name="introParagraph"]') : null;
+          if (!intro) return;
+          var target = select.value === "Part-time" ? "part" : "full";
+          intro.value = intro.value.replace(/\\b(full|part)([ -]?)(time)\\b/gi, function(_match, word, sep, time) {
+            var replacement = word === word.toUpperCase() ? target.toUpperCase()
+              : word.charAt(0) === word.charAt(0).toUpperCase() ? target.charAt(0).toUpperCase() + target.slice(1)
+              : target;
+            return replacement + sep + time;
+          });
+        }
 
         window.__jdPost = post;
         window.__jdPostSilent = postSilent;
@@ -544,15 +607,17 @@ export function renderJdAppShell(options: JdAppShellOptions): string {
     <link rel="icon" href="/favicon.ico" type="image/png" />
     <link rel="stylesheet" href="/vendor/bootstrap-icons.css" />
     <link rel="stylesheet" href="/app.css" />
+    <link rel="stylesheet" href="/themes.css" />
+    ${THEME_HEAD_SCRIPT}
   </head>
   <body class="app-shell-body">
-    <aside class="nav-rail" aria-label="Primary navigation">
-      <a class="nav-rail__item" href="/" aria-label="Back to landing" title="Landing"><i class="bi bi-house-door" aria-hidden="true"></i></a>
-      <a class="nav-rail__item" href="/app" aria-label="Online Marketing dashboard" title="Online Marketing"><i class="bi bi-bar-chart-line" aria-hidden="true"></i></a>
-      <a class="nav-rail__item" href="/tasks" aria-label="Tasks" title="Tasks"><i class="bi bi-check2-square" aria-hidden="true"></i></a>
-      <a class="nav-rail__item" href="/comms" aria-label="Online Communications dashboard" title="Online Communications"><i class="bi bi-envelope-paper" aria-hidden="true"></i></a>
-      <a class="nav-rail__item nav-rail__item--current" href="/jd" aria-label="Job Descriptions" title="Job Descriptions" aria-current="page"><i class="bi bi-file-earmark-person" aria-hidden="true"></i></a>
-      <a class="nav-rail__item" href="/wiki" aria-label="Things To Know" title="Things To Know"><i class="bi bi-journal-bookmark" aria-hidden="true"></i></a>
+    <aside class="nav-rail flex flex-col items-center gap-6" aria-label="Primary navigation">
+      <a class="nav-rail__item inline-flex items-center justify-center text-muted" href="/" aria-label="Back to landing" title="Landing"><i class="bi bi-house-door" aria-hidden="true"></i></a>
+      <a class="nav-rail__item inline-flex items-center justify-center text-muted" href="/app" aria-label="Online Marketing dashboard" title="Online Marketing"><i class="bi bi-bar-chart-line" aria-hidden="true"></i></a>
+      <a class="nav-rail__item inline-flex items-center justify-center text-muted" href="/tasks" aria-label="Tasks" title="Tasks"><i class="bi bi-check2-square" aria-hidden="true"></i></a>
+      <a class="nav-rail__item inline-flex items-center justify-center text-muted" href="/comms" aria-label="Online Communications dashboard" title="Online Communications"><i class="bi bi-envelope-paper" aria-hidden="true"></i></a>
+      <a class="nav-rail__item inline-flex items-center justify-center text-muted nav-rail__item--current" href="/jd" aria-label="Job Descriptions" title="Job Descriptions" aria-current="page"><i class="bi bi-file-earmark-person" aria-hidden="true"></i></a>
+      <a class="nav-rail__item inline-flex items-center justify-center text-muted" href="/wiki" aria-label="Things To Know" title="Things To Know"><i class="bi bi-journal-bookmark" aria-hidden="true"></i></a>
     </aside>
     ${layout}
     ${renderJdScript()}

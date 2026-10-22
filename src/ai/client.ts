@@ -154,6 +154,70 @@ export async function runLocalChat(config: AiConfig, messages: AiChatMessage[]) 
   }
 }
 
+// Structured extraction: Ollama constrains the reply to `schema` (a JSON
+// schema) with thinking off and temperature 0, and the parsed object is
+// returned. The builtin provider cannot do this, so it throws.
+export async function runLocalJson(config: AiConfig, messages: AiChatMessage[], schema: object): Promise<unknown> {
+  if (config.AI_PROVIDER !== "ollama") {
+    throw new AiClientError("Structured extraction needs the local AI (Ollama).", 503);
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), config.AI_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(`${config.AI_BASE_URL.replace(/\/$/, "")}/api/chat`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: config.AI_CHAT_MODEL,
+        stream: false,
+        think: false,
+        format: schema,
+        messages,
+        keep_alive: AI_KEEP_ALIVE,
+        options: {
+          temperature: 0,
+        },
+      }),
+      signal: controller.signal,
+    });
+
+    const payload = (await response.json().catch(() => ({}))) as OllamaChatResponse;
+
+    if (!response.ok) {
+      throw new AiClientError(
+        payload.error || `Local AI request failed with HTTP ${response.status}.`,
+        response.status,
+      );
+    }
+
+    try {
+      return JSON.parse(stripThinkBlocks(payload.message?.content ?? ""));
+    } catch {
+      throw new AiClientError("Local AI returned malformed JSON.");
+    }
+  } catch (error) {
+    if (error instanceof AiClientError) {
+      throw error;
+    }
+
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new AiClientError("Local AI request timed out.");
+    }
+
+    throw new AiClientError(
+      error instanceof Error
+        ? `Local AI is unavailable: ${error.message}`
+        : "Local AI is unavailable.",
+    );
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 export async function* streamLocalChat(config: AiConfig, messages: AiChatMessage[]) {
   if (config.AI_PROVIDER === "builtin") {
     yield runBuiltinChat(messages);

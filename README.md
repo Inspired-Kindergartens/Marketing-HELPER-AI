@@ -58,6 +58,7 @@ The dashboard is local-only. `src/server.ts` refuses to start on a non-local hos
 - **Manual capacity overrides** fill missing Infocare licence capacity values, including optional under-2 and over-2 capacity splits.
 - **Meta Ads** supplies campaign/ad/ad set status, spend, results, impressions, budgets, and end dates.
 - **Google Analytics** supplies site totals and page-level traffic for the selected range.
+- **Ministry of Education ECE directory** (data.govt.nz) and **competitor websites** supply Sector Insight's centre list, promotions, meals and transport.
 
 ## Running The App
 
@@ -129,6 +130,84 @@ The landing page links to the main local tools:
 - **General Chat** (`/chat`) - a general-purpose local AI chat with retained conversations and groups.
 - **Communications** (`/comms`) - Postmark, Mailchimp, Formstack, and communications-focused AI help.
 - **Job Descriptions** (`/jd`) - AI-drafted website vacancy blurbs and PDF job descriptions per kindergarten.
+- **Things To Know** (`/wiki`) - the marketing team wiki; articles are AI-categorised and ground the AI chats.
+- **Code Snippets** (`/snippets`) - reusable code (tracking tags, embeds, email HTML) with one-click copy and an AI snippet helper.
+- **Links** (`/subscriptions`) - categorised links, such as the services the team subscribes to and the newsletter links under the "Panui Tools" category (no AI chat). Shown as "Links"; the route, tables and code still use the original name "Subscriptions".
+- **Sector Insight** (`/sector`) - competitors and other ECE services with their promotions, meals and transport, a monthly crawler, and an AI chat that answers from the exact matching rows. See [Sector Insight](#sector-insight).
+- **Upload Contacts** (`/contacts/upload`) - replaces the centre contact workbook used by the dashboard's Email column. Linked from the landing page footer, alongside Restart server.
+- **Read Me** (`/readme`) - the plain-language user guide, rendered from `docs/USER-GUIDE.md`.
+
+### Documentation
+
+There are two readmes, and every change to the app should update both:
+
+- `README.md` (this file) - the technical readme for the repository.
+- `docs/USER-GUIDE.md` - the user guide shown by the landing page's **Read Me** button, in simple language with links to each page.
+
+## Styling And Themes
+
+All styling lives in two stylesheets, linked from every page head in this order:
+
+- `src/ui/app.css` (`/app.css`) - the **Default** theme (the original dark, square, uppercase look) and every layout rule.
+- `src/ui/themes.css` (`/themes.css`) - the **Light** and **Dark** themes. They apply only while the root element carries `data-theme="light"` or `data-theme="dark"`; with no attribute the page is the Default theme.
+
+There is no inline styling in the markup. Values that come from data are passed as `data-*` attributes and read by CSS with typed `attr()` (Chrome/Edge 133+): `data-percent` (waitlist threshold bars, Google Analytics bars), `data-position` (Gantt bars) and `data-chart-rows` (recent-demand chart height). Task description/note fields and the JD blurb editor grow to fit their content with CSS (`field-sizing: content`), not script. Two inline styles remain on purpose, both for content that leaves the app: the Postmark RSS item (RSS readers ignore our stylesheet) and the wiki's copy-to-clipboard HTML (Word and Outlook ignore stylesheets).
+
+`app.css` is organised as:
+
+1. **Tokens** on `html`: colours, font sizes, and theme hooks (`--radius-*`, `--shadow-*`, `--text-transform-label`, `--color-panel-title`, warning/danger alert tones, chart colours). The Default values reproduce the original look exactly; themes change the look by overriding tokens.
+2. **Base** element, panel and button rules.
+3. **Shared building blocks** - classes for patterns that recur across pages, applied in the markup next to the component class:
+   - surfaces: `card` (+ `card--inset`, `card--quiet`), `stat-tile`, `note-box`, `panel--scroll`
+   - headings: `section-header`, `section-title`, `subheading`
+   - tables: `table-frame` (+ `table-frame--scroll`), `data-table`, `data-table__numeric`
+   - lists: `list-row`, `badge` (+ `badge--warning`, `badge--accent`)
+   - forms: `field-label`, `form-control` (+ `form-control--sm` for the compact Tasks fields)
+   - buttons (size/layout only - colour always comes from the standard button): `button-sm`, `button-md`, `button-icon`, `button-remove`, `button-danger`
+   - rich text: `rich-text` (+ `rich-text--editable`), `format-toolbar`
+   - utilities: `flex`, `inline-flex`, `grid`, `flex-col`, `flex-wrap`, `items-*`, `justify-*`, `gap-4`...`gap-16`, `min-w-0`, `nowrap`, `text-small`, `font-strong`, `label-case`, `text-body`/`text-strong`/`text-muted`/`text-ghost`/`text-empty`/`text-accent`
+4. **Component rules** per page, holding only what is specific to each component.
+5. **Shared states** last (`.button-danger:hover`), so they win over component hovers.
+
+`themes.css` holds one token block per theme (Light, Dark) and a shared block of shape and type refinements for both (rounded corners, soft shadows, sentence-case labels, focus rings). Its selectors use `:where()` so `app.css`'s more specific rules still apply. The waitlist charts read their colours from the same tokens (`--color-chart-grid`, `--color-chart-text`, `--color-wait-*`) when they render, so they follow the active theme.
+
+### Choosing a theme (`src/ui/theme.ts`)
+
+- The **Look** drop-down (Default / Light / Dark) sits at the end of the landing page footer.
+- The choice is stored per browser in `localStorage` under `marketing-helper-theme` (no entry = Default), so each person's computer remembers its own look.
+- `THEME_HEAD_SCRIPT` sits in every page `<head>` right after the two stylesheet links. It sets `data-theme` before the body is drawn, so a page never flashes the wrong look. It also defines `window.setAppTheme(theme)` (used by the drop-down) and follows a change made in another tab through the `storage` event.
+- Every change fires a `themechange` event on `document`; the waitlist charts destroy and redraw themselves on it, so an open dashboard picks up the new colours.
+
+## Sector Insight
+
+`/sector` (landing tile next to **Links**) holds every competitor and other early childhood service around Inspired's centres, with their promotions/incentives, meals and transport.
+
+### Data model (`prisma/schema.prisma`)
+
+- `SectorCentre` - one service. `eceId` is the Ministry of Education licence number (unique; null for a centre only known from the CSV). Directory fields (type, ownership, address, district, coordinates, licensed / under-2 places, roll, 20 Hours ECE) are refreshed every update; `operator`, `website`, `promotionUrl`, `meals`/`providesMeals`, `transport`/`providesTransport` (null = not known) and `notes` are editable. `isOwn` is set when the licence number equals an Inspired `CentreReference.licenseNumber`; own centres get operator "Inspired Kindergartens" and are excluded from every competitor count. `inDirectory = false` with an `eceId` means the service has dropped out of the directory (closed/relicensed).
+- `SectorPromotion` - per centre, unique on `(centreId, text)`; `category` (free_period / discount / free_hours / gift / other), `origin` (csv / crawl / manual), `active`, `firstSeenAt` / `lastSeenAt` / `endedAt`.
+- `SectorCrawlRun` - one update: trigger, status and counts, shown in the page's Update History.
+
+### Sources and the update (`src/sector/sync.ts`)
+
+1. **Ministry of Education ECE directory** (`src/sector/ece-directory.ts`) via the data.govt.nz CKAN datastore API (dataset `directory-of-educational-institutions`, the `ecedirectory` resource, refreshed daily). Scope: `Regional_Council = Bay of Plenty Region`, plus every service in the territorial authorities of Inspired centres outside it (Hauraki, Thames-Coromandel).
+2. **CSV seed** (first run only, when the table is empty): the newest `docs/Bay_of_Plenty_ECE_Competitor_Promotions_*.csv`. Excel saves it as Windows-1252; `decodeCsvBytes` maps the 0x80-0x9F block itself because Node's `TextDecoder("windows-1252")` decodes it as Latin-1. The export turned macron vowels into `?`, which `namesMatch` treats as a one-letter wildcard, so rows link to their directory entry and take its correctly spelled name. "Unverified" operators are stored as `""`.
+3. **Directory refresh**: updates linked services, links CSV-only rows that turn out to be a directory service (same town, loose name match), adds new services, and marks missing ones `inDirectory = false` (only when the pull returned at least 100 services). Unverified centres whose name starts with a group's shared opening ("BestStart …", "Busy Bees …"; two words, or one distinctive word) are filed under that group. Centres with no website get their group's most common website, else their email domain when it isn't a free-mail provider.
+4. **Website crawl**: centres are grouped by URL (`promotionUrl`, `website`), so a group page shared by 30 centres is read once. Per site: robots.txt honoured, one request at a time with a delay, the page plus up to three same-site links about offers/fees/meals/transport. `src/sector/page-text.ts` builds a ≤7,000-character excerpt from the visible text **and** embedded JSON payloads (Nuxt `__NUXT_DATA__` devalue arrays are unflattened; BestStart renders its offers that way). An offer listing participating centres is kept only if one of ours is listed, and says which. On a group's "find a centre" page each of our centres' own lines ("Busy Bees Katikati / 20 Hours ECE / Meals provided") are kept as a window.
+5. **Extraction** (`src/sector/extract.ts`): `runLocalJson` (`src/ai/client.ts`) calls Ollama with a JSON schema, `think: false`, temperature 0. The reply is then checked: every number and most words of an offer must be on the page (`isSupportedByPage`), ended/past offers and the plain government 20 Hours ECE are dropped, hedged statements ("some centres provide meals") are ignored, and on a centre list meals/transport only apply to a centre whose own window mentions them.
+6. **Applying it**: a found offer matches an existing one by token overlap with equal numbers (`promotionSimilarity`), refreshing `lastSeenAt`; otherwise it is added. An offer from this site that wasn't found again is ended, unless its wording is still on the page. Manual offers are never ended. A "yes" for meals/transport always wins; a "no" only fills an unknown. When the local AI is off or fails for a site, that site is left unchanged.
+
+The server checks daily (first check 2 minutes after startup) and runs when the last **complete** run is over 30 days old (`sync-cursor` key `sector:completed-at`) or there is no data. **Update now** (`POST /api/sector/sync`) starts one in the background; the page polls `GET /api/sector/sync/status`. A run left "running" by a restart is marked failed at startup and re-run by the next check. The first run read ~180 sites at roughly 25 seconds each on the 4 GB GPU, since most of the 8B model runs on the CPU.
+
+### Chat (`src/ai/sector-context.ts`, `src/sector/query.ts`)
+
+The local model has a 4,096-token window, far too small for ~400 centres, so the app decides which centres answer a question and the model only words the reply. `parseSectorQuestion` turns the question into filters: named centres, operators (by alias, e.g. "BestStart", "Learning Adventures"), places (town, suburb or district, so "Tauranga" covers Pāpāmoa and the Mount), service types ("free kindergarten" is a type, never an offer), meals / transport (with negation), promotions and their categories ("offer" as a verb is not a promotion), under-2s, Inspired-only or include. Own and closed centres are excluded unless asked for. The page table lists competitors only (own and closed rows are not rendered) and starts filtered to centres running a promotion. A follow-up ("which of those…") is read together with the previous question; on a centre's page, "it"/"this centre" questions are about that centre.
+
+`POST /api/sector/ai/chat/stream` sends a `results` SSE event first (the exact matching rows, up to 200, listed under the reply with links), then the model's summary grounded on a sector overview plus the matching rows (≤6,000 characters; full records when 1-3 match). Without the model, the reply is a deterministic sentence and the list still shows.
+
+### Other routes
+
+`GET /sector[?centre=id]`, `POST /api/sector/centres/:id` (edit), `POST /api/sector/centres/:id/promotions` (add), `POST /api/sector/promotions/:id/end|delete` (both return the refreshed promotions table HTML, swapped in place), `GET /api/sector/export.csv` (UTF-8 with BOM; the spreadsheet's columns first, then directory fields).
 
 ## Tasks & Projects
 
@@ -141,6 +220,10 @@ Each task has a title/description, a **status** (`To do` / `In progress` / `Bloc
 - **Estimated minutes** - a manual estimate.
 - **Logged minutes** - the running total, built from manual time entries plus stopped timer sessions.
 - **Timer** - starting a timer stamps `timerStartedAt`; stopping it folds the elapsed minutes into the logged total and records a `TimeEntry` row. Reading a task's logged time while a timer is running includes the live elapsed minutes without writing anything.
+
+Checklist items are reordered by dragging the grip at the left of a row; the new order is posted to `POST /api/tasks/:id/checklist/reorder` as a list of item ids and saved to `ChecklistItem.position`. Ticking, adding, editing and deleting checklist items also save without a page reload: the page re-fetches itself and swaps in only the checklist rows, its done count and the board card's badges, so the Task Detail panel keeps its scroll position.
+
+The Projects and Members panels render only on the board view (`/tasks`); with a task selected (`/tasks?task=<id>`) the shell leaves them out, since the page is about that one task.
 
 Moving a task's status to `Done` stamps `completedAt`; moving it back out of `Done` clears it.
 
@@ -173,6 +256,14 @@ Creating a JD starts with two dropdowns:
 
 Selecting both composes a new `JobDescription` by copying every field from the title/centre profiles at that moment - editing the JD afterwards never touches the shared profiles, and re-generating the profiles later doesn't retroactively change existing JDs.
 
+In the JD Editor, changing **Position Type** rewrites any `full time` / `part time` (space, hyphen or joined; casing kept) in the intro paragraph to match, client-side in `syncIntroPositionType` (`src/ui/jd-app-shell.ts`), before the change autosaves the form.
+
+### Job Positions folder and Settings layout
+
+The Job Descriptions panel header and the website blurb panel header (`/jd?panel=jd-blurb&jd=…`) both have a **Job Positions** button (shared markup in `renderPanelActions` in `src/ui/jd-app-shell.ts`, same delegated click handler). Browsers will not follow `file://` links from an `http://` page, so the button POSTs to `/api/jd/open-folder`, and the server (which runs on this PC) runs `explorer.exe <folder>`. The route only opens the stored setting and never a path from the request, and it returns 404 with a message if the folder is missing. The folder is `JdGlobalSetting.jobPositionsFolder`, edited under **Settings > Folder shortcuts**. When blank it falls back to `DEFAULT_JOB_POSITIONS_FOLDER` (`D:\Apps\Inspired Kindergartens\IK Data - Documents\Communications\Job Positions`) in `src/storage/jd-store.ts`. `/api/jd/settings/global` (GET/POST) does a partial update: each field is changed only if it is sent.
+
+The Settings panel is one exclusive `<details name="jd-settings-sections">` accordion, using the same `wiki-list__group--collapsible` markup as the Links page. Settings forms save in place with `postSilent` and show a "Saved." line instead of reloading, so the open section stays open. **Add job type** still reloads, because it adds a row.
+
 ### Pay scales (KTCA)
 
 Salary ranges are computed from `JdPayScale` rows (K1 stepped scale, K2/K2R flat rates), each with an `effectiveFrom` date. `formatSalaryRange` picks the latest rate not after the JD's advertised date, so ranges roll forward automatically as new KTCA rate steps take effect (e.g. the 28 Jan 2027 step). Part-time positions pro-rate the range by FTE.
@@ -183,7 +274,9 @@ On every server start, the app logs the currently-effective KTCA agreement and w
 
 The **Website Blurb** panel is a custom `contenteditable` WYSIWYG editor (headings, bold/italic, bullet lists, links - no external rich-text dependency). **Generate with AI** calls the local model with context built from: the IK generic base text, the centre's current and old website blurbs (seeded from the supplied blurb PDFs), and the centre's previously saved blurbs - so new drafts stay in that centre's established voice rather than reinventing it.
 
-Only the *variable, editorial* section is AI-generated. A fixed, non-editable **boilerplate** block is appended verbatim below the editor and is never sent through the AI, so the model cannot paraphrase or drop it. It contains, in order: the italic KTCA terms sentence (which also states the New Zealand work-eligibility requirement - "By applying for this role you acknowledge that you are eligible to work in New Zealand. If you are not eligible to work in New Zealand then do not apply."), the link to the JD PDF, the link to the online application page, Start Date, Closing Date, and the "Be at the cutting edge" tagline. **Copy to clipboard** copies both the editorial section and the boilerplate together, as both HTML and plain text.
+Only the *variable, editorial* section is AI-generated. A fixed, non-editable **boilerplate** block is appended verbatim below the editor and is never sent through the AI, so the model cannot paraphrase or drop it. It contains, in order: the italic KTCA terms sentence (which also states the New Zealand work-eligibility requirement - "By applying for this role you acknowledge that you are eligible to work in New Zealand. If you are not eligible to work in New Zealand then do not apply."), the JD title as plain text (not linked), the **Please apply online here** link, Start Date, Closing Date, and the "Be at the cutting edge" tagline. **Copy to clipboard** copies both the editorial section and the boilerplate together, as both HTML and plain text.
+
+The apply link (`buildJdApplicationFormUrl` in `src/ai/jd-context.ts`) points at Formstack. Teaching roles (job title contains "Teacher") use `job_application_form_2026` prefilled with the centre (minus "Kindergarten") and role (minus any Full/Part-time prefix), e.g. `https://inspiredkindergartens.formstack.com/forms/job_application_form_2026?service_location=Gwen%20Rogers&role=Teacher`. Every other role uses the generic `https://inspiredkindergartens.formstack.com/forms/job_application_form_copy`.
 
 Every save (AI-generated or hand-edited) appends a new `JdBlurb` history row rather than overwriting - all prior versions stay available to restore and double as future AI reference material for that centre.
 
@@ -191,7 +284,7 @@ Every save (AI-generated or hand-edited) appends a new `JdBlurb` history row rat
 
 Advertising a vacancy involves three pieces that must agree with each other: the **page title** you give the website, the **page URL** the website generates from that title, and the **link you send to Ed Gazette**. The app derives all three from the same job description so they cannot drift apart.
 
-**Copy Website Page Title** (Website Blurb panel toolbar) copies the exact title to paste into the website when creating the vacancy page, for example:
+**Copy Website Page Name** (Website Blurb panel toolbar) copies the exact title to paste into the website when creating the vacancy page, for example:
 
 ```
 Full-time Teacher / Kaiako Position - Gwen Rogers Kindergarten August 2026
@@ -212,7 +305,7 @@ The month and year exist to keep each posting unique. The website builds a vacan
 https://inspiredkindergartens.nz/employment-and-careers/vacancies/full-time-teacher-kaiako-position-gwen-rogers-kindergarten-august-2026?utm_source=education_gazette&utm_medium=referral&utm_campaign=gwen_rogers_teacher_2026
 ```
 
-That link *is* the live vacancy page URL, so its path is the slugified page title above - the same string **Copy Website Page Title** gives you. The `utm_` parameters tag arriving traffic as an Ed Gazette referral so those visits are attributable in Google Analytics; the campaign tag combines centre, role, and the Date Advertised year.
+That link *is* the live vacancy page URL, so its path is the slugified page title above - the same string **Copy Website Page Name** gives you. The `utm_` parameters tag arriving traffic as an Ed Gazette referral so those visits are attributable in Google Analytics; the campaign tag combines centre, role, and the Date Advertised year.
 
 **Two things to watch:**
 
@@ -221,7 +314,7 @@ That link *is* the live vacancy page URL, so its path is the slugified page titl
 
 ### PDF
 
-**Download PDF** (`GET /api/jd/:id/pdf`) renders the JD with `pdfmake`, matching the layout of the existing PD PDFs: the Inspired Kindergartens logo, the bordered field table, the "Applications only accepted by" band with qualifications alongside, the Role & Responsibilities sections, and a footer review table (Reviewed By / Approved By / Last Updated By). The filename follows the existing convention, hyphen-separated and ending in a timestamp so each regeneration is distinct: `PD-<Job-Title>-<LOCATION>-<Month>-<Day>-<Year>-<YYYYMMDD-HHMMSS>.pdf` (e.g. `PD-Teacher-GWEN-ROGERS-KINDERGARTEN-August-27-2026-20260827-235731.pdf`). The location keeps its stored upper-case form here, because this is the published asset filename the blurb boilerplate links to - only on-screen and in-document text is title-cased. Because this app is local-only and Windows-only, the PDF fonts are read straight from the OS Arial install (`C:\Windows\Fonts`) rather than bundling font files into the repo.
+**Download PDF** (`GET /api/jd/:id/pdf`) renders the JD with `pdfmake`, matching the layout of the existing PD PDFs: the Inspired Kindergartens logo, the bordered field table, the "Applications only accepted by" band with qualifications alongside, the Role & Responsibilities sections, and a footer review table (Reviewed By / Approved By / Last Updated By). The filename follows the existing convention, hyphen-separated and ending in a timestamp so each regeneration is distinct: `PD-<Job-Title>-<LOCATION>-<Month>-<Day>-<Year>-<YYYYMMDD-HHMMSS>.pdf` (e.g. `PD-Teacher-GWEN-ROGERS-KINDERGARTEN-August-27-2026-20260827-235731.pdf`). The location keeps its stored upper-case form here, because this is the published asset filename on the website - only on-screen and in-document text is title-cased. Because this app is local-only and Windows-only, the PDF fonts are read straight from the OS Arial install (`C:\Windows\Fonts`) rather than bundling font files into the repo.
 
 ### Settings
 
@@ -355,7 +448,8 @@ The app is split into five panels:
 - **Waitlist Quality** - waitlist age, staleness, and age-profile checks.
 - **META Ads** - active and recent advertising coverage, delivery state, spend, and recommendations.
 - **Google Analytics** - website traffic totals and page-level interest.
-- **AI Chat** - selected-centre guidance and follow-up questions grounded in the current dashboard context.
+- **Notes** - notes kept against Meta recommendations.
+- **AI Chat** - selected-centre guidance and follow-up questions grounded in the current dashboard context and the help knowledge base.
 
 ## Infocare Analytics
 
@@ -525,24 +619,20 @@ The default table order is not alphabetical. The Infocare Analytics priority lis
 
 The selected window (`1W` through `12M`) changes the Leaving count used in this priority listing.
 
-Separately, the app stores an urgency band for each snapshot. That stored band is calculated from:
+Separately, each centre has an **urgency score** from 0 to 100 (`calculateUrgencyScore` in `src/analytics/compute.ts`). It is recomputed for the selected window whenever it is read, never stored, so the table, the AI chat and the band always agree. It adds three parts:
 
-- available headcount places,
-- waitlist count,
-- known leaving pressure,
-- children already aged five or older,
-- children approaching five,
-- whether waitlist cover is low,
-- whether both under-2 and over-2 capacity paths are available.
+- **Uncovered leavers** (up to 45) - children leaving in the window minus the actionable waitlist, measured against 10% of licensed capacity.
+- **Empty places** (up to 40) - available places as a share of licensed capacity; a quarter empty scores the full 40.
+- **No resilience** (15) - added when the actionable waitlist is zero.
 
-Those stored snapshot scores are converted into a scaled score from 0 to 100. Bands are:
+Bands are:
 
-- **Critical** - 75 or above.
-- **High** - 50 to 74.
-- **Moderate** - 25 to 49.
-- **Stable** - below 25.
+- **Critical** - 70 or above.
+- **High** - 45 to 69.
+- **Moderate** - 20 to 44.
+- **Stable** - below 20.
 
-This means urgency is relative to the current set of centres. A centre can move up or down because its own data changed, or because other centres changed.
+The score is absolute, not a ranking: every centre can be Stable in a healthy week or Critical in a bad one, and nothing depends on how other centres are doing.
 
 ## FTE Meaning
 
@@ -694,7 +784,6 @@ Labels include:
 - **Ads active, monitor** - open places and active spending are present.
 - **Review spend** - demand appears covered while ads are still active.
 - **Prepare campaign** - upcoming replacement pressure exists but no active campaign is present.
-- **Demand covered** - low open places and enough waitlist.
 - **Covered by ads** or **Watch** - lower-priority states.
 
 Recommendation detail shows:
@@ -780,7 +869,7 @@ The panel shows a generated summary for the selected centre and includes an inte
 - manual capacity notes,
 - latest stored Meta Ads notes for the selected centre.
 
-The composer posts to `/api/ai/chat`, sends the selected centre and selected window, and keeps a short in-browser history so follow-up questions have conversational context. Answers are grounded in a fresh dashboard context built on each request from Infocare analytics, Meta Ads, Google Analytics, and centre-level recommendation data.
+The composer streams from `/api/ai/chat/stream`, sends the selected centre and selected window, and keeps a short in-browser history so follow-up questions have conversational context. Answers are grounded in a fresh dashboard context built on each request from Infocare analytics, Meta Ads, Google Analytics, and centre-level recommendation data, plus the Things To Know wiki and excerpts from the [help knowledge base](#help-knowledge-base-rag) (Infocare, Meta and Google Analytics sources). A **Sources** line under each answer names the help pages used.
 
 ## General Chat Page
 
@@ -810,8 +899,52 @@ Local AI configuration is controlled through `.env`:
 - `AI_BASE_URL=http://127.0.0.1:11434`
 - `AI_CHAT_MODEL=llama3.1:8b`
 - `AI_TIMEOUT_MS=60000`
+- `AI_EMBED_MODEL=nomic-embed-text` - the embedding model for the help knowledge base (see below).
+
+### Updating the local AI model
+
+The landing page footer has **Update AI model** (shown when `RECOMMENDED_MODEL` in `src/landing-intelligence.ts` differs from `AI_CHAT_MODEL`; the model actually pulled is `RECOMMENDED_AI_CHAT_MODEL` in `src/server.ts`, so keep the two in step) and **Rollback AI model**. An update pulls the recommended model with `ollama pull`, moves the current model to `AI_CHAT_MODEL_FALLBACK`, switches `AI_CHAT_MODEL`, and warms the new model up. It then runs `ollama rm` on the model that was the fallback *before* the update, since it is no longer needed, unless it is still in use as the active model, the new fallback, the Job Description model (`JD_INTRO_AI_MODEL`, always `llama3.1:8b`) or the embedding model (`AI_EMBED_MODEL`). A removal failure is logged and never fails the update. Rollback swaps `AI_CHAT_MODEL` and `AI_CHAT_MODEL_FALLBACK`.
 
 Leave `AI_PROVIDER` unset, or set it to `builtin`, when you want Beep Beep to run with no external model dependency. Set `AI_PROVIDER=ollama` only when you want the optional local LLM path. `npm run ai:setup` downloads Ollama's standalone Windows runtime into `.local/ollama`, stores model files under `.local/ollama-models`, starts the local runtime, and pulls the configured model. Use `npm run ai:doctor` if the Ollama-backed chat path reports that the local AI is unavailable.
+
+## Things To Know
+
+`/wiki` is the team's marketing wiki. Each article has a title and rich-text body; on save the local model assigns one category from the managed list (never free text), writes 3-8 tags and a one-sentence summary. Categories are managed (renamed, re-ordered, deleted) from the Categories modal; deleting one moves its articles to General. Archived articles are hidden and excluded from AI grounding. Pinned articles are always included in grounding.
+
+The dashboard and General Chat are grounded on the wiki: `selectWikiGrounding` in `src/storage/wiki-store.ts` sends an index of every article plus the full text of the best keyword matches within a character budget.
+
+## Code Snippets and Links
+
+Two list pages share one design (the wiki's list, modal and editor styles):
+
+- **Code Snippets** (`/snippets`, tables `CodeSnippet` / `CodeSnippetCategory`) - clicking a row copies the code. The AI snippet helper sees the snippet open in the editor, and any fenced code block it writes gets a **Save as snippet** button.
+- **Links** (`/subscriptions`, tables `Subscription` / `SubscriptionCategory`) - titled links; clicking a row opens the link in a new tab. No chat; the single panel uses the layout's full-width focus mode. Categories render as an exclusive `<details name="subscription-groups">` accordion; only the category of the most recently used link starts open. `Subscription.lastUsedAt` is set on create, edit and duplicate, and by `POST /api/subscriptions/:id/used` when a link is opened or copied from the list. Never-used links fall back to `updatedAt`. Deleting a link removes its row in place, so the open category stays open. The former Panui Tools page (`/panui`, tables `PanuiTool` / `PanuiToolCategory`, and its newsletter-drafting chat) was retired on 2026-10-20: migration `20261020010000_merge_panui_tools_into_links` moved its links here under the "Panui Tools" category and dropped its tables.
+
+Each has a protected **General** category. Categories are stored by name on the item, so a rename re-files items in one transaction. Link URLs are normalised by `src/storage/link-url.ts` (http/https only; a bare domain gets `https://`).
+
+## Help Knowledge Base (RAG)
+
+The dashboard and Communications chats are grounded on a shared help knowledge base (tables `HelpArticle` / `HelpChunk`):
+
+| Source | Content | Refresh |
+| --- | --- | --- |
+| `mailchimp` | Mailchimp help centre, from the `mailchimp.com/main.xml` sitemap (~650 articles) | weekly |
+| `google-analytics` | GA4 articles from `support.google.com/analytics`, found by following links (no sitemap; `[UA]` articles skipped) | monthly |
+| `infocare` | In-house guide `knowledge/infocare/`, `docs/metric-contracts.md`, `INFOCARE/INFOCARE-LICENSE.md` | daily check |
+| `meta` | In-house guide `knowledge/meta/` | daily check |
+
+Meta's help centre and developer docs refuse automated requests, and Infocare has no public help centre, so those two are built from local documents. Any `.md`, `.txt`, `.html` or `.pdf` dropped into `knowledge/<source>/` is indexed (see `knowledge/README.md`).
+
+How it works:
+
+- **Chunking** - documents are split at their headings (`src/help-kb/parse.ts`); short sections are merged, long ones split, so each chunk is one topic.
+- **Embeddings** - Ollama `nomic-embed-text`, always with `num_gpu: 0` so it runs on the CPU and never evicts the 8B chat model from the 4 GB GPU. If the embedder is down, chunks are stored for full-text search and embedded on the next sync.
+- **Retrieval** - `buildHelpGrounding` in `src/storage/help-kb-store.ts` merges four ranked lists by weighted reciprocal rank fusion: vector similarity (2), Postgres full-text (0.5), an in-house-guide hybrid list (1), and exact-phrase matches such as "Review spend" (1.5). Help is only added when the best match reaches 0.68 cosine similarity or the question matches the source's topic pattern.
+- **Budgets** - the chat model runs with Ollama's default 4,096-token window, so the dashboard and Communications chats get two short excerpts (~2,000 characters), or four when the Communications prompt carries no Postmark data.
+- **Sync** - `startHelpKbSyncLoop` runs 60 seconds after startup and then daily: local documents are re-read every time, and a help centre is re-crawled when its last *complete* crawl (`SyncCursor` key `help-kb:<source>:completed-at`) is older than its refresh period, so a crawl cut short by a restart resumes. Crawls fetch one page at a time with a pause between.
+- **Tuning** - `scripts/help-kb-eval.mts` runs questions with known answers through retrieval. Re-run it after changing the fusion weights, the chunking, or a guide (`npx tsx scripts/help-kb-eval.mts`).
+
+The launcher (`scripts/open-marketing-helper.ps1`) pulls the embedding model in the background if it is missing, and `npm run ai:setup` pulls it alongside the chat model.
 
 ## Important Interpretation Rules
 
@@ -840,4 +973,10 @@ Leave `AI_PROVIDER` unset, or set it to `builtin`, when you want Beep Beep to ru
 - `src/infocare/*` - Infocare client, extraction, sync, and waitlist reports.
 - `src/meta/*` - Meta API config, refresh, and centre matching.
 - `src/google-analytics/*` - GA config, refresh, and client.
+- `src/ui/wiki-app-shell.ts`, `src/ui/wiki/*` - Things To Know pages; `src/storage/wiki-store.ts` - wiki storage and grounding.
+- `src/ui/snippets-app-shell.ts`, `src/ui/subscriptions-app-shell.ts` - the list pages; matching stores in `src/storage/`.
+- `src/help-kb/*` - help knowledge base sources and parsers; `src/storage/help-kb-store.ts` - its sync and retrieval.
+- `src/ai/embeddings.ts` - Ollama embedding client.
+- `knowledge/*` - in-house help guides and drop folders for the knowledge base.
+- `docs/USER-GUIDE.md` - the user guide shown at `/readme`.
 - `docs/metric-contracts.md` - metric rules that should be treated as data contracts.

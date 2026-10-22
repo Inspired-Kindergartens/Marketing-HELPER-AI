@@ -71,7 +71,7 @@ export function renderLayout({ panels, focusPanelId, openPanelId }: LayoutOption
   return `
     <main class="app-shell">
       <div class="app-shell__left">
-        <div class="left-grid" data-panel-accordion>
+        <div class="left-grid flex flex-col gap-10" data-panel-accordion>
           ${leftPanels
             .map((panel) =>
               renderPanel({
@@ -86,7 +86,7 @@ export function renderLayout({ panels, focusPanelId, openPanelId }: LayoutOption
             .join("")}
         </div>
       </div>
-      <div class="app-shell__right">
+      <div class="app-shell__right flex">
         ${
           chatPanel
             ? renderPanel({

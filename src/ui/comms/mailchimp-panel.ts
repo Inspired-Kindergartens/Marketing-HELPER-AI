@@ -70,7 +70,7 @@ function renderCampaignRows(campaigns: MailchimpCampaignView[]) {
     const report = campaign.report;
     const campaignLabel = escapeHtml(campaign.subject || "Untitled campaign");
     const campaignTitle = campaign.archiveUrl
-      ? `<a class="comms-campaign-link" href="${escapeHtml(campaign.archiveUrl)}" target="_blank" rel="noopener noreferrer">${campaignLabel}</a>`
+      ? `<a class="comms-campaign-link text-accent" href="${escapeHtml(campaign.archiveUrl)}" target="_blank" rel="noopener noreferrer">${campaignLabel}</a>`
       : `<strong>${campaignLabel}</strong>`;
 
     return `
@@ -78,10 +78,10 @@ function renderCampaignRows(campaigns: MailchimpCampaignView[]) {
         <td>${campaignTitle}</td>
         <td>${escapeHtml(campaign.status ?? "-")}</td>
         <td>${escapeHtml(formatDate(campaign.sendTime))}</td>
-        <td class="comms-table__numeric">${formatNumber(campaign.emailsSent)}</td>
-        <td class="comms-table__numeric">${report ? formatPercent(report.openRate) : "-"}</td>
-        <td class="comms-table__numeric">${report ? formatPercent(report.clickRate) : "-"}</td>
-        <td class="comms-table__numeric">${report ? formatNumber(report.unsubscribes) : "-"}</td>
+        <td class="comms-table__numeric data-table__numeric">${formatNumber(campaign.emailsSent)}</td>
+        <td class="comms-table__numeric data-table__numeric">${report ? formatPercent(report.openRate) : "-"}</td>
+        <td class="comms-table__numeric data-table__numeric">${report ? formatPercent(report.clickRate) : "-"}</td>
+        <td class="comms-table__numeric data-table__numeric">${report ? formatNumber(report.unsubscribes) : "-"}</td>
       </tr>
     `;
   }).join("");
@@ -116,9 +116,9 @@ function renderGrowthRows(rows: MailchimpListGrowthSnapshotView[]) {
     <tr>
       <td>${escapeHtml(row.listName)}</td>
       <td>${escapeHtml(formatDate(row.snapshotDate))}</td>
-      <td class="comms-table__numeric">${formatNumber(row.memberCount)}</td>
-      <td class="comms-table__numeric">${formatNumber(row.unsubscribed)}</td>
-      <td class="comms-table__numeric">${formatNumber(row.cleaned)}</td>
+      <td class="comms-table__numeric data-table__numeric">${formatNumber(row.memberCount)}</td>
+      <td class="comms-table__numeric data-table__numeric">${formatNumber(row.unsubscribed)}</td>
+      <td class="comms-table__numeric data-table__numeric">${formatNumber(row.cleaned)}</td>
     </tr>
   `).join("");
 }
@@ -129,7 +129,7 @@ function renderConfigState(configStatus: MailchimpConfigStatus | null | undefine
   }
 
   return `
-    <div class="comms-config-state" role="status">
+    <div class="comms-config-state flex flex-wrap card card--inset" role="status">
       <strong>Panui source is not configured.</strong>
       <span>Set ${escapeHtml(configStatus.missingKeys.join(" and "))} in <code>.env</code> to import Mailchimp data.</span>
     </div>
@@ -144,29 +144,29 @@ export function renderMailchimpPanel(options: MailchimpPanelOptions = {}) {
   const unsubscribeRate = metrics.sent > 0 ? metrics.unsubscribes / metrics.sent : 0;
 
   return `
-    <div class="comms-mailchimp-panel">
+    <div class="comms-mailchimp-panel grid gap-10 text-small">
       ${renderConfigState(options.configStatus)}
-      <div class="comms-summary">
-        <div class="comms-summary__item"><span>Campaigns</span><strong>${formatNumber(metrics.campaigns)}</strong></div>
-        <div class="comms-summary__item"><span>Emails sent</span><strong>${formatNumber(metrics.sent)}</strong></div>
-        <div class="comms-summary__item"><span>Open rate</span><strong>${formatPercent(openRate)}</strong></div>
-        <div class="comms-summary__item"><span>Click rate</span><strong>${formatPercent(clickRate)}</strong></div>
-        <div class="comms-summary__item"><span>Unsubscribe rate</span><strong>${formatPercent(unsubscribeRate)}</strong></div>
+      <div class="comms-summary grid gap-8">
+        <div class="comms-summary__item card stat-tile"><span>Campaigns</span><strong>${formatNumber(metrics.campaigns)}</strong></div>
+        <div class="comms-summary__item card stat-tile"><span>Emails sent</span><strong>${formatNumber(metrics.sent)}</strong></div>
+        <div class="comms-summary__item card stat-tile"><span>Open rate</span><strong>${formatPercent(openRate)}</strong></div>
+        <div class="comms-summary__item card stat-tile"><span>Click rate</span><strong>${formatPercent(clickRate)}</strong></div>
+        <div class="comms-summary__item card stat-tile"><span>Unsubscribe rate</span><strong>${formatPercent(unsubscribeRate)}</strong></div>
       </div>
-      <section class="comms-section">
-        <header class="comms-section__header"><h3>Recent campaigns</h3><span>Latest to oldest - ${metrics.campaigns} imported</span></header>
-        <div class="comms-table-wrap">
-          <table class="comms-table">
-            <thead><tr><th>Campaign</th><th>Status</th><th>Sent</th><th class="comms-table__numeric">Recipients</th><th class="comms-table__numeric">Open rate</th><th class="comms-table__numeric">CTR</th><th class="comms-table__numeric">Unsubs</th></tr></thead>
+      <section class="comms-section grid gap-8 card">
+        <header class="comms-section__header section-header"><h3 class="section-title">Recent campaigns</h3><span>Latest to oldest - ${metrics.campaigns} imported</span></header>
+        <div class="comms-table-wrap table-frame table-frame--scroll">
+          <table class="comms-table data-table">
+            <thead><tr><th>Campaign</th><th>Status</th><th>Sent</th><th class="comms-table__numeric data-table__numeric">Recipients</th><th class="comms-table__numeric data-table__numeric">Open rate</th><th class="comms-table__numeric data-table__numeric">CTR</th><th class="comms-table__numeric data-table__numeric">Unsubs</th></tr></thead>
             <tbody>${renderCampaignRows(dashboardData.campaigns)}</tbody>
           </table>
         </div>
       </section>
-      <section class="comms-section">
-        <header class="comms-section__header"><h3>Audience snapshots</h3><span>${latestGrowthByList(dashboardData.listGrowth).length} lists</span></header>
-        <div class="comms-table-wrap">
-          <table class="comms-table comms-table--growth">
-            <thead><tr><th>Audience</th><th>Snapshot</th><th class="comms-table__numeric">Members</th><th class="comms-table__numeric">Unsubscribed</th><th class="comms-table__numeric">Cleaned</th></tr></thead>
+      <section class="comms-section grid gap-8 card">
+        <header class="comms-section__header section-header"><h3 class="section-title">Audience snapshots</h3><span>${latestGrowthByList(dashboardData.listGrowth).length} lists</span></header>
+        <div class="comms-table-wrap table-frame table-frame--scroll">
+          <table class="comms-table data-table comms-table--growth">
+            <thead><tr><th>Audience</th><th>Snapshot</th><th class="comms-table__numeric data-table__numeric">Members</th><th class="comms-table__numeric data-table__numeric">Unsubscribed</th><th class="comms-table__numeric data-table__numeric">Cleaned</th></tr></thead>
             <tbody>${renderGrowthRows(dashboardData.listGrowth)}</tbody>
           </table>
         </div>

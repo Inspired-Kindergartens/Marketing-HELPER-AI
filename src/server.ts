@@ -1,5 +1,5 @@
 import { config as loadDotenv } from "dotenv";
-import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { basename, extname, join } from "node:path";
@@ -152,6 +152,7 @@ import {
   updateChecklistItem,
   toggleChecklistItem,
   deleteChecklistItem,
+  reorderChecklistItems,
   attachTaskToProject,
   saveTaskEmailDraft,
   createTaskAttachment,
@@ -207,7 +208,7 @@ import {
 } from "./storage/jd-store.js";
 import { renderJdAppShell, resolveJdFocusPanelId } from "./ui/jd-app-shell.js";
 import { buildImmovableBoilerplateHtml, buildJdBlurbChatMessages, buildJdIntroChatMessages } from "./ai/jd-context.js";
-import { generateJdPdfBuffer, jdPdfAssetUrl, jdPdfFilename } from "./ui/jd/jd-pdf.js";
+import { generateJdPdfBuffer, jdPdfFilename } from "./ui/jd/jd-pdf.js";
 import {
   applyWikiTagging,
   buildWikiChatGrounding,
@@ -245,6 +246,56 @@ import {
   updateCodeSnippet,
 } from "./storage/code-snippet-store.js";
 import { buildSnippetsAiChatMessages, buildSnippetsAiContext } from "./ai/snippets-context.js";
+import { renderSubscriptionsAppShell } from "./ui/subscriptions-app-shell.js";
+import {
+  createSubscription,
+  createSubscriptionCategory,
+  deleteSubscription,
+  deleteSubscriptionCategory,
+  duplicateSubscription,
+  getSubscription,
+  listSubscriptionCategoriesWithCounts,
+  listSubscriptions,
+  markSubscriptionUsed,
+  renameSubscriptionCategory,
+  updateSubscription,
+} from "./storage/subscription-store.js";
+import { buildRetrievalQuery } from "./ai/chat.js";
+import {
+  buildHelpGrounding,
+  getHelpKbStatus,
+  syncHelpKbIfStale,
+  type HelpGrounding,
+  type HelpGroundingOptions,
+  type HelpKbConfig,
+} from "./storage/help-kb-store.js";
+import { renderSectorAppShell } from "./ui/sector-app-shell.js";
+import { renderSectorCentrePromotions } from "./ui/sector/sector-centre-panel.js";
+import {
+  addSectorPromotion,
+  deleteSectorPromotion,
+  endSectorPromotion,
+  getSectorCentre,
+  listSectorCentres,
+  listSectorCrawlRuns,
+  sectorCentresToCsv,
+  updateSectorCentre,
+} from "./storage/sector-store.js";
+import {
+  getSectorSyncProgress,
+  lastSectorSyncCompletedAt,
+  markInterruptedSectorRuns,
+  runSectorSync,
+  syncSectorIfStale,
+  type SectorSyncConfig,
+} from "./sector/sync.js";
+import {
+  buildSectorAiChatMessages,
+  buildSectorAiContext,
+  buildSectorFallbackAnswer,
+  planSectorAnswer,
+} from "./ai/sector-context.js";
+import { THEME_HEAD_SCRIPT } from "./ui/theme.js";
 
 loadDotenv({ override: true });
 
@@ -275,6 +326,8 @@ const envSchema = z.object({
   AI_BASE_URL: z.string().url().default("http://127.0.0.1:11434"),
   AI_CHAT_MODEL: z.string().trim().default("llama3.1:8b"),
   AI_TIMEOUT_MS: z.coerce.number().int().min(1000).max(300000).default(60000),
+  // Small embedding model for the AI chats' help knowledge retrieval.
+  AI_EMBED_MODEL: z.string().trim().default("nomic-embed-text"),
   POSTMARK_WEBHOOK_BASIC_AUTH: z.string().trim().default(""),
   POSTMARK_SERVER_TOKEN: z.string().trim().default(""),
   CLOUDFLARE_SYNC_URL: z
@@ -317,6 +370,9 @@ await app.register(multipart, {
 const VALID_PANEL_IDS = new Set(["analytics", "waitlist", "meta-ads", "google-analytics", "notes", "chat"]);
 const META_ADS_AUTO_REFRESH_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const RECOMMENDED_AI_CHAT_MODEL = "qwen3:8b";
+// Job Description intro paragraphs always use this model, whatever the chat
+// model is, so it must never be removed when an older chat model is cleaned up.
+const JD_INTRO_AI_MODEL = "llama3.1:8b";
 let aiModelUpdateInProgress = false;
 let aiModelUpdateStatus: {
   state: "idle" | "downloading" | "success" | "error";
@@ -471,10 +527,6 @@ async function updateRecommendedAiModel() {
     void (async () => {
       try {
         if (code === 0) {
-          if (fallbackModel && fallbackModel !== currentModel && fallbackModel !== RECOMMENDED_AI_CHAT_MODEL) {
-            await setDotenvValue("AI_CHAT_MODEL_SECONDARY_FALLBACK", fallbackModel);
-            process.env.AI_CHAT_MODEL_SECONDARY_FALLBACK = fallbackModel;
-          }
           if (currentModel !== RECOMMENDED_AI_CHAT_MODEL) {
             await setDotenvValue("AI_CHAT_MODEL_FALLBACK", currentModel);
             process.env.AI_CHAT_MODEL_FALLBACK = currentModel;
@@ -496,6 +548,11 @@ async function updateRecommendedAiModel() {
           });
           // Refresh the feed before reporting success so the reloaded landing page
           // no longer shows the upgrade card or the update button.
+          // The model that was the backup before this update is no longer
+          // needed: the model just replaced is the new backup. Remove it from
+          // Ollama to free disk space. A failure is logged, never fatal.
+          aiModelUpdateStatus = { state: "downloading", model: RECOMMENDED_AI_CHAT_MODEL, progress: 100, detail: "removing old fallback" };
+          if (fallbackModel) await removeOldFallbackModel(fallbackModel);
           aiModelUpdateStatus = { state: "downloading", model: RECOMMENDED_AI_CHAT_MODEL, progress: 100, detail: "finalising" };
           await refreshLandingIntelligenceFeed(aiConfig, app.log).catch(() => undefined);
           aiModelUpdateStatus = { state: "success", model: RECOMMENDED_AI_CHAT_MODEL, progress: 100, detail: null };
@@ -525,6 +582,45 @@ async function updateRecommendedAiModel() {
   return { started: true, inProgress: true, model: RECOMMENDED_AI_CHAT_MODEL };
 }
 
+// Ollama treats "name" and "name:latest" as the same model.
+function sameOllamaModel(left: string | null | undefined, right: string | null | undefined) {
+  const normalise = (name: string) => (name.includes(":") ? name : `${name}:latest`).toLowerCase();
+  return !!left && !!right && normalise(left) === normalise(right);
+}
+
+// Deletes a superseded fallback chat model from Ollama, unless anything in the
+// app still uses it: the active model, the rollback backup, the Job
+// Description model or the help knowledge base's embedding model.
+async function removeOldFallbackModel(model: string): Promise<void> {
+  const inUse = [
+    aiConfig.AI_CHAT_MODEL,
+    process.env.AI_CHAT_MODEL_FALLBACK,
+    RECOMMENDED_AI_CHAT_MODEL,
+    JD_INTRO_AI_MODEL,
+    env.AI_EMBED_MODEL,
+  ];
+  if (inUse.some((name) => sameOllamaModel(name, model))) {
+    app.log.info({ model }, "Old AI fallback model kept: still in use");
+    return;
+  }
+
+  await new Promise<void>((resolve) => {
+    const child = spawn("ollama", ["rm", model], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+    child.stderr.on("data", (chunk) => {
+      app.log.warn({ output: String(chunk).trim() }, "Ollama old fallback removal output");
+    });
+    child.on("error", (error) => {
+      app.log.error({ error, model }, "Old AI fallback model removal failed to start");
+      resolve();
+    });
+    child.on("exit", (code) => {
+      if (code === 0) app.log.info({ model }, "Old AI fallback model removed");
+      else app.log.error({ code, model }, "Old AI fallback model removal failed");
+      resolve();
+    });
+  });
+}
+
 async function rollbackAiModel() {
   const fallbackModel = process.env.AI_CHAT_MODEL_FALLBACK || await readDotenvValue("AI_CHAT_MODEL_FALLBACK");
 
@@ -542,48 +638,6 @@ async function rollbackAiModel() {
   void refreshLandingIntelligenceFeed(aiConfig, app.log);
 
   return { model: fallbackModel, fallbackModel: currentModel };
-}
-
-async function deleteSecondaryFallbackModel() {
-  const secondaryFallbackModel =
-    process.env.AI_CHAT_MODEL_SECONDARY_FALLBACK || await readDotenvValue("AI_CHAT_MODEL_SECONDARY_FALLBACK");
-
-  if (!secondaryFallbackModel) {
-    throw new Error("No older secondary fallback model is configured for deletion.");
-  }
-
-  if (secondaryFallbackModel === aiConfig.AI_CHAT_MODEL || secondaryFallbackModel === process.env.AI_CHAT_MODEL_FALLBACK) {
-    throw new Error("Refusing to delete the active model or primary rollback fallback.");
-  }
-
-  const child = spawn("ollama", ["rm", secondaryFallbackModel], {
-    stdio: ["ignore", "pipe", "pipe"],
-    windowsHide: true,
-  });
-
-  child.stdout.on("data", (chunk) => {
-    app.log.info({ output: String(chunk).trim() }, "Ollama fallback deletion output");
-  });
-  child.stderr.on("data", (chunk) => {
-    app.log.warn({ output: String(chunk).trim() }, "Ollama fallback deletion output");
-  });
-  child.on("error", (error) => {
-    app.log.error({ error }, "Ollama fallback deletion failed to start");
-  });
-  child.on("exit", (code) => {
-    void (async () => {
-      if (code === 0) {
-        await deleteDotenvValue("AI_CHAT_MODEL_SECONDARY_FALLBACK");
-        delete process.env.AI_CHAT_MODEL_SECONDARY_FALLBACK;
-        app.log.info({ model: secondaryFallbackModel }, "Secondary AI fallback model deleted");
-        void refreshLandingIntelligenceFeed(aiConfig, app.log);
-      } else {
-        app.log.error({ code, model: secondaryFallbackModel }, "Secondary AI fallback model deletion failed");
-      }
-    })();
-  });
-
-  return { model: secondaryFallbackModel };
 }
 
 function isRecentMetaAdsSnapshot(latestPullAt: string | null | undefined, now = new Date()) {
@@ -999,6 +1053,8 @@ function buildPostmarkRecentMessagesRss(input: {
   const latest = input.latestReceivedAt
     ? `Latest stored email activity: ${new Date(input.latestReceivedAt).toLocaleString("en-NZ")}.`
     : "No stored email activity exists yet.";
+  // RSS readers render this HTML without our stylesheet, so the status colour
+  // has to travel inline - the one deliberate inline style in the app.
   const description = `<p style="color:${statusColor};font-weight:700;">${escapeHtml(detail)}</p><p>${escapeHtml(latest)}</p>`;
 
   return `<?xml version="1.0" encoding="UTF-8"?>
@@ -1035,7 +1091,7 @@ function renderContactUploadPage(input: {
     uploadedRowCount === uploadedContactCount ? "" : ` ${escapeHtml(uploadedContactCount)} usable contacts are available.`;
   const status =
     input.status === "uploaded"
-      ? `<p class="contact-upload__status">Contacts updated. ${escapeHtml(uploadedRowCount)} workbook rows uploaded.${availabilityNote}</p>`
+      ? `<p class="contact-upload__status text-accent">Contacts updated. ${escapeHtml(uploadedRowCount)} workbook rows uploaded.${availabilityNote}</p>`
       : input.error
         ? `<p class="contact-upload__error">${escapeHtml(input.error)}</p>`
         : "";
@@ -1049,22 +1105,24 @@ function renderContactUploadPage(input: {
     <link rel="icon" href="/favicon.ico" type="image/png" />
     <link rel="stylesheet" href="/vendor/bootstrap-icons.css" />
     <link rel="stylesheet" href="/app.css" />
+    <link rel="stylesheet" href="/themes.css" />
+    ${THEME_HEAD_SCRIPT}
   </head>
   <body class="landing-body">
-    <main class="contact-upload">
-      <a class="contact-upload__back" href="/">Back to landing</a>
+    <main class="contact-upload grid gap-16 text-body">
+      <a class="contact-upload__back text-muted" href="/">Back to landing</a>
       <h1>Upload Contacts</h1>
       <p>Update the contacts list from the <a href="https://ikindergartens.sharepoint.com/sites/InspiredKindergartenTeam/Lists/Kindergarten%20Contact%20List/AllItems.aspx" target="_blank" rel="noopener noreferrer">Kindergarten Contact List</a> from the Staff Portal Sharepoint site</p>
       ${status}
-      <dl class="contact-upload__meta">
+      <dl class="contact-upload__meta grid gap-10">
         <div><dt>Current rows</dt><dd>${input.currentRowCount}</dd></div>
         <div><dt>Usable contacts</dt><dd>${input.currentContactCount}</dd></div>
         <div><dt>Current file</dt><dd>${input.updatedAt ? escapeHtml(input.updatedAt) : "Not found"}</dd></div>
       </dl>
-      <form class="contact-upload__form" action="/contacts/upload" method="post" enctype="multipart/form-data">
-        <label>
+      <form class="contact-upload__form flex flex-wrap gap-12" action="/contacts/upload" method="post" enctype="multipart/form-data">
+        <label class="field-label">
           <span>Excel workbook</span>
-          <input type="file" name="contacts" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required />
+          <input class="form-control" type="file" name="contacts" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required />
         </label>
         <button type="submit"><i class="bi bi-upload" aria-hidden="true"></i><span>Upload contacts</span></button>
       </form>
@@ -1916,7 +1974,7 @@ app.get<{ Querystring: { panel?: string; jd?: string } }>("/jd", async (request,
   const knowledgeDocs = selectedJd?.centreKey != null ? await listKnowledgeDocsForCentre(selectedJd.centreKey) : [];
   const blurbVersions = selectedJd != null ? await listBlurbVersions(selectedJd.id) : [];
   const boilerplateHtml = selectedJd
-    ? buildImmovableBoilerplateHtml(selectedJd, jdPdfAssetUrl(selectedJd))
+    ? buildImmovableBoilerplateHtml(selectedJd)
     : "";
   const centreContact = selectedJd ? matchCentreContact(selectedJd.locationDisplay, await readCentreContactList()) : null;
 
@@ -2161,7 +2219,6 @@ async function generateJdIntroParagraphIfEmpty(id: number): Promise<string | nul
     centreExamples,
     fallbackExamples,
   });
-  const JD_INTRO_AI_MODEL = "llama3.1:8b";
   const JD_INTRO_AI_TIMEOUT_MS = 120000;
   const introParagraph = cleanGeneratedIntroParagraph(
     await runLocalChat(
@@ -2309,13 +2366,33 @@ app.post<{ Body: { jobTitle?: string; qualificationsText?: string; isCentreSpeci
   },
 );
 
-app.post<{ Body: { lastReviewedByAcronym?: string } }>(
+app.post<{ Body: { lastReviewedByAcronym?: string; jobPositionsFolder?: string } }>(
   "/api/jd/settings/global",
   async (request) => {
-    await updateGlobalSettings({ lastReviewedByAcronym: request.body?.lastReviewedByAcronym ?? "" });
+    await updateGlobalSettings({
+      lastReviewedByAcronym: request.body?.lastReviewedByAcronym,
+      jobPositionsFolder: request.body?.jobPositionsFolder,
+    });
     return { ok: true };
   },
 );
+
+app.get("/api/jd/settings/global", async () => getGlobalSettings());
+
+// Browsers won't follow file:// links from an http page, so the JD list's
+// folder button asks the server (which runs on this PC) to open the saved
+// folder in Explorer. Only the stored setting is opened - never a path from
+// the request.
+app.post("/api/jd/open-folder", async (_request, reply) => {
+  const { jobPositionsFolder } = await getGlobalSettings();
+  const folder = await stat(jobPositionsFolder).catch(() => null);
+  if (!folder?.isDirectory()) {
+    reply.code(404);
+    return { error: `Folder not found: ${jobPositionsFolder}. Check the address in Settings > Folder shortcuts.` };
+  }
+  spawn("explorer.exe", [jobPositionsFolder], { detached: true, stdio: "ignore", windowsHide: false }).unref();
+  return { ok: true };
+});
 
 app.post<{ Body: { jobTitle?: string; jobCategory?: string; isCentreSpecific?: unknown } }>(
   "/api/jd/settings/title/create",
@@ -2563,6 +2640,349 @@ app.post<{ Params: { id: string } }>("/api/snippets/:id/delete", async (request,
   await deleteCodeSnippet(id);
   return { ok: true };
 });
+
+// --- Help knowledge base (RAG) ---------------------------------------------------
+
+const helpKbConfig: HelpKbConfig = { ai: aiConfig, embedModel: env.AI_EMBED_MODEL, rootDir: process.cwd() };
+
+// Help-knowledge retrieval for a chat (RAG), shared by every chat endpoint.
+// An enhancement only: any failure leaves the chat answering without it.
+async function findHelpGrounding(
+  prompt: string,
+  history: AiChatHistoryMessageInput[] | undefined,
+  options: Omit<HelpGroundingOptions, "log">,
+): Promise<HelpGrounding | null> {
+  try {
+    return await buildHelpGrounding(helpKbConfig, buildRetrievalQuery(prompt, history), { ...options, log: app.log });
+  } catch (error) {
+    app.log.warn({ error }, "Help knowledge grounding unavailable");
+    return null;
+  }
+}
+
+// The dashboard and Communications chats already carry a large data context
+// and the chat model runs with Ollama's default 4,096-token window, so they
+// get two short excerpts (~500 tokens). Measured on 2026-10-16: dashboard
+// prompts ran ~2,600-2,750 tokens without help and ~3,300 with 2,400 chars of
+// it; the Communications prompt reached ~3,800.
+const DATA_CHAT_HELP_OPTIONS = {
+  sources: ["infocare", "meta", "google-analytics"],
+  maxChunks: 2,
+  charBudget: 2000,
+} as const satisfies Omit<HelpGroundingOptions, "log">;
+// The Communications prompt is only large when it carries local Postmark data
+// (~3,800 tokens measured); otherwise it is under 1,000, so a how-to question
+// can have the room a full help answer needs.
+const COMMS_HELP_SOURCES = ["mailchimp", "google-analytics", "meta", "infocare"] as const;
+function commsChatHelpOptions(hasLocalData: boolean): Omit<HelpGroundingOptions, "log"> {
+  return hasLocalData
+    ? { sources: COMMS_HELP_SOURCES, maxChunks: 2, charBudget: 2000 }
+    : { sources: COMMS_HELP_SOURCES, maxChunks: 4, charBudget: 6000 };
+}
+function joinGrounding(...parts: Array<string | null | undefined>): string | null {
+  const present = parts.map((part) => part?.trim()).filter((part): part is string => !!part);
+  return present.length ? present.join("\n\n") : null;
+}
+
+// Keeps the help knowledge base fresh: checked shortly after startup (so it
+// never slows the boot) and daily after that. Local documents are re-read on
+// every check; a help centre is only re-crawled when its last complete crawl
+// is older than that source's refresh period.
+const HELP_KB_STARTUP_DELAY_MS = 60_000;
+const HELP_KB_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
+function startHelpKbSyncLoop() {
+  let running = false;
+  const run = () => {
+    // A crawl can outlast the interval; never start a second check over it.
+    if (running) return;
+    running = true;
+    void syncHelpKbIfStale(helpKbConfig, app.log)
+      .catch((error) => app.log.warn({ error }, "Help knowledge sync check failed"))
+      .finally(() => {
+        running = false;
+      });
+  };
+  setTimeout(run, HELP_KB_STARTUP_DELAY_MS).unref();
+  setInterval(run, HELP_KB_CHECK_INTERVAL_MS).unref();
+}
+
+// --- Subscriptions -----------------------------------------------------------
+// Same shape as Code Snippets, without the chat: one page route that renders the
+// shell, plus JSON POST mutations the delegated client script reloads on.
+
+app.get<{ Querystring: { subscription?: string } }>("/subscriptions", async (request, reply) => {
+  const selectedId = parsePositiveInt(request.query?.subscription);
+  const [subscriptions, categories, selected] = await Promise.all([
+    listSubscriptions(),
+    listSubscriptionCategoriesWithCounts(),
+    selectedId != null ? getSubscription(selectedId) : Promise.resolve(null),
+  ]);
+  reply.type("text/html; charset=utf-8");
+  return renderSubscriptionsAppShell({
+    list: { subscriptions, categories },
+    editor: { subscription: selected, categories: categories.map((category) => category.name) },
+  });
+});
+
+// Registered before /api/subscriptions/:id so "categories" is never taken as an id.
+app.post<{ Body: { name?: string } }>("/api/subscriptions/categories", async (request, reply) => {
+  const result = await createSubscriptionCategory(request.body?.name);
+  if ("error" in result) {
+    reply.code(400);
+    return result;
+  }
+  return { ok: true, id: result.id };
+});
+
+app.post<{ Params: { id: string }; Body: { name?: string } }>("/api/subscriptions/categories/:id", async (request, reply) => {
+  const id = parsePositiveInt(request.params.id);
+  if (id == null) {
+    reply.code(400);
+    return { error: "Valid category id is required." };
+  }
+  const result = await renameSubscriptionCategory(id, request.body?.name);
+  if ("error" in result) {
+    reply.code(400);
+    return result;
+  }
+  return result;
+});
+
+app.post<{ Params: { id: string } }>("/api/subscriptions/categories/:id/delete", async (request, reply) => {
+  const id = parsePositiveInt(request.params.id);
+  if (id == null) {
+    reply.code(400);
+    return { error: "Valid category id is required." };
+  }
+  const result = await deleteSubscriptionCategory(id);
+  if ("error" in result) {
+    reply.code(400);
+    return result;
+  }
+  return result;
+});
+
+app.post<{ Body: Record<string, unknown> }>("/api/subscriptions", async (request, reply) => {
+  const title = String(request.body?.title ?? "").trim();
+  if (!title) {
+    reply.code(400);
+    return { error: "A title is required." };
+  }
+  const id = await createSubscription({ ...request.body, title });
+  return { ok: true, id };
+});
+
+app.post<{ Params: { id: string }; Body: Record<string, unknown> }>("/api/subscriptions/:id", async (request, reply) => {
+  const id = parsePositiveInt(request.params.id);
+  if (id == null) {
+    reply.code(400);
+    return { error: "Valid subscription id is required." };
+  }
+  if (!(await updateSubscription(id, request.body ?? {}))) {
+    reply.code(404);
+    return { error: "That subscription no longer exists." };
+  }
+  return { ok: true };
+});
+
+app.post<{ Params: { id: string } }>("/api/subscriptions/:id/duplicate", async (request, reply) => {
+  const id = parsePositiveInt(request.params.id);
+  if (id == null) {
+    reply.code(400);
+    return { error: "Valid subscription id is required." };
+  }
+  const newId = await duplicateSubscription(id);
+  if (newId == null) {
+    reply.code(404);
+    return { error: "That subscription no longer exists." };
+  }
+  return { ok: true, id: newId };
+});
+
+app.post<{ Params: { id: string } }>("/api/subscriptions/:id/delete", async (request, reply) => {
+  const id = parsePositiveInt(request.params.id);
+  if (id == null) {
+    reply.code(400);
+    return { error: "Valid subscription id is required." };
+  }
+  await deleteSubscription(id);
+  return { ok: true };
+});
+
+app.post<{ Params: { id: string } }>("/api/subscriptions/:id/used", async (request, reply) => {
+  const id = parsePositiveInt(request.params.id);
+  if (id == null) {
+    reply.code(400);
+    return { error: "Valid subscription id is required." };
+  }
+  await markSubscriptionUsed(id);
+  return { ok: true };
+});
+
+// --- Sector Insight -----------------------------------------------------------
+// Competitors and other ECE services (src/sector/): one page route, JSON POST
+// mutations, the update run (monthly in the background, or Update now) and a
+// chat that answers from the exact rows the question matches.
+
+const sectorSyncConfig: SectorSyncConfig = { ai: aiConfig, rootDir: process.cwd() };
+
+app.get<{ Querystring: { centre?: string } }>("/sector", async (request, reply) => {
+  const openId = parsePositiveInt(request.query?.centre);
+  const [centres, runs, lastCompletedAt, openCentre] = await Promise.all([
+    openId != null ? Promise.resolve([]) : listSectorCentres(),
+    openId != null ? Promise.resolve([]) : listSectorCrawlRuns(),
+    lastSectorSyncCompletedAt(),
+    openId != null ? getSectorCentre(openId) : Promise.resolve(undefined),
+  ]);
+  reply.type("text/html; charset=utf-8");
+  return renderSectorAppShell({ centres, runs, lastCompletedAt, progress: getSectorSyncProgress(), openCentre });
+});
+
+app.get("/api/sector/export.csv", async (_request, reply) => {
+  const csv = sectorCentresToCsv(await listSectorCentres());
+  const date = new Date().toISOString().slice(0, 10);
+  reply
+    .type("text/csv; charset=utf-8")
+    .header("Content-Disposition", `attachment; filename="Sector_Insight_${date}.csv"`);
+  // A BOM so Excel reads the macrons as UTF-8.
+  return `﻿${csv}`;
+});
+
+app.post("/api/sector/sync", async (_request, reply) => {
+  if (getSectorSyncProgress().running) {
+    reply.code(409);
+    return { error: "An update is already running." };
+  }
+  void runSectorSync(sectorSyncConfig, "manual", app.log);
+  return { ok: true };
+});
+
+app.get("/api/sector/sync/status", async () => getSectorSyncProgress());
+
+app.post<{ Params: { id: string }; Body: Record<string, unknown> }>("/api/sector/centres/:id", async (request, reply) => {
+  const id = parsePositiveInt(request.params.id);
+  if (id == null) {
+    reply.code(400);
+    return { error: "Valid centre id is required." };
+  }
+  if (!(await updateSectorCentre(id, request.body ?? {}))) {
+    reply.code(404);
+    return { error: "That centre no longer exists." };
+  }
+  return { ok: true };
+});
+
+// Promotion changes answer with the centre's refreshed promotions table, which
+// the page swaps in place.
+async function sectorPromotionsFragment(centreId: number) {
+  const centre = await getSectorCentre(centreId);
+  return centre ? renderSectorCentrePromotions(centre) : "";
+}
+
+app.post<{ Params: { id: string }; Body: Record<string, unknown> }>("/api/sector/centres/:id/promotions", async (request, reply) => {
+  const id = parsePositiveInt(request.params.id);
+  if (id == null) {
+    reply.code(400);
+    return { error: "Valid centre id is required." };
+  }
+  if (!(await addSectorPromotion(id, request.body ?? {}))) {
+    reply.code(400);
+    return { error: "Enter the promotion's wording." };
+  }
+  return { ok: true, html: await sectorPromotionsFragment(id) };
+});
+
+for (const action of ["end", "delete"] as const) {
+  app.post<{ Params: { id: string } }>(`/api/sector/promotions/:id/${action}`, async (request, reply) => {
+    const id = parsePositiveInt(request.params.id);
+    if (id == null) {
+      reply.code(400);
+      return { error: "Valid promotion id is required." };
+    }
+    const promotion = await prisma.sectorPromotion.findUnique({ where: { id }, select: { centreId: true } });
+    if (!promotion) {
+      reply.code(404);
+      return { error: "That promotion no longer exists." };
+    }
+    await (action === "end" ? endSectorPromotion(id) : deleteSectorPromotion(id));
+    return { ok: true, html: await sectorPromotionsFragment(promotion.centreId) };
+  });
+}
+
+// Same SSE shape as the other chats, plus a "results" event first: the exact
+// centres the question matches, which the page lists under the reply.
+app.post<{
+  Body: {
+    prompt?: string;
+    centreId?: number | string | null;
+    messages?: AiChatHistoryMessageInput[];
+  };
+}>("/api/sector/ai/chat/stream", async (request, reply) => {
+  const prompt = String(request.body?.prompt ?? "").trim();
+
+  if (!prompt || prompt.length > 2000) {
+    reply.code(400);
+    return { error: !prompt ? "Prompt is required." : "Prompt is too long. Keep it under 2,000 characters." };
+  }
+
+  const openCentreId = parsePositiveInt(request.body?.centreId);
+  const centres = await listSectorCentres();
+  const plan = planSectorAnswer(centres, prompt, request.body?.messages, openCentreId);
+  // A one- to three-centre answer carries each centre's full record, ended
+  // promotions included.
+  if (plan.matches.length > 0 && plan.matches.length <= 3) {
+    const detailed = await Promise.all(plan.matches.map((centre) => getSectorCentre(centre.id)));
+    plan.matches = detailed.filter((centre): centre is NonNullable<typeof centre> => centre != null);
+  }
+  const context = buildSectorAiContext(centres, plan, new Date().toISOString().slice(0, 10));
+
+  reply.raw.writeHead(200, {
+    "Content-Type": "text/event-stream; charset=utf-8",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+  });
+
+  const writeEvent = (event: string, data: unknown) => {
+    reply.raw.write(`event: ${event}\n`);
+    reply.raw.write(`data: ${JSON.stringify(data)}\n\n`);
+  };
+
+  if (plan.results) writeEvent("results", plan.results);
+  const fallback = buildSectorFallbackAnswer(plan, centres);
+
+  try {
+    if (aiConfig.AI_PROVIDER === "builtin") {
+      writeEvent("chunk", { chunk: fallback });
+    } else {
+      for await (const chunk of streamLocalChat(aiConfig, buildSectorAiChatMessages(context, prompt, request.body?.messages))) {
+        writeEvent("chunk", { chunk });
+      }
+    }
+    writeEvent("done", {});
+  } catch (error) {
+    app.log.warn({ error }, "Sector AI stream unavailable");
+    // The matching list has already been sent, so the reply still answers.
+    writeEvent("chunk", { chunk: fallback });
+    writeEvent("done", {});
+  } finally {
+    reply.raw.end();
+  }
+});
+
+// Checked shortly after startup and daily after that; an update only runs when
+// the last complete one is a month old (or nothing has been collected yet).
+const SECTOR_STARTUP_DELAY_MS = 120_000;
+const SECTOR_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
+function startSectorSyncLoop() {
+  void markInterruptedSectorRuns().catch((error) => app.log.warn({ error }, "Sector sync: could not tidy interrupted runs"));
+  const run = () => {
+    void syncSectorIfStale(sectorSyncConfig, app.log).catch((error) => app.log.warn({ error }, "Sector sync check failed"));
+  };
+  setTimeout(run, SECTOR_STARTUP_DELAY_MS).unref();
+  setInterval(run, SECTOR_CHECK_INTERVAL_MS).unref();
+}
 
 // --- Things To Know (marketing wiki) -----------------------------------------
 // Same shape as the JD section: one page route that renders the shell, plus
@@ -3151,6 +3571,20 @@ app.post<{ Params: { id: string }; Body: { label?: string; dueDate?: string } }>
   },
 );
 
+// Registered before /:itemId so the literal "reorder" path is not captured as an id.
+app.post<{ Params: { id: string }; Body: { ids?: unknown } }>(
+  "/api/tasks/:id/checklist/reorder",
+  async (request, reply) => {
+    const id = parsePositiveInt(request.params.id);
+    if (id == null || !Array.isArray(request.body?.ids)) {
+      reply.code(400);
+      return { error: "Task id and a checklist order are required." };
+    }
+    await reorderChecklistItems(id, request.body.ids);
+    return { ok: true };
+  },
+);
+
 app.post<{ Params: { id: string; itemId: string }; Body: { label?: string; dueDate?: string } }>(
   "/api/tasks/:id/checklist/:itemId",
   async (request, reply) => {
@@ -3732,6 +4166,7 @@ app.post<{
   }
 
   const localCommsGrounding = await buildLocalCommsGrounding(prompt);
+  const help = await findHelpGrounding(prompt, request.body?.messages, commsChatHelpOptions(!!localCommsGrounding?.grounding));
   const postmarkData = localCommsGrounding?.postmark ?? await readPostmarkDashboardData();
   const context = buildCommsAiDashboardContext({
     postmark: postmarkData,
@@ -3746,7 +4181,7 @@ app.post<{
   try {
     const answer = await runLocalChat(
       aiConfig,
-      buildCommsAiChatMessages(context, prompt, request.body?.messages, localCommsGrounding?.grounding),
+      buildCommsAiChatMessages(context, prompt, request.body?.messages, joinGrounding(localCommsGrounding?.grounding, help?.text)),
     );
     return { answer, model: aiConfig.AI_CHAT_MODEL };
   } catch (error) {
@@ -3769,6 +4204,7 @@ app.post<{
   }
 
   const localCommsGrounding = await buildLocalCommsGrounding(prompt);
+  const help = await findHelpGrounding(prompt, request.body?.messages, commsChatHelpOptions(!!localCommsGrounding?.grounding));
   const postmarkData = localCommsGrounding?.postmark ?? await readPostmarkDashboardData();
   const context = buildCommsAiDashboardContext({
     postmark: postmarkData,
@@ -3791,9 +4227,10 @@ app.post<{
     if (aiConfig.AI_PROVIDER === "builtin") {
       writeEvent("chunk", { chunk: buildBuiltinCommsAnswer(context, prompt) });
     } else {
+      if (help?.sources.length) writeEvent("sources", { sources: help.sources });
       for await (const chunk of streamLocalChat(
         aiConfig,
-        buildCommsAiChatMessages(context, prompt, request.body?.messages, localCommsGrounding?.grounding),
+        buildCommsAiChatMessages(context, prompt, request.body?.messages, joinGrounding(localCommsGrounding?.grounding, help?.text)),
       )) {
         writeEvent("chunk", { chunk });
       }
@@ -3919,6 +4356,7 @@ app.post<{
     }
   }
 
+  const help = await findHelpGrounding(prompt, request.body?.messages, DATA_CHAT_HELP_OPTIONS);
   const latestSnapshotSet = await readLatestAnalyticsSnapshotSet();
   const latestRunDate = latestSnapshotSet ? new Date(latestSnapshotSet.runDate) : new Date();
   const windowStartDate = resolveWindowStartDate(latestRunDate, selectedWindowKey);
@@ -3963,7 +4401,7 @@ app.post<{
         prompt,
         request.body?.messages,
         memory,
-        await withWikiGrounding(prompt, liveGrounding),
+        await withWikiGrounding(prompt, joinGrounding(liveGrounding, help?.text)),
       ),
     );
 
@@ -4085,6 +4523,7 @@ app.post<{
     }
   }
 
+  const help = await findHelpGrounding(prompt, request.body?.messages, DATA_CHAT_HELP_OPTIONS);
   const latestSnapshotSet = await readLatestAnalyticsSnapshotSet();
   const latestRunDate = latestSnapshotSet ? new Date(latestSnapshotSet.runDate) : new Date();
   const windowStartDate = resolveWindowStartDate(latestRunDate, selectedWindowKey);
@@ -4111,7 +4550,7 @@ app.post<{
     prompt,
     request.body?.messages,
     memory,
-    await withWikiGrounding(prompt, liveGrounding),
+    await withWikiGrounding(prompt, joinGrounding(liveGrounding, help?.text)),
   );
   const deterministicAnswer = buildDeterministicChatAnswer(context, prompt);
 
@@ -4149,6 +4588,7 @@ app.post<{
       return;
     }
 
+    if (help?.sources.length) writeEvent("sources", { sources: help.sources });
     for await (const chunk of streamLocalChat(aiConfig, messages)) {
       writeEvent("chunk", { chunk });
     }
@@ -4519,24 +4959,16 @@ app.post("/actions/rollback-ai-model", async (_request, reply) => {
   }
 });
 
-app.post("/actions/delete-ai-rollback-model", async (_request, reply) => {
-  try {
-    const result = await deleteSecondaryFallbackModel();
-
-    return reply.type("application/json; charset=utf-8").send({ ok: true, started: true, ...result });
-  } catch (error) {
-    app.log.error({ error }, "AI secondary fallback deletion request failed");
-    reply.code(400);
-
-    return reply.type("application/json; charset=utf-8").send({
-      ok: false,
-      error: error instanceof Error ? error.message : "AI secondary fallback deletion failed.",
-    });
-  }
-});
-
 app.get("/app.css", async (_request, reply) => {
   const css = await readFile(join(process.cwd(), "src", "ui", "app.css"), "utf8");
+
+  return reply.type("text/css; charset=utf-8").send(css);
+});
+
+// The Light and Dark themes. Linked after app.css so they override it; they
+// only apply while <html data-theme="light|dark"> is set.
+app.get("/themes.css", async (_request, reply) => {
+  const css = await readFile(join(process.cwd(), "src", "ui", "themes.css"), "utf8");
 
   return reply.type("text/css; charset=utf-8").send(css);
 });
@@ -4783,6 +5215,8 @@ async function start() {
   // first AI request isn't stuck behind a cold model load.
   void ensureAiRunning(aiConfig, app.log);
   void startLandingIntelligenceFeedLoop(aiConfig, app.log);
+  startHelpKbSyncLoop();
+  startSectorSyncLoop();
   void logJdAgreementStatusOnStartup();
 
   if (mailchimpConfigStatus.isConfigured) {

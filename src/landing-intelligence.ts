@@ -24,7 +24,6 @@ export type LandingAiModelRecommendation = {
   currentModel: string;
   recommendedModel: string;
   fallbackModel: string | null;
-  secondaryFallbackModel: string | null;
   isUpgrade: boolean;
   sellingPoint: string;
   updatePrompt: string;
@@ -32,7 +31,6 @@ export type LandingAiModelRecommendation = {
   computerSpec: string;
   canOperate: boolean;
   rollbackPrompt: string | null;
-  deletionPrompt: string | null;
 };
 
 export type LandingIntelligenceFeed = {
@@ -1351,7 +1349,6 @@ function getComputerSpec() {
 function buildAiModelRecommendation(
   currentModel: string,
   fallbackModel: string | null = process.env.AI_CHAT_MODEL_FALLBACK || null,
-  secondaryFallbackModel: string | null = process.env.AI_CHAT_MODEL_SECONDARY_FALLBACK || null,
 ): LandingAiModelRecommendation {
   const normalised = currentModel.trim().toLowerCase();
   const isUpgrade = normalised !== RECOMMENDED_MODEL;
@@ -1363,7 +1360,6 @@ function buildAiModelRecommendation(
     currentModel,
     recommendedModel: RECOMMENDED_MODEL,
     fallbackModel,
-    secondaryFallbackModel,
     isUpgrade,
     sellingPoint: isUpgrade
       ? "Qwen3 8B is a same-size local chat upgrade with stronger reasoning, tool-use support, and multi-turn instruction following than the current Llama 3.1 8B default."
@@ -1374,10 +1370,7 @@ function buildAiModelRecommendation(
     comparison: `${currentModel}: ${currentSize}. ${RECOMMENDED_MODEL}: ${recommendedSize}, with Ollama library tags for tools and thinking plus stronger reasoning/tool-use positioning.`,
     computerSpec: `${spec.cpuModel}; ${spec.logicalCores} logical cores; ${spec.totalRamGB.toFixed(1)}GB RAM; ${spec.platform}. ${spec.canOperate ? "This is suitable for an 8B Ollama model in local chat." : "This may be tight for an 8B Ollama model; keep the fallback model available."}`,
     canOperate: spec.canOperate,
-    rollbackPrompt: fallbackModel ? `Rollback available to ${fallbackModel}. The previous model is kept as fallback and is not deleted during update.` : null,
-    deletionPrompt: secondaryFallbackModel
-      ? `Secondary fallback ${secondaryFallbackModel} can be deleted after rollback safety is confirmed.`
-      : null,
+    rollbackPrompt: fallbackModel ? `Rollback available to ${fallbackModel}. The previous model is kept as fallback; the one before it is removed during update.` : null,
   };
 }
 

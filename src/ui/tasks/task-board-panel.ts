@@ -40,19 +40,19 @@ function renderTaskCard(task: TaskView): string {
   const href = `/tasks?task=${task.id}`;
 
   return `
-    <article class="task-card${task.overdue ? " task-card--overdue" : ""}" data-task-id="${task.id}">
-      <a class="task-card__main" href="${href}">
-        <span class="task-card__title">${escapeHtml(task.title)}</span>
-        ${meta.length ? `<span class="task-card__meta">${meta.join(" · ")}</span>` : ""}
+    <article class="task-card flex flex-col gap-6 card card--quiet${task.overdue ? " task-card--overdue" : ""}" data-task-id="${task.id}">
+      <a class="task-card__main text-body flex flex-col" href="${href}">
+        <span class="task-card__title text-strong font-strong">${escapeHtml(task.title)}</span>
+        ${meta.length ? `<span class="task-card__meta text-ghost text-small">${meta.join(" · ")}</span>` : ""}
       </a>
-      <div class="task-card__badges">
-        ${due ? `<span class="task-card__badge${task.overdue ? " task-card__badge--overdue" : ""}">${task.overdue ? "Overdue " : ""}${escapeHtml(due)}</span>` : ""}
-        ${task.checklistTotal > 0 ? `<span class="task-card__badge${overdueChecklistCount > 0 ? " task-card__badge--overdue" : ""}"${overdueChecklistCount > 0 ? ` title="${overdueChecklistCount} checklist item${overdueChecklistCount === 1 ? "" : "s"} past deadline"` : ""}>${task.checklistDone}/${task.checklistTotal}</span>` : ""}
-        ${task.assigneeName ? `<span class="task-card__badge task-card__badge--assignee">${escapeHtml(task.assigneeName)}</span>` : ""}
+      <div class="task-card__badges flex flex-wrap gap-4">
+        ${due ? `<span class="task-card__badge badge${task.overdue ? " task-card__badge--overdue badge--warning" : ""}">${task.overdue ? "Overdue " : ""}${escapeHtml(due)}</span>` : ""}
+        ${task.checklistTotal > 0 ? `<span class="task-card__badge badge${overdueChecklistCount > 0 ? " task-card__badge--overdue badge--warning" : ""}"${overdueChecklistCount > 0 ? ` title="${overdueChecklistCount} checklist item${overdueChecklistCount === 1 ? "" : "s"} past deadline"` : ""}>${task.checklistDone}/${task.checklistTotal}</span>` : ""}
+        ${task.assigneeName ? `<span class="task-card__badge badge task-card__badge--assignee badge--accent">${escapeHtml(task.assigneeName)}</span>` : ""}
       </div>
       ${nextStatus
-        ? `<div class="task-card__actions">
-        <button type="button" class="task-card__advance" data-task-action="advance" data-task-id="${task.id}" data-next-status="${nextStatus}">
+        ? `<div class="task-card__actions flex flex-wrap gap-6">
+        <button type="button" class="task-card__advance button-sm" data-task-action="advance" data-task-id="${task.id}" data-next-status="${nextStatus}">
           <i class="bi bi-arrow-right-circle ui-icon" aria-hidden="true"></i><span>Move to ${escapeHtml(TASK_STATUS_LABELS[nextStatus])}</span>
         </button>
       </div>`
@@ -64,15 +64,15 @@ function renderTaskCard(task: TaskView): string {
 function renderColumn(status: TaskStatus, tasks: TaskView[]): string {
   const columnTasks = tasks.filter((task) => task.status === status);
   return `
-    <section class="task-board__column" data-status="${status}">
-      <header class="task-board__column-header">
-        <span class="task-board__column-title">${escapeHtml(TASK_STATUS_LABELS[status])}</span>
-        <span class="task-board__column-count">${columnTasks.length}</span>
+    <section class="task-board__column flex flex-col" data-status="${status}">
+      <header class="task-board__column-header items-center flex justify-between">
+        <span class="task-board__column-title text-strong font-strong text-small">${escapeHtml(TASK_STATUS_LABELS[status])}</span>
+        <span class="task-board__column-count text-ghost text-small">${columnTasks.length}</span>
       </header>
-      <div class="task-board__column-body">
+      <div class="task-board__column-body flex flex-col gap-8">
         ${columnTasks.length
           ? columnTasks.map((task) => renderTaskCard(task)).join("")
-          : `<p class="task-board__empty">No tasks</p>`}
+          : `<p class="task-board__empty text-empty text-small">No tasks</p>`}
       </div>
     </section>
   `;
@@ -97,24 +97,24 @@ export function renderTaskBoardPanel(options: TaskBoardPanelOptions): string {
 
   return `
     <div class="task-board" data-task-board>
-      <form class="task-create" data-task-create>
-        <input type="text" class="task-create__title" name="title" placeholder="Add a task…" maxlength="200" required />
+      <form class="task-create flex flex-wrap gap-8 items-center" data-task-create>
+        <input type="text" class="task-create__title form-control form-control--sm" name="title" placeholder="Add a task…" maxlength="200" required />
         <span class="date-combo task-create__due">
-          <input type="text" name="dueDate" placeholder="YYYY-MM-DD" inputmode="numeric" aria-label="Due date" data-date-text />
+          <input class="form-control form-control--sm" type="text" name="dueDate" placeholder="YYYY-MM-DD" inputmode="numeric" aria-label="Due date" data-date-text />
           <button type="button" class="date-combo__button" data-open-date-picker title="Choose due date" aria-label="Choose due date"><i class="bi bi-calendar3 ui-icon" aria-hidden="true"></i></button>
           <input type="date" class="date-combo__picker" tabindex="-1" aria-hidden="true" data-date-picker />
         </span>
-        <select class="task-create__select" name="projectId" aria-label="Project">
+        <select class="task-create__select form-control form-control--sm" name="projectId" aria-label="Project">
           <option value="">No project</option>
           ${projectOptions}
         </select>
-        <select class="task-create__select" name="assigneeId" aria-label="Assignee">
+        <select class="task-create__select form-control form-control--sm" name="assigneeId" aria-label="Assignee">
           <option value="">Unassigned</option>
           ${memberOptions}
         </select>
-        <button type="submit" class="task-create__submit"><i class="bi bi-plus-lg ui-icon" aria-hidden="true"></i><span>Add</span></button>
+        <button type="submit" class="task-create__submit button-sm"><i class="bi bi-plus-lg ui-icon" aria-hidden="true"></i><span>Add</span></button>
       </form>
-      <div class="task-board__columns">
+      <div class="task-board__columns grid gap-12">
         ${TASK_STATUSES.map((status) => renderColumn(status, tasks)).join("")}
       </div>
     </div>

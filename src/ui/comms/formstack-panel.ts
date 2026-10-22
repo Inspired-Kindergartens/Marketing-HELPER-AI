@@ -33,7 +33,7 @@ function renderCentreName(centreName: string | null) {
 function renderFormName(form: { name: string; formUrl: string | null }) {
   const label = escapeHtml(form.name);
   return form.formUrl
-    ? `<a class="comms-campaign-link" href="${escapeHtml(form.formUrl)}" target="_blank" rel="noopener noreferrer">${label}</a>`
+    ? `<a class="comms-campaign-link text-accent" href="${escapeHtml(form.formUrl)}" target="_blank" rel="noopener noreferrer">${label}</a>`
     : `<strong>${label}</strong>`;
 }
 
@@ -41,7 +41,7 @@ function renderConfigState(status: FormstackConfigStatus | null | undefined) {
   if (!status || status.isConfigured) return "";
 
   return `
-    <div class="comms-config-state" role="status">
+    <div class="comms-config-state flex flex-wrap card card--inset" role="status">
       <strong>Online Forms source is not configured.</strong>
       <span>Set ${escapeHtml(status.missingKeys.join(" and "))} in <code>.env</code> to import Formstack data.</span>
     </div>
@@ -58,25 +58,25 @@ export function renderFormstackPanel(options: FormstackPanelOptions = {}) {
   const matchedForms = data.forms.filter((form) => form.centreKey != null).length;
 
   return `
-    <div class="comms-mailchimp-panel comms-formstack-panel">
+    <div class="comms-mailchimp-panel grid gap-10 text-small comms-formstack-panel">
       ${renderConfigState(options.configStatus)}
-      <div class="comms-summary comms-summary--three">
-        <div class="comms-summary__item"><span>Forms</span><strong>${data.forms.length}</strong></div>
-        <div class="comms-summary__item"><span>Submissions stored</span><strong>${data.totalStoredSubmissions}</strong></div>
-        <div class="comms-summary__item"><span>Matched forms</span><strong>${matchedForms}</strong></div>
+      <div class="comms-summary grid gap-8 comms-summary--three">
+        <div class="comms-summary__item card stat-tile"><span>Forms</span><strong>${data.forms.length}</strong></div>
+        <div class="comms-summary__item card stat-tile"><span>Submissions stored</span><strong>${data.totalStoredSubmissions}</strong></div>
+        <div class="comms-summary__item card stat-tile"><span>Matched forms</span><strong>${matchedForms}</strong></div>
       </div>
-      <section class="comms-section">
-        <header class="comms-section__header"><h3>Forms</h3><span>Latest activity first</span></header>
-        <div class="comms-table-wrap">
-          <table class="comms-table">
-            <thead><tr><th>Form / Centre</th><th class="comms-table__numeric">Submissions</th><th>Latest</th></tr></thead>
+      <section class="comms-section grid gap-8 card">
+        <header class="comms-section__header section-header"><h3 class="section-title">Forms</h3><span>Latest activity first</span></header>
+        <div class="comms-table-wrap table-frame table-frame--scroll">
+          <table class="comms-table data-table">
+            <thead><tr><th>Form / Centre</th><th class="comms-table__numeric data-table__numeric">Submissions</th><th>Latest</th></tr></thead>
             <tbody>${
               data.forms.length === 0
                 ? `<tr><td class="comms-table__empty" colspan="3">No online forms have been imported from Formstack.</td></tr>`
                 : data.forms.map((form) => `
                   <tr>
                     <td>${renderFormName(form)}${renderCentreName(form.centreName)}</td>
-                    <td class="comms-table__numeric">${form.submissionCount}</td>
+                    <td class="comms-table__numeric data-table__numeric">${form.submissionCount}</td>
                     <td>${escapeHtml(formatDate(form.lastSubmissionAt))}</td>
                   </tr>
                 `).join("")
@@ -84,10 +84,10 @@ export function renderFormstackPanel(options: FormstackPanelOptions = {}) {
           </table>
         </div>
       </section>
-      <section class="comms-section">
-        <header class="comms-section__header"><h3>Latest submissions</h3><span>Most recent 20 stored</span></header>
-        <div class="comms-table-wrap">
-          <table class="comms-table">
+      <section class="comms-section grid gap-8 card">
+        <header class="comms-section__header section-header"><h3 class="section-title">Latest submissions</h3><span>Most recent 20 stored</span></header>
+        <div class="comms-table-wrap table-frame table-frame--scroll">
+          <table class="comms-table data-table">
             <thead><tr><th>Submitted</th><th>Form / Centre</th><th>Payload preview</th></tr></thead>
             <tbody>${
               data.latestSubmissions.length === 0
@@ -96,7 +96,7 @@ export function renderFormstackPanel(options: FormstackPanelOptions = {}) {
                   <tr>
                     <td>${escapeHtml(formatDate(submission.submittedAt))}</td>
                     <td><strong>${escapeHtml(submission.formName)}</strong>${renderCentreName(submission.centreName)}</td>
-                    <td class="comms-table__payload">${escapeHtml(payloadPreview(submission.payload))}</td>
+                    <td class="comms-table__payload text-ghost">${escapeHtml(payloadPreview(submission.payload))}</td>
                   </tr>
                 `).join("")
             }</tbody>

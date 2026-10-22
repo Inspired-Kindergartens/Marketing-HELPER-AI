@@ -38,8 +38,10 @@ function buildTask(overrides: Partial<TaskView> = {}): TaskView {
     checklist: [],
     emailSubject: null,
     emailBody: null,
+    noteDraft: null,
     emailRecipients: [],
     attachments: [],
+    notes: [],
     ...overrides,
   };
 }
@@ -61,7 +63,7 @@ test("task detail panel renders file attachment controls and rows", () => {
     contactSuggestions: [],
   });
 
-  assert.match(html, /Attachments <span class="task-detail__section-count">1<\/span>/);
+  assert.match(html, /Attachments <span class="task-detail__section-count[^"]*">1<\/span>/);
   assert.match(html, /data-task-attachment-upload/);
   assert.match(html, /type="file" name="attachment"/);
   assert.match(html, /href="\/api\/tasks\/2\/attachments\/7\/download"/);
@@ -120,6 +122,20 @@ test("tasks shell focus mode renders only the focused panel", () => {
   assert.doesNotMatch(html, /id="panel-chat"/);
 });
 
+test("tasks shell leaves out Projects and Members when a task is open", () => {
+  const withTask = renderTasksAppShell({ ...baseShellOptions(), selectedTask: buildTask() });
+
+  assert.match(withTask, /id="panel-task-board"/);
+  assert.match(withTask, /id="panel-task-detail"/);
+  assert.match(withTask, /id="panel-chat"/);
+  assert.doesNotMatch(withTask, /id="panel-projects"/);
+  assert.doesNotMatch(withTask, /id="panel-members"/);
+
+  const board = renderTasksAppShell(baseShellOptions());
+  assert.match(board, /id="panel-projects"/);
+  assert.match(board, /id="panel-members"/);
+});
+
 test("tasks shell nav rail marks Tasks as the current page", () => {
   const html = renderTasksAppShell(baseShellOptions());
 
@@ -166,7 +182,8 @@ test("gantt positions a scheduled task's bar proportionally between rangeStart a
 
   const html = renderProjectsPanel({ projects: [], selectedProject: rollup, members: [] });
 
-  assert.match(html, /class="gantt__bar gantt__bar--todo"\s*\n\s*style="left: 25\.0%;"/);
+  assert.match(html, /class="gantt__bar[^"]*gantt__bar--todo"\s*\n\s*data-position="25\.0"/);
+  assert.doesNotMatch(html, /style=/);
   assert.match(html, /Send enrolment reminder/);
   assert.doesNotMatch(html, /gantt--empty/);
 });
@@ -183,8 +200,8 @@ test("gantt puts a task with no due date in the unscheduled lane instead of posi
 
   const html = renderProjectsPanel({ projects: [], selectedProject: rollup, members: [] });
 
-  assert.match(html, /gantt__bar gantt__bar--unscheduled" title="Draft social copy \(unscheduled\)"/);
-  assert.doesNotMatch(html, /gantt__bar--unscheduled"[^>]*style="left:/);
+  assert.match(html, /gantt__bar[^"]*gantt__bar--unscheduled" title="Draft social copy \(unscheduled\)"/);
+  assert.doesNotMatch(html, /gantt__bar--unscheduled"[^>]*data-position=/);
 });
 
 test("gantt falls back to a status breakdown when the project has no usable date range", () => {
@@ -201,5 +218,5 @@ test("gantt falls back to a status breakdown when the project has no usable date
 
   assert.match(html, /gantt--empty/);
   assert.match(html, /No scheduled dates yet/);
-  assert.match(html, /gantt__breakdown-item gantt__bar--todo">To do: 1/);
+  assert.match(html, /gantt__breakdown-item[^"]*gantt__bar--todo">To do: 1/);
 });

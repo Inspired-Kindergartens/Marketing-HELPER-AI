@@ -41,10 +41,10 @@ test("landing page renders overdue reminders emphasised ahead of due-soon ones",
 
   assert.match(html, /landing__reminders/);
   assert.match(html, /1 overdue · 2 need attention/);
-  assert.match(html, /landing-reminder landing-reminder--overdue" href="\/tasks\?task=1"/);
+  assert.match(html, /landing-reminder[^"]*landing-reminder--overdue" href="\/tasks\?task=1"/);
   assert.match(html, /Overdue by 3 days/);
-  assert.match(html, /landing-reminder" href="\/tasks\?task=2"/);
-  assert.doesNotMatch(html, /landing-reminder landing-reminder--overdue" href="\/tasks\?task=2"/);
+  assert.match(html, /landing-reminder[^"]*" href="\/tasks\?task=2"/);
+  assert.doesNotMatch(html, /landing-reminder[^"]*landing-reminder--overdue" href="\/tasks\?task=2"/);
   assert.match(html, /Due in 2 days/);
   assert.ok(html.indexOf("Overdue task") < html.indexOf("Due soon task"));
 });
@@ -70,14 +70,14 @@ test("landing page reminder item shows project and assignee meta when present", 
   };
   const html = renderLandingPage({ reminders: feed });
 
-  assert.match(html, /landing-reminder__meta">Winter enrolment push · Jenna Fenton<\/span>/);
+  assert.match(html, /landing-reminder__meta[^"]*">Winter enrolment push · Jenna Fenton<\/span>/);
 });
 
 test("landing page still includes the primary Tasks button linking to /tasks", () => {
   const html = renderLandingPage({});
 
-  assert.match(html, /landing-button landing-button--primary" href="\/tasks">/);
-  assert.match(html, /landing-button__label">Tasks<\/span>/);
+  assert.match(html, /landing-button[^"]*landing-button--primary" href="\/tasks">/);
+  assert.match(html, /landing-button__label[^"]*">Tasks<\/span>/);
 });
 
 test("landing page includes a Job Descriptions tile linking to /jd", () => {
@@ -146,7 +146,6 @@ test("landing page includes a rich clipboard copy action for the RSS feed", () =
       currentModel: "qwen3:8b",
       recommendedModel: "qwen3:8b",
       fallbackModel: null,
-      secondaryFallbackModel: null,
       isUpgrade: false,
       sellingPoint: "Qwen3 8B is already selected for local AI chat.",
       updatePrompt: "No model update is currently recommended.",
@@ -154,7 +153,6 @@ test("landing page includes a rich clipboard copy action for the RSS feed", () =
       computerSpec: "Test machine.",
       canOperate: true,
       rollbackPrompt: null,
-      deletionPrompt: null,
     },
   };
   const html = renderLandingPage({ intelligenceFeed });
@@ -239,9 +237,9 @@ test("landing page renders reminders as sidebar cards with the next checklist it
   const html = renderLandingPage({ reminders: feed });
 
   assert.match(html, /landing-layout landing-layout--with-sidebar/);
-  assert.match(html, /<aside class="landing__reminders"/);
-  assert.ok(html.indexOf("</main>") < html.indexOf('<aside class="landing__reminders"'));
-  assert.match(html, /landing-reminder__check landing-reminder__check--overdue/);
+  assert.match(html, /<aside class="landing__reminders/);
+  assert.ok(html.indexOf("</main>") < html.indexOf('<aside class="landing__reminders'));
+  assert.match(html, /landing-reminder__check[^"]*landing-reminder__check--overdue/);
   assert.match(html, /Draft captions/);
   assert.match(html, /Overdue by 1 day</);
   assert.match(html, /Book photographer/);
@@ -250,4 +248,10 @@ test("landing page renders reminders as sidebar cards with the next checklist it
 test("landing page omits the sidebar layout when there are no reminders", () => {
   const html = renderLandingPage({ reminders: { overdue: [], dueSoon: [], total: 0 } });
   assert.doesNotMatch(html, /landing-layout--with-sidebar/);
+});
+
+test("landing page has no manual delete-old-fallback button (the update removes it automatically)", () => {
+  const html = renderLandingPage();
+  assert.doesNotMatch(html, /Delete old fallback|data-delete-ai-rollback/);
+  assert.match(html, /data-rollback-ai-model/);
 });

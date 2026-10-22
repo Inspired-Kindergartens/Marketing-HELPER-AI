@@ -14,7 +14,7 @@ export type SnippetListPanelOptions = {
   categories: CodeSnippetCategoryView[];
 };
 
-// Options for a category <select>, the same control the wiki uses. A snippet
+// Options for a category <select class="form-control">, the same control the wiki uses. A snippet
 // whose category was renamed or removed elsewhere still shows its own value,
 // so the select never silently re-files it.
 export function renderSnippetCategoryOptions(categories: string[], selected: string): string {
@@ -31,24 +31,24 @@ function renderSnippetRow(snippet: CodeSnippetView): string {
   // Clicking a snippet copies its code, the common case; editing is the pencil
   // button. The description sits beside the title in small grey text.
   const description = snippet.description
-    ? `<span class="snippets-list__description">${escapeHtml(snippet.description)}</span>`
+    ? `<span class="snippets-list__description min-w-0 text-ghost text-small nowrap">${escapeHtml(snippet.description)}</span>`
     : "";
 
   return `
-    <article class="wiki-list__row" data-snippet-id="${snippet.id}">
-      <a class="wiki-list__main" href="/snippets?snippet=${snippet.id}" data-snippet-copy data-snippet-row title="Click to copy to clipboard">
-        <span class="wiki-list__title">
+    <article class="wiki-list__row list-row" data-snippet-id="${snippet.id}">
+      <a class="wiki-list__main flex items-center text-body min-w-0" href="/snippets?snippet=${snippet.id}" data-snippet-copy data-snippet-row title="Click to copy to clipboard">
+        <span class="wiki-list__title flex items-center gap-6 text-strong min-w-0">
           ${escapeHtml(snippet.title)}
-          ${snippet.language ? `<span class="snippets-list__language">${escapeHtml(snippet.language)}</span>` : ""}
+          ${snippet.language ? `<span class="snippets-list__language text-muted badge">${escapeHtml(snippet.language)}</span>` : ""}
         </span>
         ${description}
       </a>
       <textarea class="snippets-list__code" data-snippet-code hidden aria-hidden="true">${escapeHtml(snippet.code)}</textarea>
-      <div class="wiki-list__actions">
-        <button type="button" class="wiki-list__button" data-snippet-copy data-snippet-copy-icon title="Copy to clipboard"><i class="bi bi-clipboard ui-icon" aria-hidden="true"></i></button>
-        <button type="button" class="wiki-list__button" data-snippet-action="edit" data-snippet-id="${snippet.id}" title="Edit"><i class="bi bi-pencil ui-icon" aria-hidden="true"></i></button>
-        <button type="button" class="wiki-list__button" data-snippet-action="duplicate" data-snippet-id="${snippet.id}" title="Duplicate"><i class="bi bi-copy ui-icon" aria-hidden="true"></i></button>
-        <button type="button" class="wiki-list__button wiki-list__button--danger" data-snippet-action="delete" data-snippet-id="${snippet.id}" title="Delete"><i class="bi bi-trash3 ui-icon" aria-hidden="true"></i></button>
+      <div class="wiki-list__actions flex gap-6">
+        <button type="button" class="wiki-list__button button-icon" data-snippet-copy data-snippet-copy-icon title="Copy to clipboard"><i class="bi bi-clipboard ui-icon" aria-hidden="true"></i></button>
+        <button type="button" class="wiki-list__button button-icon" data-snippet-action="edit" data-snippet-id="${snippet.id}" title="Edit"><i class="bi bi-pencil ui-icon" aria-hidden="true"></i></button>
+        <button type="button" class="wiki-list__button button-icon" data-snippet-action="duplicate" data-snippet-id="${snippet.id}" title="Duplicate"><i class="bi bi-copy ui-icon" aria-hidden="true"></i></button>
+        <button type="button" class="wiki-list__button button-icon wiki-list__button--danger button-danger" data-snippet-action="delete" data-snippet-id="${snippet.id}" title="Delete"><i class="bi bi-trash3 ui-icon" aria-hidden="true"></i></button>
       </div>
     </article>
   `;
@@ -77,9 +77,9 @@ function renderGroups(snippets: CodeSnippetView[], categories: CodeSnippetCatego
   return ordered
     .map(
       ([name, rows]) => `
-        <section class="wiki-list__group">
-          <h3 class="wiki-list__group-heading">${escapeHtml(name)}</h3>
-          <div class="wiki-list__group-articles">${rows.map(renderSnippetRow).join("")}</div>
+        <section class="wiki-list__group flex flex-col">
+          <h3 class="wiki-list__group-heading text-strong font-strong">${escapeHtml(name)}</h3>
+          <div class="wiki-list__group-articles flex flex-col gap-4">${rows.map(renderSnippetRow).join("")}</div>
         </section>
       `,
     )
@@ -90,23 +90,23 @@ function renderGroups(snippets: CodeSnippetView[], categories: CodeSnippetCatego
 // chat's "Save as snippet" (which fills the hidden code/language fields).
 export function renderSnippetCreateDialog(categories: string[]): string {
   return `
-    <dialog class="wiki-modal" data-snippet-create-dialog aria-label="Add a code snippet">
-      <form class="wiki-modal__form" data-snippet-create>
-        <h2 class="wiki-modal__title">Add a code snippet</h2>
-        <label class="wiki-modal__field">
+    <dialog class="wiki-modal text-body" data-snippet-create-dialog aria-label="Add a code snippet">
+      <form class="wiki-modal__form flex flex-col gap-12" data-snippet-create>
+        <h2 class="wiki-modal__title text-strong">Add a code snippet</h2>
+        <label class="wiki-modal__field field-label">
           <span>Title</span>
-          <input type="text" name="title" maxlength="200" required placeholder="What is this snippet for?" autocomplete="off" />
+          <input class="form-control" type="text" name="title" maxlength="200" required placeholder="What is this snippet for?" autocomplete="off" />
         </label>
-        <label class="wiki-modal__field">
+        <label class="wiki-modal__field field-label">
           <span>Category</span>
-          <select name="category">${renderSnippetCategoryOptions(categories, "General")}</select>
+          <select class="form-control" name="category">${renderSnippetCategoryOptions(categories, "General")}</select>
         </label>
         <input type="hidden" name="language" value="" />
         <input type="hidden" name="code" value="" />
-        <p class="wiki-modal__hint">New categories are added from Categories on the list.</p>
-        <div class="wiki-modal__actions">
-          <button type="button" class="wiki-modal__cancel" data-snippet-create-cancel><span>Cancel</span></button>
-          <button type="submit" class="wiki-modal__submit"><i class="bi bi-plus-lg ui-icon" aria-hidden="true"></i><span>Create</span></button>
+        <p class="wiki-modal__hint text-ghost text-small">New categories are added from Categories on the list.</p>
+        <div class="wiki-modal__actions flex justify-end gap-8">
+          <button type="button" class="wiki-modal__cancel button-md" data-snippet-create-cancel><span>Cancel</span></button>
+          <button type="submit" class="wiki-modal__submit button-md"><i class="bi bi-plus-lg ui-icon" aria-hidden="true"></i><span>Create</span></button>
         </div>
       </form>
     </dialog>
@@ -119,20 +119,20 @@ function renderCategoriesDialog(categories: CodeSnippetCategoryView[]): string {
   const rows = categories
     .map(
       (category) => `
-        <li class="wiki-categories__row" data-snippet-category-id="${category.id}">
+        <li class="wiki-categories__row flex items-center gap-8" data-snippet-category-id="${category.id}">
           <input
             type="text"
-            class="wiki-categories__name"
+            class="wiki-categories__name min-w-0 form-control"
             value="${escapeHtml(category.name)}"
             maxlength="80"
             aria-label="Category name"
             data-snippet-category-name
           />
-          <span class="wiki-categories__count">${category.snippetCount} snippet${category.snippetCount === 1 ? "" : "s"}</span>
+          <span class="wiki-categories__count text-ghost text-small nowrap">${category.snippetCount} snippet${category.snippetCount === 1 ? "" : "s"}</span>
           ${
             category.isProtected
-              ? `<span class="wiki-categories__locked" title="The default category cannot be deleted"><i class="bi bi-lock ui-icon" aria-hidden="true"></i></span>`
-              : `<button type="button" class="wiki-categories__delete" data-snippet-category-delete title="Delete category"><i class="bi bi-trash3 ui-icon" aria-hidden="true"></i></button>`
+              ? `<span class="wiki-categories__locked text-ghost button-icon" title="The default category cannot be deleted"><i class="bi bi-lock ui-icon" aria-hidden="true"></i></span>`
+              : `<button type="button" class="wiki-categories__delete button-danger button-icon" data-snippet-category-delete title="Delete category"><i class="bi bi-trash3 ui-icon" aria-hidden="true"></i></button>`
           }
         </li>
       `,
@@ -140,24 +140,24 @@ function renderCategoriesDialog(categories: CodeSnippetCategoryView[]): string {
     .join("");
 
   return `
-    <dialog class="wiki-modal wiki-modal--wide" data-snippet-categories-dialog aria-label="Manage categories">
-      <div class="wiki-modal__form">
-        <h2 class="wiki-modal__title">Categories</h2>
-        <p class="wiki-modal__hint">Renaming a category re-files every snippet under it. Deleting one moves its snippets to General.</p>
+    <dialog class="wiki-modal text-body wiki-modal--wide" data-snippet-categories-dialog aria-label="Manage categories">
+      <div class="wiki-modal__form flex flex-col gap-12">
+        <h2 class="wiki-modal__title text-strong">Categories</h2>
+        <p class="wiki-modal__hint text-ghost text-small">Renaming a category re-files every snippet under it. Deleting one moves its snippets to General.</p>
 
-        <ul class="wiki-categories__list">
-          ${rows || `<li class="wiki-categories__empty">No categories yet.</li>`}
+        <ul class="wiki-categories__list flex flex-col gap-6">
+          ${rows || `<li class="wiki-categories__empty text-empty text-small">No categories yet.</li>`}
         </ul>
 
-        <form class="wiki-categories__add" data-snippet-category-create>
-          <input type="text" name="name" maxlength="80" required placeholder="New category name" autocomplete="off" aria-label="New category name" />
-          <button type="submit"><i class="bi bi-plus-lg ui-icon" aria-hidden="true"></i><span>Add</span></button>
+        <form class="wiki-categories__add flex gap-8" data-snippet-category-create>
+          <input class="form-control" type="text" name="name" maxlength="80" required placeholder="New category name" autocomplete="off" aria-label="New category name" />
+          <button class="button-md" type="submit"><i class="bi bi-plus-lg ui-icon" aria-hidden="true"></i><span>Add</span></button>
         </form>
 
-        <p class="wiki-categories__status" data-snippet-category-status role="status" aria-live="polite"></p>
+        <p class="wiki-categories__status text-ghost text-small" data-snippet-category-status role="status" aria-live="polite"></p>
 
-        <div class="wiki-modal__actions">
-          <button type="button" class="wiki-modal__cancel" data-snippet-categories-close><span>Done</span></button>
+        <div class="wiki-modal__actions flex justify-end gap-8">
+          <button type="button" class="wiki-modal__cancel button-md" data-snippet-categories-close><span>Done</span></button>
         </div>
       </div>
     </dialog>
@@ -169,12 +169,12 @@ export function renderSnippetListPanel(options: SnippetListPanelOptions): string
 
   return `
     <div class="wiki-list" data-snippet-list>
-      <div class="wiki-list__header">
-        <button type="button" class="wiki-list__add" data-snippet-categories><i class="bi bi-tags ui-icon" aria-hidden="true"></i><span>Categories</span></button>
-        <button type="button" class="wiki-list__add" data-snippet-add><i class="bi bi-plus-lg ui-icon" aria-hidden="true"></i><span>Add</span></button>
+      <div class="wiki-list__header flex items-center gap-10">
+        <button type="button" class="wiki-list__add nowrap button-md" data-snippet-categories><i class="bi bi-tags ui-icon" aria-hidden="true"></i><span>Categories</span></button>
+        <button type="button" class="wiki-list__add nowrap button-md" data-snippet-add><i class="bi bi-plus-lg ui-icon" aria-hidden="true"></i><span>Add</span></button>
       </div>
 
-      <div class="wiki-list__rows">
+      <div class="wiki-list__rows flex flex-col">
         ${options.snippets.length ? renderGroups(options.snippets, options.categories) : emptyMessage}
       </div>
 

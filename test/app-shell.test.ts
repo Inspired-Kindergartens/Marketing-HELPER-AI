@@ -162,7 +162,7 @@ test("analytics enrol/max shows enrolled headcount with booked utilisation perce
   assert.match(html, /59\/42 85%/);
   assert.match(
     html,
-    /59\/42 85%<\/td>\s*<td class="analytics-table__numeric">7<\/td>/,
+    /59\/42 85%<\/td>\s*<td class="analytics-table__numeric[^"]*">7<\/td>/,
   );
   assert.doesNotMatch(html, /59\/42 44%/);
   assert.doesNotMatch(html, /59\/42 140%/);
@@ -354,7 +354,7 @@ test("analytics table note buttons open the shared meta ads note flow", () => {
   const html = renderAppShell(snapshotSet);
 
   assert.match(html, /<th class="analytics-table__action">[\s\S]*Note/);
-  assert.match(html, /class="analytics-table__note-action" data-analytics-meta-note/);
+  assert.match(html, /class="analytics-table__note-action[^"]*" data-analytics-meta-note/);
   assert.match(html, /data-notification-id="meta-ads:3M:1:needs-ads"/);
   assert.match(html, /data-centre-name="Te Puke Kindergarten"/);
   assert.match(html, /data-centre-key="1"/);
@@ -815,9 +815,9 @@ test("ai chat panel title and summary stay succinct", () => {
     selectedWindowKey: "3M",
   });
 
-  assert.match(html, /<h2 id="panel-chat" class="panel__title">AI Chat with Beep Beep<\/h2>/);
+  assert.match(html, /<h2 id="panel-chat" class="panel__title[^"]*">AI Chat with Beep Beep<\/h2>/);
   assert.match(html, /class="chat-message__guidance-summary"/);
-  assert.match(html, /class="chat-message__guidance-support"/);
+  assert.match(html, /class="chat-message__guidance-support[^"]*"/);
   assert.doesNotMatch(html, /<ul>\s*<li>Harbour View Kindergarten appears to have room/);
   assert.doesNotMatch(html, /without a visible waitlist the focus should be on filling future spaces early/);
   assert.doesNotMatch(html, /short-term waitlist is still fairly light/);
@@ -1045,7 +1045,9 @@ test("meta ads table headers stick flush below the panel title", () => {
 
   assert.match(css, /\.panel--meta-ads \.panel__body\s*\{[\s\S]*?padding-top: 0;/);
   assert.match(css, /\.meta-ads-panel\s*\{[\s\S]*?padding-top: 10px;/);
-  assert.match(css, /\.meta-ads-table th\s*\{[\s\S]*?position: sticky;[\s\S]*?top: 0;/);
+  // Every data table shares the sticky header rule.
+  assert.match(css, /\.data-table th\s*\{[\s\S]*?position: sticky;[\s\S]*?top: 0;/);
+  assert.match(renderAppShell(null), /class="meta-ads-table data-table/);
 });
 
 test("dashboard panels animate an accordion layout with body-level scrolling", () => {

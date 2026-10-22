@@ -441,19 +441,34 @@ export async function upsertCentreProfile(
 // title. Stored as a single pinned row (id 1).
 export type JdGlobalSettingsView = {
   lastReviewedByAcronym: string;
+  // Folder the "Job Positions" button on the JD list opens in Explorer.
+  jobPositionsFolder: string;
 };
+
+export const DEFAULT_JOB_POSITIONS_FOLDER =
+  "D:\\Apps\\Inspired Kindergartens\\IK Data - Documents\\Communications\\Job Positions";
 
 export async function getGlobalSettings(): Promise<JdGlobalSettingsView> {
   const row = await prisma.jdGlobalSetting.findUnique({ where: { id: 1 } });
-  return { lastReviewedByAcronym: row?.lastReviewedByAcronym ?? "" };
+  return {
+    lastReviewedByAcronym: row?.lastReviewedByAcronym ?? "",
+    jobPositionsFolder: row?.jobPositionsFolder.trim() || DEFAULT_JOB_POSITIONS_FOLDER,
+  };
 }
 
-export async function updateGlobalSettings(input: { lastReviewedByAcronym?: string | null }): Promise<void> {
-  const lastReviewedByAcronym = input.lastReviewedByAcronym?.trim() ?? "";
+// Only the fields supplied are changed, so each Settings form can save its own
+// field without blanking the others.
+export async function updateGlobalSettings(input: {
+  lastReviewedByAcronym?: string | null;
+  jobPositionsFolder?: string | null;
+}): Promise<void> {
+  const data: { lastReviewedByAcronym?: string; jobPositionsFolder?: string } = {};
+  if (input.lastReviewedByAcronym != null) data.lastReviewedByAcronym = input.lastReviewedByAcronym.trim();
+  if (input.jobPositionsFolder != null) data.jobPositionsFolder = input.jobPositionsFolder.trim().replace(/^"(.*)"$/, "$1");
   await prisma.jdGlobalSetting.upsert({
     where: { id: 1 },
-    update: { lastReviewedByAcronym },
-    create: { id: 1, lastReviewedByAcronym },
+    update: data,
+    create: { id: 1, ...data },
   });
 }
 

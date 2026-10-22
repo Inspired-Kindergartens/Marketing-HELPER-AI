@@ -1,5 +1,6 @@
 import { marked } from "marked";
 import type { GeneralChatPageData } from "../storage/general-chat-store.js";
+import { THEME_HEAD_SCRIPT } from "./theme.js";
 
 marked.setOptions({ gfm: true, breaks: true });
 
@@ -23,7 +24,7 @@ function renderMessageBody(message: { role: string; content: string }) {
 function renderMessages(data: GeneralChatPageData) {
   if (data.messages.length === 0) {
     return `
-      <div class="general-chat-empty">
+      <div class="general-chat-empty inline-flex items-center gap-10 text-muted">
         <i class="bi bi-chat-square-text" aria-hidden="true"></i>
         <span>Start a conversation or select an existing one.</span>
       </div>
@@ -34,9 +35,9 @@ function renderMessages(data: GeneralChatPageData) {
     .map(
       (message) => `
         <article class="general-chat-message general-chat-message--${message.role}" data-message-id="${message.id}">
-          <div class="general-chat-message__top">
-            <span class="general-chat-message__role">${message.role === "user" ? "You" : "Beep Beep"}</span>
-            <div class="general-chat-message__actions">
+          <div class="general-chat-message__top flex items-center justify-between gap-10">
+            <span class="general-chat-message__role text-muted font-strong label-case">${message.role === "user" ? "You" : "Beep Beep"}</span>
+            <div class="general-chat-message__actions flex items-center gap-6">
               <button class="general-chat-icon-button" type="button" data-copy-message="${message.id}" title="Copy to clipboard" aria-label="Copy to clipboard"><i class="bi bi-clipboard" aria-hidden="true"></i></button>
               <button class="general-chat-icon-button" type="button" data-delete-message="${message.id}" title="Delete message" aria-label="Delete message"><i class="bi bi-trash" aria-hidden="true"></i></button>
             </div>
@@ -54,14 +55,14 @@ export function renderGeneralChatPage(data: GeneralChatPageData) {
   const selectedGroupId = data.selectedGroupId;
   const groupLinks = [
     `
-      <a class="general-chat-group${selectedGroupId == null ? " general-chat-group--active" : ""}" href="/chat">
+      <a class="general-chat-group min-w-0 flex items-center justify-between gap-8 text-muted${selectedGroupId == null ? " general-chat-group--active" : ""}" href="/chat">
         <span>All conversations</span>
       </a>
     `,
     ...data.groups.map(
       (group) => `
-        <div class="general-chat-group-row" data-group-id="${group.id}">
-          <a class="general-chat-group${group.id === selectedGroupId ? " general-chat-group--active" : ""}" href="/chat?group=${group.id}">
+        <div class="general-chat-group-row grid gap-6 items-center" data-group-id="${group.id}">
+          <a class="general-chat-group min-w-0 flex items-center justify-between gap-8 text-muted${group.id === selectedGroupId ? " general-chat-group--active" : ""}" href="/chat?group=${group.id}">
             <span>${escapeHtml(group.name)}</span>
             <small data-group-count="${group.id}">${group.conversationCount}</small>
           </a>
@@ -81,10 +82,10 @@ export function renderGeneralChatPage(data: GeneralChatPageData) {
   const conversations = data.conversations
     .map(
       (conversation) => `
-        <div class="general-chat-thread-row" data-thread-row="${conversation.id}">
-          <a class="general-chat-thread${conversation.id === selectedId ? " general-chat-thread--active" : ""}" data-thread-id="${conversation.id}" href="/chat?conversation=${conversation.id}${selectedGroupId == null ? "" : `&group=${selectedGroupId}`}">
-            <span class="general-chat-thread__title">${escapeHtml(conversation.title)}</span>
-            <span class="general-chat-thread__meta"><span data-thread-message-count="${conversation.id}">${conversation.messageCount}</span> messages</span>
+        <div class="general-chat-thread-row grid gap-6" data-thread-row="${conversation.id}">
+          <a class="general-chat-thread flex flex-col gap-4 text-body${conversation.id === selectedId ? " general-chat-thread--active" : ""}" data-thread-id="${conversation.id}" href="/chat?conversation=${conversation.id}${selectedGroupId == null ? "" : `&group=${selectedGroupId}`}">
+            <span class="general-chat-thread__title nowrap font-strong">${escapeHtml(conversation.title)}</span>
+            <span class="general-chat-thread__meta text-muted"><span data-thread-message-count="${conversation.id}">${conversation.messageCount}</span> messages</span>
           </a>
           <button class="general-chat-icon-button" type="button" data-delete-conversation="${conversation.id}" data-conversation-title="${escapeHtml(conversation.title)}" title="Delete conversation" aria-label="Delete conversation"><i class="bi bi-trash" aria-hidden="true"></i></button>
         </div>
@@ -101,54 +102,56 @@ export function renderGeneralChatPage(data: GeneralChatPageData) {
     <link rel="icon" href="/favicon.ico" type="image/png" />
     <link rel="stylesheet" href="/vendor/bootstrap-icons.css" />
     <link rel="stylesheet" href="/app.css" />
+    <link rel="stylesheet" href="/themes.css" />
+    ${THEME_HEAD_SCRIPT}
   </head>
   <body class="general-chat-body">
-    <aside class="nav-rail" aria-label="Primary navigation">
-      <a class="nav-rail__item" href="/" aria-label="Back to landing" title="Landing"><i class="bi bi-house-door" aria-hidden="true"></i></a>
-      <a class="nav-rail__item" href="/app" aria-label="Online Marketing dashboard" title="Online Marketing"><i class="bi bi-bar-chart-line" aria-hidden="true"></i></a>
-      <a class="nav-rail__item" href="/tasks" aria-label="Tasks" title="Tasks"><i class="bi bi-check2-square" aria-hidden="true"></i></a>
-      <a class="nav-rail__item nav-rail__item--current" href="/chat" aria-label="General Chat" title="General Chat" aria-current="page"><i class="bi bi-chat-dots" aria-hidden="true"></i></a>
-      <a class="nav-rail__item" href="/comms" aria-label="Online Communications dashboard" title="Online Communications"><i class="bi bi-envelope-paper" aria-hidden="true"></i></a>
-      <a class="nav-rail__item" href="/jd" aria-label="Job Descriptions" title="Job Descriptions"><i class="bi bi-file-earmark-person" aria-hidden="true"></i></a>
-      <a class="nav-rail__item" href="/wiki" aria-label="Things To Know" title="Things To Know"><i class="bi bi-journal-bookmark" aria-hidden="true"></i></a>
+    <aside class="nav-rail flex flex-col items-center gap-6" aria-label="Primary navigation">
+      <a class="nav-rail__item inline-flex items-center justify-center text-muted" href="/" aria-label="Back to landing" title="Landing"><i class="bi bi-house-door" aria-hidden="true"></i></a>
+      <a class="nav-rail__item inline-flex items-center justify-center text-muted" href="/app" aria-label="Online Marketing dashboard" title="Online Marketing"><i class="bi bi-bar-chart-line" aria-hidden="true"></i></a>
+      <a class="nav-rail__item inline-flex items-center justify-center text-muted" href="/tasks" aria-label="Tasks" title="Tasks"><i class="bi bi-check2-square" aria-hidden="true"></i></a>
+      <a class="nav-rail__item inline-flex items-center justify-center text-muted nav-rail__item--current" href="/chat" aria-label="General Chat" title="General Chat" aria-current="page"><i class="bi bi-chat-dots" aria-hidden="true"></i></a>
+      <a class="nav-rail__item inline-flex items-center justify-center text-muted" href="/comms" aria-label="Online Communications dashboard" title="Online Communications"><i class="bi bi-envelope-paper" aria-hidden="true"></i></a>
+      <a class="nav-rail__item inline-flex items-center justify-center text-muted" href="/jd" aria-label="Job Descriptions" title="Job Descriptions"><i class="bi bi-file-earmark-person" aria-hidden="true"></i></a>
+      <a class="nav-rail__item inline-flex items-center justify-center text-muted" href="/wiki" aria-label="Things To Know" title="Things To Know"><i class="bi bi-journal-bookmark" aria-hidden="true"></i></a>
     </aside>
-    <main class="general-chat-app" data-selected-conversation="${selectedId ?? ""}" data-selected-group="${selectedGroupId ?? ""}">
-      <aside class="general-chat-sidebar">
-        <div class="general-chat-sidebar__top">
+    <main class="general-chat-app grid" data-selected-conversation="${selectedId ?? ""}" data-selected-group="${selectedGroupId ?? ""}">
+      <aside class="general-chat-sidebar min-w-0 flex flex-col gap-12">
+        <div class="general-chat-sidebar__top flex items-center gap-10">
           <a class="general-chat-home" href="/" aria-label="Back to landing" title="Landing"><i class="bi bi-house-door" aria-hidden="true"></i></a>
           <h1>General Chat</h1>
         </div>
-        <form class="general-chat-create" data-create-conversation>
+        <form class="general-chat-create grid gap-8" data-create-conversation>
           <input name="title" type="text" placeholder="New conversation" autocomplete="off" />
           <select name="groupId" aria-label="Conversation group">${groups}</select>
           <button type="submit" title="Create conversation" aria-label="Create conversation"><i class="bi bi-plus-lg" aria-hidden="true"></i></button>
         </form>
-        <form class="general-chat-create" data-create-group>
+        <form class="general-chat-create grid gap-8" data-create-group>
           <input name="name" type="text" placeholder="New group" autocomplete="off" />
           <button type="submit" title="Create group" aria-label="Create group"><i class="bi bi-folder-plus" aria-hidden="true"></i></button>
         </form>
-        <nav class="general-chat-groups" aria-label="Conversation groups">${groupLinks}</nav>
-        <nav class="general-chat-threads" aria-label="Conversations">${conversations}</nav>
+        <nav class="general-chat-groups flex flex-col gap-6" aria-label="Conversation groups">${groupLinks}</nav>
+        <nav class="general-chat-threads flex flex-col gap-8" aria-label="Conversations">${conversations}</nav>
       </aside>
-      <section class="general-chat-main">
-        <header class="general-chat-header">
+      <section class="general-chat-main min-w-0 grid">
+        <header class="general-chat-header min-w-0 flex justify-between gap-16 items-center">
           <div>
-            <span class="general-chat-kicker">General Help</span>
+            <span class="general-chat-kicker text-muted">General Help</span>
             <h2>${escapeHtml(data.selectedConversation?.title ?? "No conversation selected")}</h2>
           </div>
-          <div class="general-chat-context">
+          <div class="general-chat-context flex flex-col nowrap text-muted">
             <span>${data.contextLimitTokens.toLocaleString()} token model context</span>
             <span>${data.sendCharBudget.toLocaleString()} char working window</span>
           </div>
         </header>
-        <div class="general-chat-messages" data-chat-messages>${renderMessages(data)}</div>
-        <form class="general-chat-composer" data-chat-composer>
+        <div class="general-chat-messages flex flex-col gap-12" data-chat-messages>${renderMessages(data)}</div>
+        <form class="general-chat-composer grid gap-10" data-chat-composer>
           <textarea name="prompt" placeholder="Ask for help with anything..." ${selectedId == null ? "disabled" : ""}></textarea>
-          <label class="general-chat-file-button" title="Attach document" aria-label="Attach document">
+          <label class="general-chat-file-button inline-flex items-center justify-center" title="Attach document" aria-label="Attach document">
             <i class="bi bi-paperclip" aria-hidden="true"></i>
             <input type="file" name="document" accept=".pdf,.txt,.md,.csv,.json,.xml,.yml,.yaml,.log,.rtf,application/pdf,text/*,application/json,application/xml" ${selectedId == null ? "disabled" : ""} />
           </label>
-          <span class="general-chat-file-name" data-chat-file-name></span>
+          <span class="general-chat-file-name min-w-0 nowrap text-muted text-small" data-chat-file-name></span>
           <button type="submit" ${selectedId == null ? "disabled" : ""} title="Send" aria-label="Send"><i class="bi bi-send" aria-hidden="true"></i></button>
         </form>
       </section>
@@ -187,12 +190,12 @@ export function renderGeneralChatPage(data: GeneralChatPageData) {
           row.className = "general-chat-message general-chat-message--" + role;
           if (state) row.setAttribute("data-state", state);
           var top = document.createElement("div");
-          top.className = "general-chat-message__top";
+          top.className = "general-chat-message__top flex items-center justify-between gap-10";
           var label = document.createElement("span");
-          label.className = "general-chat-message__role";
+          label.className = "general-chat-message__role text-muted font-strong label-case";
           label.textContent = role === "user" ? "You" : "Beep Beep";
           var actions = document.createElement("div");
-          actions.className = "general-chat-message__actions";
+          actions.className = "general-chat-message__actions flex items-center gap-6";
           var copyButton = document.createElement("button");
           copyButton.className = "general-chat-icon-button";
           copyButton.type = "button";
@@ -331,7 +334,7 @@ export function renderGeneralChatPage(data: GeneralChatPageData) {
                 if (row) row.remove();
                 updateThreadMessageCount(payload.messageCount);
                 if (messages && !messages.querySelector(".general-chat-message")) {
-                  messages.innerHTML = '<div class="general-chat-empty"><i class="bi bi-chat-square-text" aria-hidden="true"></i><span>Start a conversation or select an existing one.</span></div>';
+                  messages.innerHTML = '<div class="general-chat-empty inline-flex items-center gap-10 text-muted"><i class="bi bi-chat-square-text" aria-hidden="true"></i><span>Start a conversation or select an existing one.</span></div>';
                 }
               });
             return;

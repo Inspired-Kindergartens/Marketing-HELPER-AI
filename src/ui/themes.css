@@ -1,0 +1,285 @@
+/* ===================== Themes =====================
+   The default look lives in app.css. Two contemporary alternatives build on
+   it, switched by an attribute on the root element:
+
+     <html data-theme="light">   Light
+     <html data-theme="dark">    Dark
+     (no data-theme)             Default
+
+   Each theme sets the colour tokens app.css defines, then both share one set
+   of shape and type refinements (rounded corners, soft shadows, sentence-case
+   labels). This file is linked after app.css so equal-specificity rules here
+   win; selectors use :where() so app.css's more specific rules still apply. */
+
+/* ---------- Light ---------- */
+
+html[data-theme="light"] {
+  --color-bg: #f3f5f8;
+  --color-panel-bg: #ffffff;
+  --color-panel-header-bg: #ffffff;
+  --color-panel-inset: #f6f8fa;
+  --color-surface: #ffffff;
+  --color-surface-dark: #ffffff;
+  --color-chat-surface: #fafbfc;
+  --color-text: #374151;
+  --color-text-strong: #111827;
+  --color-muted: #6b7280;
+  --color-ghost: #667085;
+  --color-empty: #98a2b3;
+  --color-muted-control: #4b5563;
+  --color-green: #15803d;
+  --color-active: #16a34a;
+  --color-active-soft: #166534;
+  --color-border: #e4e7ec;
+  --color-border-muted: #eef0f3;
+  --color-border-panel: #e4e7ec;
+  --color-border-accent: #d3f3dd;
+  --color-row-hover: #f6f8fa;
+  --color-row-selected: #effaf2;
+  --color-wait-short: #16a34a;
+  --color-wait-typical: #0e9384;
+  --color-wait-long: #b54708;
+  --color-wait-very-long: #d92d20;
+  --color-warning-bg: #fffaeb;
+  --color-warning-border: #fedf89;
+  --color-warning-border-strong: #fdb022;
+  --color-warning-text: #93370d;
+  --color-danger-bg: #fef3f2;
+  --color-danger-border: #fecdca;
+  --color-danger-border-strong: #f97066;
+  --color-danger-text: #912018;
+  --color-error-border: #d92d20;
+  --color-chart-grid: rgba(16, 24, 40, 0.08);
+  --color-chart-text: #475467;
+  --color-panel-title: #101828;
+  --color-scheme-controls: light;
+  --shadow-card: 0 1px 2px rgba(16, 24, 40, 0.05);
+  --shadow-panel: 0 1px 3px rgba(16, 24, 40, 0.08), 0 1px 2px rgba(16, 24, 40, 0.04);
+  --shadow-popover: 0 12px 24px -4px rgba(16, 24, 40, 0.12), 0 4px 8px -2px rgba(16, 24, 40, 0.06);
+  --focus-ring: 0 0 0 3px rgba(22, 163, 74, 0.18);
+}
+
+/* ---------- Dark ---------- */
+
+html[data-theme="dark"] {
+  --color-bg: #0d1117;
+  --color-panel-bg: #151b23;
+  --color-panel-header-bg: #151b23;
+  --color-panel-inset: #1b222c;
+  --color-surface: #1b222c;
+  --color-surface-dark: #0f141a;
+  --color-chat-surface: #12171e;
+  --color-text: #c9d1d9;
+  --color-text-strong: #f0f6fc;
+  --color-muted: #8b949e;
+  --color-ghost: #9198a1;
+  --color-empty: #6e7681;
+  --color-muted-control: #b1bac4;
+  --color-green: #4ac26b;
+  --color-active: #56d364;
+  --color-active-soft: #7ee787;
+  --color-border: #2d333b;
+  --color-border-muted: #242a32;
+  --color-border-panel: #2d333b;
+  --color-border-accent: #1d3a28;
+  --color-row-hover: #1b222c;
+  --color-row-selected: #17291f;
+  --color-wait-short: #3fb950;
+  --color-wait-typical: #39c5cf;
+  --color-wait-long: #d29922;
+  --color-wait-very-long: #f85149;
+  --color-warning-bg: #272115;
+  --color-warning-border: #5c4813;
+  --color-warning-border-strong: #9e6a03;
+  --color-warning-text: #e3b341;
+  --color-danger-bg: #2a1517;
+  --color-danger-border: #66242a;
+  --color-danger-border-strong: #a1323b;
+  --color-danger-text: #ffa198;
+  --color-error-border: #f85149;
+  --color-chart-grid: rgba(240, 246, 252, 0.08);
+  --color-chart-text: #9198a1;
+  --color-panel-title: #f0f6fc;
+  --color-scheme-controls: dark;
+  --shadow-card: none;
+  --shadow-panel: 0 1px 3px rgba(1, 4, 9, 0.5);
+  --shadow-popover: 0 12px 28px rgba(1, 4, 9, 0.6);
+  --focus-ring: 0 0 0 3px rgba(86, 211, 100, 0.22);
+}
+
+/* ---------- Shared by Light and Dark: shape and type ---------- */
+
+html:where([data-theme="light"], [data-theme="dark"]) {
+  --font-size-base: 15px;
+  --font-size-small: 12.5px;
+  --font-weight-strong: 600;
+  --radius-control: 6px;
+  --radius-card: 10px;
+  --radius-panel: 12px;
+  --radius-pill: 999px;
+  --text-transform-label: none;
+  color-scheme: var(--color-scheme-controls);
+  -webkit-font-smoothing: antialiased;
+
+  /* Layout breathing room */
+  & .app-shell {
+    padding: 16px;
+    gap: 16px;
+  }
+
+  & .left-grid {
+    gap: 12px;
+  }
+
+  & .panel--focus {
+    height: calc(100vh - 32px);
+  }
+
+  /* Panels */
+  & .panel__header {
+    border-bottom-color: var(--color-border);
+    padding: 6px 16px;
+  }
+
+  & .panel--accordion .panel__header:hover,
+  & .panel--accordion .panel__header:focus-within {
+    background: var(--color-row-hover);
+  }
+
+  & .panel__title {
+    font-size: 15px;
+    letter-spacing: -0.01em;
+  }
+
+  & .panel__body {
+    padding: 14px 16px;
+  }
+
+  /* Buttons: one standard control, rounded, with a gentle hover */
+  & :is(button, .panel-action-button, .panel-action-link) {
+    transition: color 120ms ease, border-color 120ms ease, background-color 120ms ease, box-shadow 120ms ease;
+  }
+
+  /* :where() keeps this as weak as the base button hover, so component
+     hovers (e.g. the filled Open in Outlook button) still win. */
+  & :where(button, .panel-action-button, .panel-action-link):hover {
+    background-color: var(--color-row-selected);
+  }
+
+  & :is(button, .panel-action-button, .panel-action-link, a):focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+  }
+
+  & :is(.analytics-toolbar__actions button, .analytics-toolbar__actions a, .analytics-toolbar__window, .analytics-table__email-action, .analytics-table__note-action, .meta-ads-notification__email, .landing-feed__copy, .general-chat-file-button) {
+    border-radius: var(--radius-control);
+  }
+
+  & .analytics-toolbar__window--active {
+    background: var(--color-row-selected);
+  }
+
+  /* Form fields */
+  & :is(.form-control, .chat-shell__prompt-input, .google-analytics-filter select, .meta-ads-history__toolbar select, .meta-ads-notification__controls textarea, .meta-ads-latest-notes__text textarea, .email-confirm-dialog--form input, .email-confirm-dialog--form textarea, .meta-note-popup__form textarea, .landing-feed-search__form input, .comms-sort-control select) {
+    border-radius: var(--radius-control);
+    transition: border-color 120ms ease, box-shadow 120ms ease;
+  }
+
+  & :is(.form-control, .chat-shell__prompt-input, .general-chat-composer textarea, .general-chat-create input, .general-chat-create select):focus {
+    border-color: var(--color-active);
+    outline: none;
+    box-shadow: var(--focus-ring);
+  }
+
+  & .rich-text--editable:focus,
+  & .snippet-editor__code:focus {
+    outline: none;
+    border-color: var(--color-active);
+    box-shadow: var(--focus-ring);
+  }
+
+  & :is(.jd-blurb__editor, .wiki-editor__content, .snippet-editor__code, .jd-blurb__boilerplate) {
+    border-radius: var(--radius-card);
+  }
+
+  /* Tables */
+  & .data-table th {
+    background: var(--color-panel-inset);
+    color: var(--color-muted);
+    font-weight: 600;
+  }
+
+  & .analytics-table th,
+  & .analytics-table td {
+    font-size: 14px;
+  }
+
+  & .member-table th {
+    color: var(--color-muted);
+  }
+
+  /* Cards and sections */
+  & .stat-tile strong,
+  & .compact-stats__value {
+    font-variant-numeric: tabular-nums;
+  }
+
+  & .section-title {
+    color: var(--color-text-strong);
+    font-size: 14px;
+  }
+
+  & :is(.task-board__column, .jd-editor__role-section, .jd-settings__centre-row, .jd-settings__title-row, .jd-settings__doc-row, .jd-settings__agreement-status, .meta-ads-recommendations > li, .meta-ads-delivery-notices li, .waitlist-threshold-state, .waitlist-threshold-state__track, .landing-feed, .landing-feed-search, .landing-feed__viewport, .contact-upload__status, .contact-upload__error, .contact-upload__meta, .contact-upload__form, .project-list__item, .jd-blurb__version-restore, .comms-active-filter, .landing-alert__link, .snapshot-outcome-banner) {
+    border-radius: var(--radius-card);
+  }
+
+  & .task-board__column-header {
+    border-radius: var(--radius-card) var(--radius-card) 0 0;
+  }
+
+  & :is(.project-list__status, .project-detail__status, .landing-feed-model span, .landing-feed__model, .landing-feed-search__item, .gantt__breakdown-item, .gantt__bar, .gantt__track) {
+    border-radius: var(--radius-pill);
+  }
+
+  /* Popovers and dialogs */
+  & :is(.ui-info-tooltip__content, .wiki-list__tip) {
+    border-radius: var(--radius-control);
+    border-color: var(--color-border);
+    background: var(--color-panel-bg);
+    box-shadow: var(--shadow-popover);
+  }
+
+  & :is(.email-confirm-dialog, .wiki-modal, .meta-note-popup__header, .meta-note-popup__form, .meta-note-popup__reference) {
+    border-radius: var(--radius-panel);
+    box-shadow: var(--shadow-popover);
+  }
+
+  /* Labels that were spaced out for capitals read better tight in sentence case */
+  & :is(.landing__title, .landing-reminders__heading, .landing-feed__title, .landing-tile, .landing-reminder__due, .landing-button__label, .readme__title) {
+    letter-spacing: normal;
+  }
+
+  & .landing__title {
+    font-size: 1.25rem;
+  }
+
+  /* Navigation rail */
+  & .nav-rail__item--current {
+    background: var(--color-row-selected);
+  }
+
+  & .nav-rail__item:hover,
+  & .nav-rail__item:focus-visible {
+    background: var(--color-row-hover);
+  }
+}
+
+/* The landing animation is white ASCII art on black: blend it into the page. */
+html[data-theme="light"] .landing__hero {
+  filter: invert(1);
+  mix-blend-mode: multiply;
+}
+
+html[data-theme="dark"] .landing__hero {
+  mix-blend-mode: screen;
+}

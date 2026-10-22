@@ -430,6 +430,27 @@ export async function deleteChecklistItem(itemId: number): Promise<void> {
   await prisma.checklistItem.delete({ where: { id: itemId } });
 }
 
+// Persists a dragged checklist order. Ids that are not on this task are
+// ignored; items the caller did not mention keep their relative order after.
+export async function reorderChecklistItems(taskId: number, ids: unknown): Promise<void> {
+  if (!Array.isArray(ids)) return;
+  const existing = await prisma.checklistItem.findMany({
+    where: { taskId },
+    orderBy: { position: "asc" },
+    select: { id: true },
+  });
+  const known = new Set(existing.map((row) => row.id));
+  const ordered = Array.from(
+    new Set(ids.map((value) => Number.parseInt(String(value), 10)).filter((id) => known.has(id))),
+  );
+  for (const row of existing) {
+    if (!ordered.includes(row.id)) ordered.push(row.id);
+  }
+  await prisma.$transaction(
+    ordered.map((id, index) => prisma.checklistItem.update({ where: { id }, data: { position: index } })),
+  );
+}
+
 // --- Email draft ---------------------------------------------------------
 
 export type TaskEmailDraftInput = {

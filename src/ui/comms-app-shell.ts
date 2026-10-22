@@ -1,3 +1,4 @@
+import { renderChatSourcesFunction } from "./chat-sources-script.js";
 import type { FormstackConfigStatus } from "../formstack/config.js";
 import type { MailchimpConfigStatus } from "../mailchimp/config.js";
 import { resolveWindowKey, type WindowKey, WINDOW_OPTIONS } from "../analytics/windows.js";
@@ -9,6 +10,7 @@ import { renderCommsFunnelPanel } from "./comms/funnel-panel.js";
 import { renderFormstackPanel } from "./comms/formstack-panel.js";
 import { renderMailchimpPanel } from "./comms/mailchimp-panel.js";
 import { renderPostmarkPanel } from "./comms/postmark-panel.js";
+import { THEME_HEAD_SCRIPT } from "./theme.js";
 
 const PANEL_DEFINITIONS = [
   { id: "comms-postmark", title: "Webmail", className: "panel--comms-postmark" },
@@ -91,7 +93,7 @@ function renderWebmailWindowActions(
     : "Meta active/recent";
 
   return `
-    <div class="analytics-toolbar__actions">
+    <div class="analytics-toolbar__actions flex flex-wrap gap-4 items-center">
       <a
         class="analytics-toolbar__icon-action"
         href="${resetHref}"
@@ -115,17 +117,17 @@ function renderWebmailWindowActions(
 
 function renderCommsAiChatPanel() {
   return `
-    <div class="chat-shell" data-ai-chat data-ai-chat-endpoint="/api/comms/ai/chat/stream">
+    <div class="chat-shell grid gap-8" data-ai-chat data-ai-chat-endpoint="/api/comms/ai/chat/stream">
       <div class="chat-shell__messages">
-        <div class="chat-message chat-message--assistant">
-          <span class="chat-message__role">Beep Beep</span>
+        <div class="chat-message text-body chat-message--assistant">
+          <span class="chat-message__role text-small text-ghost label-case">Beep Beep</span>
           <p class="chat-message__body">Ask about imported Panui campaigns, Online Forms submissions, or matched centre activity.</p>
         </div>
       </div>
       <div class="chat-shell__composer">
-        <label class="chat-shell__prompt-label" for="comms-chat-prompt">Prompt</label>
+        <label class="chat-shell__prompt-label text-small text-ghost label-case" for="comms-chat-prompt">Prompt</label>
         <textarea id="comms-chat-prompt" class="chat-shell__prompt-input" placeholder="Ask about email opens, form submissions, or campaign performance."></textarea>
-        <button class="chat-shell__send" type="button" data-ai-chat-send><i class="bi bi-send ui-icon" aria-hidden="true"></i><span>Send</span></button>
+        <button class="chat-shell__send inline-flex items-center justify-center gap-6" type="button" data-ai-chat-send><i class="bi bi-send ui-icon" aria-hidden="true"></i><span>Send</span></button>
       </div>
     </div>
   `;
@@ -140,9 +142,9 @@ function renderRefreshOutcome(options: CommsAppShellOptions) {
         : "Panui";
 
     return `
-      <div class="snapshot-outcome-banner snapshot-outcome-banner--error" role="alert">
+      <div class="snapshot-outcome-banner flex items-start justify-between snapshot-outcome-banner--error" role="alert">
         <div class="snapshot-outcome-banner__body">
-          <p class="snapshot-outcome-banner__heading">${label} ${options.integrationSource === "postmark" ? "check" : "refresh"} couldn't complete</p>
+          <p class="snapshot-outcome-banner__heading text-strong">${label} ${options.integrationSource === "postmark" ? "check" : "refresh"} couldn't complete</p>
           <p class="snapshot-outcome-banner__error">${escapeHtml(options.integrationError)}</p>
         </div>
       </div>
@@ -182,6 +184,7 @@ function renderCommsChatScript() {
   return `
     <script>
       (function() {
+        ${renderChatSourcesFunction()}
         var shell = document.querySelector("[data-ai-chat]");
         if (!shell) return;
         var input = shell.querySelector(".chat-shell__prompt-input");
@@ -190,9 +193,9 @@ function renderCommsChatScript() {
         var history = [];
         function append(role, text) {
           var row = document.createElement("div");
-          row.className = "chat-message chat-message--" + role;
+          row.className = "chat-message text-body chat-message--" + role;
           var title = document.createElement("span");
-          title.className = "chat-message__role";
+          title.className = "chat-message__role text-small text-ghost label-case";
           title.textContent = role === "assistant" ? "Beep Beep" : "You";
           var body = document.createElement("p");
           body.className = "chat-message__body";
@@ -210,6 +213,7 @@ function renderCommsChatScript() {
           button.disabled = true;
           var output = append("assistant", "");
           var answer = "";
+          var sources = [];
           try {
             var response = await fetch(shell.dataset.aiChatEndpoint, {
               method: "POST",
@@ -235,12 +239,15 @@ function renderCommsChatScript() {
                 if (eventType === "event: chunk") {
                   answer += payload.chunk;
                   output.textContent = answer;
+                } else if (eventType === "event: sources") {
+                  sources = payload.sources || [];
                 } else if (eventType === "event: error") {
                   output.textContent = payload.error || "Chat request failed.";
                 }
               });
             }
             history.push({ role: "user", content: prompt }, { role: "assistant", content: answer });
+            if (answer) renderChatSources(output, sources);
           } catch (error) {
             output.textContent = error instanceof Error ? error.message : "Chat request failed.";
           } finally {
@@ -369,9 +376,11 @@ function renderPostmarkRefreshScript() {
           }
         });
 
-        var sortSelect = panel.querySelector("[data-centre-activity-sort]");
-        if (sortSelect) {
-          sortSelect.addEventListener("change", function() {
+        // Listens on the panel: the select sits in the Recent messages header,
+        // which is re-drawn on every page or filter change.
+        panel.addEventListener("change", function(event) {
+          var sortSelect = event.target instanceof Element ? event.target.closest("[data-centre-activity-sort]") : null;
+          if (sortSelect) {
             var table = panel.querySelector(".comms-section:last-child .comms-table tbody");
             if (!table) return;
             var rows = Array.from(table.querySelectorAll("tr"));
@@ -387,8 +396,8 @@ function renderPostmarkRefreshScript() {
               return a.querySelector("td").textContent.localeCompare(b.querySelector("td").textContent);
             });
             rows.forEach(function(row) { table.appendChild(row); });
-          });
-        }
+          }
+        });
 
         if (panel.classList.contains("panel--accordion-active") || panel.classList.contains("panel--focus")) {
           refreshMessages(1);
@@ -414,13 +423,13 @@ export function renderCommsAppShell(options: CommsAppShellOptions = {}) {
     title: panel.title,
     className: panel.className,
     meta: panel.id === "comms-postmark"
-      ? `<span class="comms-panel-source">Source: Postmark webhook + stored export | Latest activity: ${escapeHtml(postmarkReceivedAt)}</span>`
+      ? `<span class="comms-panel-source nowrap">Source: Postmark webhook + stored export | Latest activity: ${escapeHtml(postmarkReceivedAt)}</span>`
       : panel.id === "comms-mailchimp"
-      ? `<span class="comms-panel-source">Source: Mailchimp | Last pulled: ${escapeHtml(mailchimpPulledAt)}</span><a class="panel-action-button" href="/actions/refresh-mailchimp" aria-label="Download latest Panui data from Mailchimp" title="Download latest Panui data from Mailchimp"><i class="bi bi-download ui-icon" aria-hidden="true"></i></a>`
+      ? `<span class="comms-panel-source nowrap">Source: Mailchimp | Last pulled: ${escapeHtml(mailchimpPulledAt)}</span><a class="panel-action-button" href="/actions/refresh-mailchimp" aria-label="Download latest Panui data from Mailchimp" title="Download latest Panui data from Mailchimp"><i class="bi bi-download ui-icon" aria-hidden="true"></i></a>`
       : panel.id === "comms-formstack"
-        ? `<span class="comms-panel-source">Source: Formstack | Last pulled: ${escapeHtml(formstackPulledAt)}</span><a class="panel-action-button" href="/actions/refresh-formstack" aria-label="Download latest Online Forms data from Formstack" title="Download latest Online Forms data from Formstack"><i class="bi bi-download ui-icon" aria-hidden="true"></i></a>`
+        ? `<span class="comms-panel-source nowrap">Source: Formstack | Last pulled: ${escapeHtml(formstackPulledAt)}</span><a class="panel-action-button" href="/actions/refresh-formstack" aria-label="Download latest Online Forms data from Formstack" title="Download latest Online Forms data from Formstack"><i class="bi bi-download ui-icon" aria-hidden="true"></i></a>`
         : panel.id === "comms-funnel"
-          ? `<span class="comms-panel-source">Sources: Postmark + Formstack | Latest activity: ${escapeHtml(combinedPulledAt)}</span>`
+          ? `<span class="comms-panel-source nowrap">Sources: Postmark + Formstack | Latest activity: ${escapeHtml(combinedPulledAt)}</span>`
           : undefined,
     actions: panel.id === "comms-postmark"
       ? renderWebmailWindowActions(selectedWindowKey, metaAdsFilter, options.metaAdvertCentreCount)
@@ -438,15 +447,17 @@ export function renderCommsAppShell(options: CommsAppShellOptions = {}) {
     <link rel="icon" href="/favicon.ico" type="image/png" />
     <link rel="stylesheet" href="/vendor/bootstrap-icons.css" />
     <link rel="stylesheet" href="/app.css" />
+    <link rel="stylesheet" href="/themes.css" />
+    ${THEME_HEAD_SCRIPT}
   </head>
   <body class="app-shell-body">
-    <aside class="nav-rail" aria-label="Primary navigation">
-      <a class="nav-rail__item" href="/" aria-label="Back to landing" title="Landing"><i class="bi bi-house-door" aria-hidden="true"></i></a>
-      <a class="nav-rail__item" href="/app" aria-label="Online Marketing dashboard" title="Online Marketing"><i class="bi bi-bar-chart-line" aria-hidden="true"></i></a>
-      <a class="nav-rail__item" href="/tasks" aria-label="Tasks" title="Tasks"><i class="bi bi-check2-square" aria-hidden="true"></i></a>
-      <a class="nav-rail__item nav-rail__item--current" href="/comms" aria-label="Online Communications dashboard" title="Online Communications" aria-current="page"><i class="bi bi-envelope-paper" aria-hidden="true"></i></a>
-      <a class="nav-rail__item" href="/jd" aria-label="Job Descriptions" title="Job Descriptions"><i class="bi bi-file-earmark-person" aria-hidden="true"></i></a>
-      <a class="nav-rail__item" href="/wiki" aria-label="Things To Know" title="Things To Know"><i class="bi bi-journal-bookmark" aria-hidden="true"></i></a>
+    <aside class="nav-rail flex flex-col items-center gap-6" aria-label="Primary navigation">
+      <a class="nav-rail__item inline-flex items-center justify-center text-muted" href="/" aria-label="Back to landing" title="Landing"><i class="bi bi-house-door" aria-hidden="true"></i></a>
+      <a class="nav-rail__item inline-flex items-center justify-center text-muted" href="/app" aria-label="Online Marketing dashboard" title="Online Marketing"><i class="bi bi-bar-chart-line" aria-hidden="true"></i></a>
+      <a class="nav-rail__item inline-flex items-center justify-center text-muted" href="/tasks" aria-label="Tasks" title="Tasks"><i class="bi bi-check2-square" aria-hidden="true"></i></a>
+      <a class="nav-rail__item inline-flex items-center justify-center text-muted nav-rail__item--current" href="/comms" aria-label="Online Communications dashboard" title="Online Communications" aria-current="page"><i class="bi bi-envelope-paper" aria-hidden="true"></i></a>
+      <a class="nav-rail__item inline-flex items-center justify-center text-muted" href="/jd" aria-label="Job Descriptions" title="Job Descriptions"><i class="bi bi-file-earmark-person" aria-hidden="true"></i></a>
+      <a class="nav-rail__item inline-flex items-center justify-center text-muted" href="/wiki" aria-label="Things To Know" title="Things To Know"><i class="bi bi-journal-bookmark" aria-hidden="true"></i></a>
     </aside>
     ${renderRefreshOutcome(options)}
     ${layout}

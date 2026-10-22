@@ -27,20 +27,20 @@ export type JdListPanelOptions = {
 function renderJdRow(jd: JobDescriptionListItem): string {
   const href = `/jd?panel=jd-editor&jd=${jd.id}`;
   return `
-    <article class="jd-list__row" data-jd-id="${jd.id}">
-      <a class="jd-list__main" href="${href}">
-        <span class="jd-list__title">${escapeHtml(jd.jobTitle)}</span>
-        <span class="jd-list__meta">${escapeHtml(formatJdLocationDisplay(jd.locationDisplay))} · ${escapeHtml(jd.positionType)}</span>
+    <article class="jd-list__row list-row" data-jd-id="${jd.id}">
+      <a class="jd-list__main flex flex-col text-body" href="${href}">
+        <span class="jd-list__title text-strong font-strong">${escapeHtml(jd.jobTitle)}</span>
+        <span class="jd-list__meta text-ghost text-small">${escapeHtml(formatJdLocationDisplay(jd.locationDisplay))} · ${escapeHtml(jd.positionType)}</span>
       </a>
-      <div class="jd-list__badges">
-        ${jd.dateAdvertised ? `<span class="jd-list__badge">Advertised ${escapeHtml(formatNzDisplayDate(jd.dateAdvertised))}</span>` : ""}
-        ${jd.closingAt ? `<span class="jd-list__badge">Closes ${escapeHtml(formatNzDisplayDate(jd.closingAt))}</span>` : ""}
+      <div class="jd-list__badges flex flex-wrap gap-4">
+        ${jd.dateAdvertised ? `<span class="jd-list__badge badge">Advertised ${escapeHtml(formatNzDisplayDate(jd.dateAdvertised))}</span>` : ""}
+        ${jd.closingAt ? `<span class="jd-list__badge badge">Closes ${escapeHtml(formatNzDisplayDate(jd.closingAt))}</span>` : ""}
       </div>
-      <div class="jd-list__actions">
-        <a class="jd-list__link" href="/jd?panel=jd-blurb&jd=${jd.id}" title="Website blurb"><i class="bi bi-file-earmark-richtext ui-icon" aria-hidden="true"></i></a>
-        <button type="button" class="jd-list__button" data-jd-action="pdf" data-jd-id="${jd.id}" title="Download PDF"><i class="bi bi-file-earmark-pdf ui-icon" aria-hidden="true"></i></button>
-        <button type="button" class="jd-list__button" data-jd-action="duplicate" data-jd-id="${jd.id}" title="Duplicate"><i class="bi bi-copy ui-icon" aria-hidden="true"></i></button>
-        <button type="button" class="jd-list__button jd-list__button--danger" data-jd-action="delete" data-jd-id="${jd.id}" title="Delete"><i class="bi bi-trash3 ui-icon" aria-hidden="true"></i></button>
+      <div class="jd-list__actions flex gap-6">
+        <a class="jd-list__link button-icon" href="/jd?panel=jd-blurb&jd=${jd.id}" title="Website blurb"><i class="bi bi-file-earmark-richtext ui-icon" aria-hidden="true"></i></a>
+        <button type="button" class="jd-list__button button-icon" data-jd-action="pdf" data-jd-id="${jd.id}" title="Download PDF"><i class="bi bi-file-earmark-pdf ui-icon" aria-hidden="true"></i></button>
+        <button type="button" class="jd-list__button button-icon" data-jd-action="duplicate" data-jd-id="${jd.id}" title="Duplicate"><i class="bi bi-copy ui-icon" aria-hidden="true"></i></button>
+        <button type="button" class="jd-list__button button-icon jd-list__button--danger button-danger" data-jd-action="delete" data-jd-id="${jd.id}" title="Delete"><i class="bi bi-trash3 ui-icon" aria-hidden="true"></i></button>
       </div>
     </article>
   `;
@@ -70,53 +70,53 @@ export function renderJdListPanel(options: JdListPanelOptions): string {
 
   return `
     <div class="jd-list" data-jd-list>
-      <h3 class="jd-list__heading">New Job Description</h3>
-      <form class="jd-list__create" data-jd-create>
-        <label data-jd-location-field>
+      <h3 class="jd-list__heading subheading">New Job Description</h3>
+      <form class="jd-list__create flex flex-wrap gap-10" data-jd-create>
+        <label class="field-label" data-jd-location-field>
           <span>Location</span>
-          <select name="centreKey" required>
+          <select class="form-control" name="centreKey" required>
             <option value="" disabled>Select a location</option>
             ${locationOptions}
           </select>
         </label>
-        <label data-jd-other-location-field hidden>
+        <label class="field-label" data-jd-other-location-field hidden>
           <span>Location name</span>
-          <input
+          <input class="form-control"
             type="text"
             name="locationDisplay"
             placeholder="${escapeHtml(JD_OTHER_LOCATION_DISPLAY)}"
           />
         </label>
-        <label>
+        <label class="field-label">
           <span>Job Title</span>
-          <select name="jobTitleProfileId" required>
+          <select class="form-control" name="jobTitleProfileId" required>
             <option value="" disabled selected>Select a job title</option>
             ${titleOptions}
           </select>
         </label>
-        <label data-jd-other-title-field hidden>
+        <label class="field-label" data-jd-other-title-field hidden>
           <span>Job title (optional override)</span>
-          <input
+          <input class="form-control"
             type="text"
             name="jobTitleOverride"
             maxlength="200"
             placeholder="Leave blank to use the selected title"
           />
         </label>
-        <label>
+        <label class="field-label">
           <span>Closing Date</span>
           <span class="jd-editor__date-combo">
-            <input type="text" name="closingAt" value="${formatNzDateTimeInput(defaultClosingDate(new Date()))}" placeholder="YYYY-MM-DDTHH:mm" inputmode="numeric" data-jd-date-text />
+            <input class="form-control" type="text" name="closingAt" value="${formatNzDateTimeInput(defaultClosingDate(new Date()))}" placeholder="YYYY-MM-DDTHH:mm" inputmode="numeric" data-jd-date-text />
             <button type="button" class="jd-editor__date-button" data-jd-open-date-picker title="Choose closing date and time" aria-label="Choose closing date and time"><i class="bi bi-calendar3 ui-icon" aria-hidden="true"></i></button>
             <input type="date" class="jd-editor__date-picker" value="${formatNzDateTimeInput(defaultClosingDate(new Date())).slice(0, 10)}" data-jd-date-picker data-jd-keep-time tabindex="-1" aria-hidden="true" />
           </span>
         </label>
-        <label>
+        <label class="field-label">
           <span>Start Date</span>
-          <input type="text" name="startDateText" value="To be negotiated" />
+          <input class="form-control" type="text" name="startDateText" value="To be negotiated" />
         </label>
         <button type="submit" class="panel-action-button" data-jd-create-submit><i class="bi bi-plus-lg ui-icon" aria-hidden="true"></i><span>New Job Description</span></button>
-        <div class="jd-list__create-busy" data-jd-create-busy role="status" aria-live="polite" hidden>
+        <div class="jd-list__create-busy inline-flex items-center gap-8 text-accent text-small" data-jd-create-busy role="status" aria-live="polite" hidden>
           <span class="jd-list__create-spinner" aria-hidden="true"></span>
           <span>Generating job description intro...</span>
         </div>
@@ -170,13 +170,13 @@ export function renderJdListPanel(options: JdListPanelOptions): string {
           syncTitlesForLocation();
         })();
       </script>
-      <h3 class="jd-list__heading">Generated Jobs List</h3>
-      <div class="jd-list__rows" data-jd-rows>
+      <h3 class="jd-list__heading subheading">Generated Jobs List</h3>
+      <div class="jd-list__rows flex flex-col gap-8" data-jd-rows>
         ${rows || `<p class="jd-list__empty">No job descriptions yet. Create one above.</p>`}
       </div>
       ${
         pageCount > 1
-          ? `<nav class="comms-pagination" aria-label="Job description pages" data-jd-pagination>
+          ? `<nav class="comms-pagination items-center flex gap-12 justify-end" aria-label="Job description pages" data-jd-pagination>
               <button type="button" data-jd-page="prev" disabled>Previous</button>
               <span data-jd-page-label>Page 1 of ${pageCount}</span>
               <button type="button" data-jd-page="next">Next</button>

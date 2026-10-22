@@ -30,29 +30,29 @@ function renderCentreProfileRow(centre: JdCentreProfileView): string {
   // panel with every field expanded at once.
   return `
     <details class="jd-settings__centre-row">
-      <summary>${escapeHtml(formatJdLocationDisplay(centre.locationDisplay))}${centre.isEnviroschool ? ` <span class="jd-settings__centre-meta">Enviroschool</span>` : ""}</summary>
+      <summary>${escapeHtml(formatJdLocationDisplay(centre.locationDisplay))}${centre.isEnviroschool ? ` <span class="jd-settings__centre-meta text-ghost text-small">Enviroschool</span>` : ""}</summary>
       <form data-jd-centre-profile data-centre-key="${centre.centreKey}">
-        <label>
+        <label class="field-label">
           <span>Location display</span>
-          <input type="text" name="locationDisplay" value="${escapeHtml(formatJdLocationDisplay(centre.locationDisplay))}" />
+          <input class="form-control" type="text" name="locationDisplay" value="${escapeHtml(formatJdLocationDisplay(centre.locationDisplay))}" />
         </label>
-        <label>
+        <label class="field-label">
           <span>Intro paragraph</span>
-          <textarea name="introParagraph">${escapeHtml(centre.introParagraph)}</textarea>
+          <textarea class="form-control" name="introParagraph">${escapeHtml(centre.introParagraph)}</textarea>
         </label>
-        <label>
+        <label class="field-label">
           <span>Senior Teacher name</span>
-          <input type="text" name="seniorTeacherName" value="${escapeHtml(centre.seniorTeacherName)}" />
+          <input class="form-control" type="text" name="seniorTeacherName" value="${escapeHtml(centre.seniorTeacherName)}" />
         </label>
-        <label>
+        <label class="field-label">
           <span>Senior Teacher acronym</span>
-          <input type="text" name="seniorTeacherAcronym" value="${escapeHtml(centre.seniorTeacherAcronym)}" />
+          <input class="form-control" type="text" name="seniorTeacherAcronym" value="${escapeHtml(centre.seniorTeacherAcronym)}" />
         </label>
-        <label>
+        <label class="field-label">
           <span>Senior Teacher email</span>
-          <input type="email" name="seniorTeacherEmail" value="${escapeHtml(centre.seniorTeacherEmail)}" />
+          <input class="form-control" type="email" name="seniorTeacherEmail" value="${escapeHtml(centre.seniorTeacherEmail)}" />
         </label>
-        <label class="jd-settings__checkbox-label">
+        <label class="jd-settings__checkbox-label field-label">
           <input type="checkbox" name="isEnviroschool" ${centre.isEnviroschool ? "checked" : ""} />
           <span>Registered Enviroschool</span>
         </label>
@@ -65,18 +65,18 @@ function renderCentreProfileRow(centre: JdCentreProfileView): string {
 function renderTitleProfileRow(profile: JdTitleProfileView): string {
   return `
     <details class="jd-settings__title-row">
-      <summary>${escapeHtml(profile.jobTitle)} <span class="jd-settings__title-meta">${escapeHtml(profile.jobCategory)} · ${escapeHtml(profile.layoutVariant)}</span></summary>
+      <summary>${escapeHtml(profile.jobTitle)} <span class="jd-settings__title-meta text-ghost text-small">${escapeHtml(profile.jobCategory)} · ${escapeHtml(profile.layoutVariant)}</span></summary>
       <form data-jd-title-profile>
         <input type="hidden" name="jobTitle" value="${escapeHtml(profile.jobTitle)}" />
-        <label>
+        <label class="field-label">
           <span>Qualifications text</span>
-          <textarea name="qualificationsText">${escapeHtml(profile.qualificationsText)}</textarea>
+          <textarea class="form-control" name="qualificationsText">${escapeHtml(profile.qualificationsText)}</textarea>
         </label>
-        <label class="jd-settings__checkbox-label">
+        <label class="jd-settings__checkbox-label field-label">
           <input type="checkbox" name="isCentreSpecific" ${profile.isCentreSpecific ? "checked" : ""} />
           <span>Centre specific</span>
         </label>
-        <p class="jd-settings__hint">Role sections are edited per job description in the JD Editor panel; this text seeds new job descriptions of this title. Untick <strong>Centre specific</strong> for org-wide roles (e.g. office staff) that are not based at a kindergarten - those default the Location to <strong>Other</strong>, where you can name the location yourself.</p>
+        <p class="jd-settings__hint text-ghost text-small">Role sections are edited per job description in the JD Editor panel; this text seeds new job descriptions of this title. Untick <strong>Centre specific</strong> for org-wide roles (e.g. office staff) that are not based at a kindergarten - those default the Location to <strong>Other</strong>, where you can name the location yourself.</p>
         <button type="submit"><i class="bi bi-save ui-icon" aria-hidden="true"></i><span>Save</span></button>
       </form>
     </details>
@@ -93,12 +93,25 @@ function renderKnowledgeDocRow(doc: JdKnowledgeDocView, centreName: string | nul
         <input type="hidden" name="kind" value="${doc.kind}" />
         ${doc.centreKey != null ? `<input type="hidden" name="centreKey" value="${doc.centreKey}" />` : ""}
         <input type="hidden" name="label" value="${escapeHtml(doc.label)}" />
-        <label>
+        <label class="field-label">
           <span>Content (HTML)</span>
-          <textarea name="contentHtml" rows="8">${escapeHtml(doc.contentHtml)}</textarea>
+          <textarea class="form-control" name="contentHtml" rows="8">${escapeHtml(doc.contentHtml)}</textarea>
         </label>
         <button type="submit"><i class="bi bi-save ui-icon" aria-hidden="true"></i><span>Save</span></button>
       </form>
+    </details>
+  `;
+}
+
+// Each settings group is a collapsible section, the same <details> accordion the
+// Links page uses for its categories. The shared name makes it exclusive
+// (opening one closes the others). Settings forms save in place without a
+// reload, so the open section stays open.
+function renderSettingsSection(title: string, body: string): string {
+  return `
+    <details class="wiki-list__group flex flex-col wiki-list__group--collapsible jd-settings__section" name="jd-settings-sections">
+      <summary class="wiki-list__group-heading text-strong font-strong">${escapeHtml(title)}</summary>
+      <div class="wiki-list__group-articles flex flex-col gap-4">${body}</div>
     </details>
   `;
 }
@@ -114,43 +127,60 @@ export function renderJdSettingsPanel(options: JdSettingsPanelOptions): string {
   const agreement = options.agreementStatus;
   const agreementBanner = agreement.latest
     ? `
-      <div class="jd-settings__agreement-status${agreement.expired ? " jd-settings__agreement-status--expired" : agreement.expiringSoon ? " jd-settings__agreement-status--warning" : ""}">
+      <div class="jd-settings__agreement-status flex flex-wrap gap-10 items-center text-body${agreement.expired ? " jd-settings__agreement-status--expired" : agreement.expiringSoon ? " jd-settings__agreement-status--warning" : ""}">
         <span>${escapeHtml(agreement.latest.name)} — expires ${escapeHtml(formatDate(agreement.latest.expiresOn))}</span>
         ${agreement.expired ? "<strong>Expired — import a new agreement.</strong>" : agreement.expiringSoon ? `<strong>Expires in ${agreement.daysUntilExpiry} days.</strong>` : ""}
       </div>
     `
-    : `<div class="jd-settings__agreement-status jd-settings__agreement-status--warning"><span>No KTCA agreement imported yet.</span></div>`;
+    : `<div class="jd-settings__agreement-status flex flex-wrap gap-10 items-center text-body jd-settings__agreement-status--warning"><span>No KTCA agreement imported yet.</span></div>`;
 
   return `
-    <div class="jd-settings">
-      <section class="jd-settings__section">
-        <h3>Kindergarten profiles</h3>
-        <div class="jd-settings__centre-list">${centreRows}</div>
-      </section>
+    <div class="jd-settings wiki-list__rows flex flex-col wiki-list__rows--accordion">
+      ${renderSettingsSection(
+        "Kindergarten profiles",
+        `<div class="jd-settings__centre-list flex flex-col gap-8">${centreRows}</div>`,
+      )}
 
-      <section class="jd-settings__section">
-        <h3>Document defaults</h3>
+      ${renderSettingsSection(
+        "Document defaults",
+        `
         <form class="jd-settings__global" data-jd-global-settings>
           <label>
             <span>Last Reviewed by</span>
-            <input type="text" name="lastReviewedByAcronym" value="${escapeHtml(options.globalSettings.lastReviewedByAcronym)}" placeholder="e.g. VVR" />
+            <input class="form-control" type="text" name="lastReviewedByAcronym" value="${escapeHtml(options.globalSettings.lastReviewedByAcronym)}" placeholder="e.g. VVR" />
           </label>
-          <p class="jd-settings__hint">Acronym printed in the <strong>Last Updated By</strong> row of every job description PDF footer.</p>
+          <p class="jd-settings__hint text-ghost text-small">Acronym printed in the <strong>Last Updated By</strong> row of every job description PDF footer.</p>
           <button type="submit"><i class="bi bi-save ui-icon" aria-hidden="true"></i><span>Save</span></button>
         </form>
-      </section>
+        `,
+      )}
 
-      <section class="jd-settings__section">
-        <h3>Job title profiles</h3>
-        <div class="jd-settings__title-list">${titleRows}</div>
+      ${renderSettingsSection(
+        "Folder shortcuts",
+        `
+        <form class="jd-settings__global" data-jd-folder-settings>
+          <label>
+            <span>Job Positions folder</span>
+            <input class="form-control" type="text" name="jobPositionsFolder" value="${escapeHtml(options.globalSettings.jobPositionsFolder)}" />
+          </label>
+          <p class="jd-settings__hint text-ghost text-small">The folder the <strong>Job Positions</strong> button on the Job Descriptions panel opens in File Explorer. Paste the address from Explorer's address bar; leave blank to restore the default.</p>
+          <button type="submit"><i class="bi bi-save ui-icon" aria-hidden="true"></i><span>Save</span></button>
+        </form>
+        `,
+      )}
+
+      ${renderSettingsSection(
+        "Job title profiles",
+        `
+        <div class="jd-settings__title-list flex flex-col gap-8">${titleRows}</div>
         <form class="jd-settings__title-create" data-jd-title-create>
           <label>
             <span>New job title</span>
-            <input type="text" name="jobTitle" placeholder="e.g. Senior Teacher" required />
+            <input class="form-control" type="text" name="jobTitle" placeholder="e.g. Senior Teacher" required />
           </label>
           <label>
             <span>Job category</span>
-            <input type="text" name="jobCategory" placeholder="e.g. Education" required />
+            <input class="form-control" type="text" name="jobCategory" placeholder="e.g. Education" required />
           </label>
           <label class="jd-settings__checkbox-label">
             <input type="checkbox" name="isCentreSpecific" checked />
@@ -158,23 +188,26 @@ export function renderJdSettingsPanel(options: JdSettingsPanelOptions): string {
           </label>
           <button type="submit"><i class="bi bi-plus-lg ui-icon" aria-hidden="true"></i><span>Add job type</span></button>
         </form>
-        <p data-jd-title-create-status class="jd-settings__ktca-status"></p>
-      </section>
+        <p data-jd-title-create-status class="jd-settings__ktca-status text-ghost text-small"></p>
+        `,
+      )}
 
-      <section class="jd-settings__section">
-        <h3>Blurb knowledge base</h3>
-        <div class="jd-settings__doc-list">${docRows}</div>
-      </section>
+      ${renderSettingsSection(
+        "Blurb knowledge base",
+        `<div class="jd-settings__doc-list flex flex-col gap-8">${docRows}</div>`,
+      )}
 
-      <section class="jd-settings__section">
-        <h3>KTCA pay agreement</h3>
+      ${renderSettingsSection(
+        "KTCA pay agreement",
+        `
         ${agreementBanner}
-        <form class="jd-settings__ktca-import" data-jd-ktca-import enctype="multipart/form-data">
-          <input type="file" name="agreement" accept=".pdf" required />
+        <form class="jd-settings__ktca-import flex gap-10 items-center" data-jd-ktca-import enctype="multipart/form-data">
+          <input class="form-control" type="file" name="agreement" accept=".pdf" required />
           <button type="submit"><i class="bi bi-upload ui-icon" aria-hidden="true"></i><span>Import new KTCA</span></button>
         </form>
-        <p data-ktca-import-status class="jd-settings__ktca-status"></p>
-      </section>
+        <p data-ktca-import-status class="jd-settings__ktca-status text-ghost text-small"></p>
+        `,
+      )}
     </div>
   `;
 }

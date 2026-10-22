@@ -2,11 +2,12 @@ import { renderLayout } from "./layout.js";
 import { renderWikiListPanel, type WikiListPanelOptions } from "./wiki/wiki-list-panel.js";
 import { renderWikiEditorPanel, type WikiEditorPanelOptions } from "./wiki/wiki-editor-panel.js";
 import { renderWikiArticlePanel, type WikiArticlePanelOptions } from "./wiki/wiki-article-panel.js";
+import { THEME_HEAD_SCRIPT } from "./theme.js";
 
 const PANEL_DEFINITIONS = [
-  { id: "wiki-list", title: "Things To Know", className: "panel--wiki-list" },
-  { id: "wiki-article", title: "Article", className: "panel--wiki-article" },
-  { id: "wiki-editor", title: "Edit Article", className: "panel--wiki-editor" },
+  { id: "wiki-list", title: "Things To Know", className: "panel--wiki-list panel--scroll" },
+  { id: "wiki-article", title: "Article", className: "panel--wiki-article panel--scroll" },
+  { id: "wiki-editor", title: "Edit Article", className: "panel--wiki-editor panel--scroll" },
   { id: "chat", title: "AI Chat with Beep Beep", className: "panel--chat" },
 ] as const;
 
@@ -35,17 +36,17 @@ function renderPanelContent(panelId: string, options: WikiAppShellOptions): stri
 // wiki, so asking here reads the articles sitting next to it.
 function renderWikiAiChatPanel(): string {
   return `
-    <div class="chat-shell" data-ai-chat data-ai-chat-endpoint="/api/ai/chat/stream">
+    <div class="chat-shell grid gap-8" data-ai-chat data-ai-chat-endpoint="/api/ai/chat/stream">
       <div class="chat-shell__messages">
-        <div class="chat-message chat-message--assistant">
-          <span class="chat-message__role">Beep Beep</span>
+        <div class="chat-message text-body chat-message--assistant">
+          <span class="chat-message__role text-small text-ghost label-case">Beep Beep</span>
           <p class="chat-message__body">Ask anything covered by Things To Know. I read the articles on this page before answering and say which one the answer came from.</p>
         </div>
       </div>
       <div class="chat-shell__composer">
-        <label class="chat-shell__prompt-label" for="wiki-chat-prompt">Prompt</label>
+        <label class="chat-shell__prompt-label text-small text-ghost label-case" for="wiki-chat-prompt">Prompt</label>
         <textarea id="wiki-chat-prompt" class="chat-shell__prompt-input" placeholder="Ask about a policy, process, or anything written down here."></textarea>
-        <button class="chat-shell__send" type="button" data-ai-chat-send><i class="bi bi-send ui-icon" aria-hidden="true"></i><span>Send</span></button>
+        <button class="chat-shell__send inline-flex items-center justify-center gap-6" type="button" data-ai-chat-send><i class="bi bi-send ui-icon" aria-hidden="true"></i><span>Send</span></button>
       </div>
     </div>
   `;
@@ -64,9 +65,9 @@ function renderWikiChatScript(): string {
         var history = [];
         function append(role, text) {
           var row = document.createElement("div");
-          row.className = "chat-message chat-message--" + role;
+          row.className = "chat-message text-body chat-message--" + role;
           var title = document.createElement("span");
-          title.className = "chat-message__role";
+          title.className = "chat-message__role text-small text-ghost label-case";
           title.textContent = role === "assistant" ? "Beep Beep" : "You";
           var body = document.createElement("p");
           body.className = "chat-message__body";
@@ -934,15 +935,17 @@ export function renderWikiAppShell(options: WikiAppShellOptions): string {
     <link rel="icon" href="/favicon.ico" type="image/png" />
     <link rel="stylesheet" href="/vendor/bootstrap-icons.css" />
     <link rel="stylesheet" href="/app.css" />
+    <link rel="stylesheet" href="/themes.css" />
+    ${THEME_HEAD_SCRIPT}
   </head>
   <body class="app-shell-body">
-    <aside class="nav-rail" aria-label="Primary navigation">
-      <a class="nav-rail__item" href="/" aria-label="Back to landing" title="Landing"><i class="bi bi-house-door" aria-hidden="true"></i></a>
-      <a class="nav-rail__item" href="/app" aria-label="Online Marketing dashboard" title="Online Marketing"><i class="bi bi-bar-chart-line" aria-hidden="true"></i></a>
-      <a class="nav-rail__item" href="/tasks" aria-label="Tasks" title="Tasks"><i class="bi bi-check2-square" aria-hidden="true"></i></a>
-      <a class="nav-rail__item" href="/comms" aria-label="Online Communications dashboard" title="Online Communications"><i class="bi bi-envelope-paper" aria-hidden="true"></i></a>
-      <a class="nav-rail__item" href="/jd" aria-label="Job Descriptions" title="Job Descriptions"><i class="bi bi-file-earmark-person" aria-hidden="true"></i></a>
-      <a class="nav-rail__item nav-rail__item--current" href="/wiki" aria-label="Things To Know" title="Things To Know" aria-current="page"><i class="bi bi-journal-bookmark" aria-hidden="true"></i></a>
+    <aside class="nav-rail flex flex-col items-center gap-6" aria-label="Primary navigation">
+      <a class="nav-rail__item inline-flex items-center justify-center text-muted" href="/" aria-label="Back to landing" title="Landing"><i class="bi bi-house-door" aria-hidden="true"></i></a>
+      <a class="nav-rail__item inline-flex items-center justify-center text-muted" href="/app" aria-label="Online Marketing dashboard" title="Online Marketing"><i class="bi bi-bar-chart-line" aria-hidden="true"></i></a>
+      <a class="nav-rail__item inline-flex items-center justify-center text-muted" href="/tasks" aria-label="Tasks" title="Tasks"><i class="bi bi-check2-square" aria-hidden="true"></i></a>
+      <a class="nav-rail__item inline-flex items-center justify-center text-muted" href="/comms" aria-label="Online Communications dashboard" title="Online Communications"><i class="bi bi-envelope-paper" aria-hidden="true"></i></a>
+      <a class="nav-rail__item inline-flex items-center justify-center text-muted" href="/jd" aria-label="Job Descriptions" title="Job Descriptions"><i class="bi bi-file-earmark-person" aria-hidden="true"></i></a>
+      <a class="nav-rail__item inline-flex items-center justify-center text-muted nav-rail__item--current" href="/wiki" aria-label="Things To Know" title="Things To Know" aria-current="page"><i class="bi bi-journal-bookmark" aria-hidden="true"></i></a>
     </aside>
     ${layout}
     ${renderWikiScript()}
