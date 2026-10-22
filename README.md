@@ -215,7 +215,7 @@ The local model has a 4,096-token window, far too small for ~400 centres, so the
 
 ### Tasks
 
-Each task has a title/description, a **status** (`To do` / `In progress` / `Blocked` / `Done`), an optional due date, an optional checklist, and time tracking:
+Each task has a title/description, a **status** (`To do` / `In progress` / `Completed`, stored as `todo` / `in_progress` / `done`), an optional due date, an optional checklist, and time tracking. The Task Board shows one column per status with the newest task at the top of each column (`listTasks` orders by `createdAt desc`):
 
 - **Estimated minutes** - a manual estimate.
 - **Logged minutes** - the running total, built from manual time entries plus stopped timer sessions.
@@ -235,7 +235,7 @@ The landing page shows a reminders strip for tasks that are **overdue** or **due
 
 ### Projects
 
-A project consolidates tasks into named **groups**, tracks a member roster drawn from the **Members** directory, and renders a **timeline**: each scheduled task becomes a horizontal bar positioned by due date across the project's date range, grouped by task group. Tasks without a due date fall into an "Unscheduled" lane. If a project has no usable dates yet, the timeline falls back to a simple status breakdown (todo/in progress/blocked/done counts).
+A project consolidates tasks into named **groups**, tracks a member roster drawn from the **Members** directory, and renders a **timeline**: each scheduled task becomes a horizontal bar positioned by due date across the project's date range, grouped by task group. Tasks without a due date fall into an "Unscheduled" lane. If a project has no usable dates yet, the timeline falls back to a simple status breakdown (todo/in progress/done counts).
 
 ### Members
 

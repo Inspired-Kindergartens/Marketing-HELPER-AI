@@ -4085,7 +4085,7 @@ body.readme-body {
 }
 
 .task-board__columns {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .task-board__column {
@@ -4104,8 +4104,19 @@ body.readme-body {
   padding: 10px;
 }
 
+/* Compact cards so more tasks fit in view: the title drops from the 16px base
+   and the meta, badges and advance button go below the 12px small size. */
 .task-card {
-  padding: 9px 10px;
+  padding: 6px 8px;
+  font-size: 13px;
+  line-height: 1.35;
+  gap: 4px;
+}
+
+.task-card .text-small,
+.task-card .badge,
+.task-card .button-sm {
+  font-size: 11px;
 }
 
 .task-card--overdue {

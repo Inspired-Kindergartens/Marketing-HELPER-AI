@@ -254,7 +254,8 @@ export async function listTasks(filter: TaskListFilter = {}): Promise<TaskView[]
       ...(filter.assigneeId != null ? { assigneeId: filter.assigneeId } : {}),
       ...(filter.includeDone ? {} : { status: { not: "done" } }),
     },
-    orderBy: [{ position: "asc" }, { createdAt: "asc" }],
+    // Newest first, so a task just added appears at the top of its column.
+    orderBy: [{ position: "asc" }, { createdAt: "desc" }],
     include: TASK_INCLUDE,
   });
   return rows.map((row) => toTaskView(row as IncludedTask, now));

@@ -83,7 +83,7 @@ The **refresh buttons** (circular arrows and download icons) fetch the latest da
 
 The team's to-do list.
 
-- **Task Board** — every task with its status (To do, In progress, Blocked, Done). **Add** creates one.
+- **Task Board** — every task with its status (To do, In progress, Completed). **Add** creates one, and it appears at the top of its column.
 - **Task Detail** — click a task to give it a due date, a checklist, notes, attached files, a person, a project or a centre. The timer tracks time spent. **Open in Outlook** starts an email about the task. Drag a checklist item by the dotted grip on its left to change its order.
 - **Projects** — group tasks and see them on a timeline.
 - **Members** — the people tasks can be given to.
