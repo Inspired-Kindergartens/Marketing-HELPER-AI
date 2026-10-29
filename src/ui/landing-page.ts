@@ -349,6 +349,10 @@ export function renderLandingPage(options: LandingPageOptions = {}) {
           <i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i>
           <span class="landing__rollback-ai-label">Rollback AI model</span>
         </button>
+        <button type="button" class="landing__restart inline-flex items-center gap-8 text-muted" data-backup aria-label="Download a full backup of the app's data">
+          <i class="bi bi-database-down" aria-hidden="true"></i>
+          <span class="landing__backup-label">Back up data</span>
+        </button>
         <a class="landing__github inline-flex items-center gap-8 text-muted" href="https://github.com/Inspired-Kindergartens/Marketing-HELPER-AI" target="_blank" rel="noopener noreferrer">
           <i class="bi bi-github" aria-hidden="true"></i>
           <span>View on GitHub</span>
@@ -437,6 +441,44 @@ export function renderLandingPage(options: LandingPageOptions = {}) {
           "Rolling back...",
           "Rolled back"
         );
+      })();
+      (function () {
+        var btn = document.querySelector("[data-backup]");
+        if (!btn) return;
+        var label = btn.querySelector(".landing__backup-label");
+        var defaultText = "Back up data";
+        function done(text) {
+          if (label) label.textContent = text;
+          setTimeout(function () {
+            if (label) label.textContent = defaultText;
+            btn.disabled = false;
+          }, 4000);
+        }
+        btn.addEventListener("click", function () {
+          if (btn.disabled) return;
+          if (!window.confirm("Create a full backup (database, uploads and credential files)? It contains passwords and API keys, so keep the zip somewhere safe.")) {
+            return;
+          }
+          btn.disabled = true;
+          if (label) label.textContent = "Backing up…";
+          fetch("/actions/backup", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: "{}",
+          })
+            .then(function (res) { return res.json(); })
+            .then(function (payload) {
+              if (!payload.ok) {
+                done("Backup failed");
+                return;
+              }
+              window.location.href = payload.downloadUrl;
+              done("Backup downloaded");
+            })
+            .catch(function () {
+              done("Backup failed");
+            });
+        });
       })();
       (function () {
         var btn = document.querySelector("[data-update-ai-model]");

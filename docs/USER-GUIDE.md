@@ -22,6 +22,7 @@ The [landing page](/) is your starting point.
   - **Restart server** restarts the app if something seems stuck.
   - **Update AI model** appears when a better AI model is available for Beep Beep. It downloads the new model and switches to it. The model you were using is kept as a backup, and any older backup is deleted automatically to free up space.
   - **Rollback AI model** switches Beep Beep back to the backup model if the new one isn't working well.
+  - **Back up data** downloads one zip file holding everything the app knows: the whole database, uploaded task attachments, the contact list, and the passwords and keys the app uses to connect to Infocare, Google, Meta and Postmark. See *Moving the app to another computer* below.
   - **Look** chooses how the app looks: Default, Light or Dark. See *Appearance* below.
 
 On any page, the **icons down the right-hand edge** take you back to the landing page or straight to another area.
@@ -199,6 +200,17 @@ You can choose how the app looks. At the very bottom of [the landing page](/), n
 - **Dark**: a modern dark look with rounded corners and softer colours.
 
 Your choice changes every page straight away, including any other tabs you have open, and is remembered next time you open the app. It is saved on this computer's browser, so someone else's computer keeps its own choice.
+
+## Moving the app to another computer
+
+Everything the app has stored can be moved to a new computer, or kept safe in case this one fails.
+
+1. On this computer, click **Back up data** at the bottom of the [landing page](/). A file called something like `marketing-helper-backup-20261030-1104.zip` downloads (about 60 MB). A copy is also kept in the app's `backups` folder.
+2. **Keep the zip private.** It contains passwords and API keys. Store it on the work OneDrive or a USB stick, not in email or a shared folder.
+3. On the new computer, whoever looks after the app installs PostgreSQL, Node.js and the app from GitHub, then runs the restore script with the zip (the technical README has the exact steps). It puts the database and files back exactly as they were.
+4. Beep Beep's AI model is not in the backup because it is large and can be downloaded again. The setup step fetches it.
+
+It's a good idea to make a backup now and then (say once a month) even if you're not moving.
 
 ## Tips
 

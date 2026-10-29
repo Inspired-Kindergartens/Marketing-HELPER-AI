@@ -134,7 +134,7 @@ The landing page links to the main local tools:
 - **Code Snippets** (`/snippets`) - reusable code (tracking tags, embeds, email HTML) with one-click copy and an AI snippet helper.
 - **Links** (`/subscriptions`) - categorised links, such as the services the team subscribes to and the newsletter links under the "Panui Tools" category (no AI chat). Shown as "Links"; the route, tables and code still use the original name "Subscriptions".
 - **Sector Insight** (`/sector`) - competitors and other ECE services with their promotions, meals and transport, a monthly crawler, and an AI chat that answers from the exact matching rows. See [Sector Insight](#sector-insight).
-- **Upload Contacts** (`/contacts/upload`) - replaces the centre contact workbook used by the dashboard's Email column. Linked from the landing page footer, alongside Restart server.
+- **Upload Contacts** (`/contacts/upload`) - replaces the centre contact workbook used by the dashboard's Email column. Linked from the landing page footer, alongside Restart server and Back up data.
 - **Read Me** (`/readme`) - the plain-language user guide, rendered from `docs/USER-GUIDE.md`.
 
 ### Documentation
@@ -319,6 +319,26 @@ That link *is* the live vacancy page URL, so its path is the slugified page titl
 ### Settings
 
 JD Settings maintains the shared profiles editors draw from: per-centre intro paragraph and Senior Teacher name/acronym, per-title qualifications text, the blurb knowledge base (generic IK text plus per-centre current/old website blurbs), and the KTCA pay-scale/agreement status.
+
+## Backup And Moving To Another Machine
+
+All persistent state lives in **one PostgreSQL database** (`DATABASE_URL`; the `SHADOW_DATABASE_URL` database is Prisma's throwaway migration scratch DB and holds nothing) plus a handful of git-ignored files. The **Back up data** button in the landing footer (`POST /actions/backup`, `src/backup.ts`) bundles all of it into `backups/marketing-helper-backup-YYYYMMDD-HHMM.zip` and downloads it via `GET /backups/:name`:
+
+- `database.dump` - `pg_dump --format=custom --no-owner --no-privileges` of the whole database (all tables, including help-KB embeddings and Sector Insight data).
+- `files/` - `.env`, `OAuth.json`, `google-oauth-token.json`, the Google service-account JSON, `centre-contact-list.xlsx`, `uploads/` (task attachments), `INFOCARE/`, `META/`, `logs/` (landing-feed snapshots, Infocare audit log).
+- `MANIFEST.json` - timestamp and the file list.
+
+Not included (rebuilt or re-downloaded): `node_modules`, `dist`, `generated/prisma` (`npm run build`), and the Ollama models in `.local/` (~6.6 GB, `npm run ai:setup`). Everything else is in git.
+
+`pg_dump` is found via `PG_BIN`, then the newest `C:Program FilesPostgreSQL<ver>in`, then `PATH`. The zip is written with Windows' bundled `tar.exe -a`. **The zip contains secrets** (`.env` and OAuth tokens) - treat it like a password file.
+
+To restore on a new machine:
+
+1. Install PostgreSQL (same or newer major version, currently 18), Node.js, and Git; clone the repo.
+2. With the app stopped, run `powershell -ExecutionPolicy Bypass -File scriptsestore-backup.ps1 -Backup C:path	omarketing-helper-backup-....zip`. It copies `files/` back into the project (saving any existing `.env` as `.env.before-restore`), creates the role and database named in the restored `DATABASE_URL` if missing (prompts for the `postgres` superuser password; override the superuser with `-PostgresSuperuser`), then runs `pg_restore --clean --if-exists --no-owner` as the app's own login.
+3. `npm install`, `npm run build`, `npm run ai:setup`, then start with `scriptsopen-marketing-helper.ps1` (and `npm run server:install` for the persistent scheduled task).
+
+Verified 2026-10-30: a backup restored into a scratch database reproduced all 57 tables and 110,262 rows exactly.
 
 ## Environment
 

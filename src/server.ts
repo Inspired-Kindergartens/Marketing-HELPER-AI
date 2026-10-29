@@ -40,6 +40,7 @@ import {
 import { ensureWeeklyAnalyticsSnapshot, refreshAnalyticsSnapshot } from "./analytics/snapshot.js";
 import { resolveWindowKey, resolveWindowStartDate } from "./analytics/windows.js";
 import { prisma } from "./db.js";
+import { BACKUP_DIR, createBackup, listBackups } from "./backup.js";
 import { getGoogleAnalyticsConfig, readGoogleAnalyticsConfigStatus } from "./google-analytics/config.js";
 import {
   ensureDailyGoogleAnalyticsSnapshot,
@@ -4957,6 +4958,37 @@ app.post("/actions/rollback-ai-model", async (_request, reply) => {
       error: error instanceof Error ? error.message : "AI model rollback failed.",
     });
   }
+});
+
+app.post("/actions/backup", async (_request, reply) => {
+  try {
+    const result = await createBackup(process.cwd(), env.DATABASE_URL);
+
+    return reply.type("application/json; charset=utf-8").send({ ok: true, ...result, downloadUrl: `/backups/${result.fileName}` });
+  } catch (error) {
+    app.log.error({ error }, "Data backup failed");
+    reply.code(500);
+
+    return reply.type("application/json; charset=utf-8").send({
+      ok: false,
+      error: error instanceof Error ? error.message : "Backup failed.",
+    });
+  }
+});
+
+app.get<{ Params: { name: string } }>("/backups/:name", async (request, reply) => {
+  const name = request.params.name;
+
+  if (!(await listBackups(process.cwd())).includes(name)) {
+    reply.code(404);
+    return { error: "Backup not found." };
+  }
+
+  const file = await readFile(join(process.cwd(), BACKUP_DIR, name));
+  return reply
+    .type("application/zip")
+    .header("Content-Disposition", attachmentDownloadHeader(name))
+    .send(file);
 });
 
 app.get("/app.css", async (_request, reply) => {
