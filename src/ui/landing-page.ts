@@ -717,6 +717,71 @@ export function renderLandingPage(options: LandingPageOptions = {}) {
           input.value = "";
           submitSearchText(root, text, false);
         });
+        // Drag the ticker to scrub it: moves the CSS animation's currentTime so it
+        // resumes from wherever it was dropped. Listeners are delegated because the
+        // feed fragment is swapped in place on refresh.
+        var scrub = null;
+        var suppressFeedClick = false;
+        function getFeedAnimation(list) {
+          if (!list || typeof list.getAnimations !== "function") return null;
+          var animations = list.getAnimations();
+          return animations.length ? animations[0] : null;
+        }
+        document.addEventListener("pointerdown", function (event) {
+          if (event.button !== 0 || !(event.target instanceof Element)) return;
+          var viewport = event.target.closest(".landing-feed__viewport");
+          if (!(viewport instanceof HTMLElement)) return;
+          var list = viewport.querySelector(".landing-feed__list--scroll");
+          var animation = getFeedAnimation(list);
+          if (!animation || !(list instanceof HTMLElement)) return;
+          var duration = Number(animation.effect && animation.effect.getComputedTiming().duration) || 0;
+          var halfWidth = list.scrollWidth / 2;
+          if (!duration || !halfWidth) return;
+          scrub = {
+            viewport: viewport,
+            animation: animation,
+            pointerId: event.pointerId,
+            startX: event.clientX,
+            startTime: Number(animation.currentTime) || 0,
+            msPerPx: duration / halfWidth,
+            duration: duration,
+            moved: false,
+          };
+        });
+        document.addEventListener("pointermove", function (event) {
+          if (!scrub || event.pointerId !== scrub.pointerId) return;
+          var dx = event.clientX - scrub.startX;
+          if (!scrub.moved) {
+            if (Math.abs(dx) < 4) return;
+            scrub.moved = true;
+            scrub.viewport.classList.add("landing-feed__viewport--scrubbing");
+            try { scrub.viewport.setPointerCapture(event.pointerId); } catch (err) {}
+          }
+          var time = scrub.startTime - dx * scrub.msPerPx;
+          // Keep the time positive inside the infinite loop so it never hits the pre-start state.
+          scrub.animation.currentTime = ((time % scrub.duration) + scrub.duration) % scrub.duration + scrub.duration;
+          event.preventDefault();
+        });
+        function endScrub(event) {
+          if (!scrub || event.pointerId !== scrub.pointerId) return;
+          if (scrub.moved) {
+            suppressFeedClick = true;
+            setTimeout(function () { suppressFeedClick = false; }, 0);
+            scrub.viewport.classList.remove("landing-feed__viewport--scrubbing");
+          }
+          scrub = null;
+        }
+        document.addEventListener("pointerup", endScrub);
+        document.addEventListener("pointercancel", endScrub);
+        document.addEventListener("click", function (event) {
+          if (!suppressFeedClick) return;
+          suppressFeedClick = false;
+          event.preventDefault();
+          event.stopPropagation();
+        }, true);
+        document.addEventListener("dragstart", function (event) {
+          if (event.target instanceof Element && event.target.closest(".landing-feed__viewport")) event.preventDefault();
+        });
         applyOpenedState(feed);
         function refreshFeed() {
           fetch("/api/landing-intelligence", { cache: "no-store" })

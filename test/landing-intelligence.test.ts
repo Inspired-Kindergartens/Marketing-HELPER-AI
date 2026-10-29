@@ -6,6 +6,7 @@ import {
   NEWS_QUERY_TIERS,
   SECTOR_WATCH_QUERIES,
   SOURCE_SPECIFIC_NEWS_QUERIES,
+  articleHtmlMentionsEce,
   assessNewsCandidate,
   isBlockedSourceItem,
   isFreshFeedItem,
@@ -18,6 +19,7 @@ import {
   parseRnzListing,
   parseStuffListing,
   parseSunLiveListing,
+  stripPublisherSuffix,
 } from "../src/landing-intelligence.js";
 
 const NOW = new Date("2026-07-31T00:00:00.000Z").getTime();
@@ -449,6 +451,58 @@ test("landing intelligence keeps international press only when it relates to NZ 
   );
 });
 
+test("Google News items are recognised as NZ by the publisher's source url, not the redirect link", () => {
+  const item = {
+    title: "Teacher admits filming in early childhood centre bathroom - 1News",
+    link: "https://news.google.com/rss/articles/CBMimAFBVV95cUxPcWpo",
+    source: "1News",
+    description: "Teacher admits filming in early childhood centre bathroom",
+  };
+
+  assert.equal(isNzOrAustraliaRelatedItem(item), false);
+  assert.equal(isNzOrAustraliaRelatedItem({ ...item, sourceUrl: "https://www.1news.co.nz" }), true);
+});
+
+test("an ECE-confirmed item is accepted even when its headline omits the sector", () => {
+  const item = {
+    title: "Teacher used phone hidden in 'emergency' backpack for bathroom recordings",
+    link: "https://www.nzherald.co.nz/bay-of-plenty-times/news/teacher/DTOOIKRAIVGALDEKSIS3WQ3ZDY/",
+    source: "Bay of Plenty Times (NZ Herald)",
+    publishedAt: "2026-07-30T00:00:00.000Z",
+    description: "",
+  };
+
+  assert.deepEqual(assessNewsCandidate(item, NOW, MAX_AGE).reasons, ["not-ece"]);
+  assert.equal(assessNewsCandidate({ ...item, eceConfirmed: true }, NOW, MAX_AGE).accepted, true);
+});
+
+test("search-text matches outrank general sector news", () => {
+  const item = {
+    title: "Kindergarten funding update for New Zealand",
+    link: "https://www.rnz.co.nz/news/education/1",
+    source: "RNZ",
+    publishedAt: "2026-07-30T00:00:00.000Z",
+    description: "",
+  };
+
+  const plain = assessNewsCandidate(item, NOW, MAX_AGE);
+  const searched = assessNewsCandidate({ ...item, fromSearchText: true }, NOW, MAX_AGE);
+
+  assert.equal(searched.score - plain.score, 100);
+  assert.ok(searched.reasons.includes("search-text"));
+});
+
+test("article ECE check reads summary meta and opening paragraphs, not page chrome", () => {
+  const article = `<head><meta name="description" content="A teacher has admitted making recordings in a Mount Maunganui early childhood centre staff bathroom."></head>
+    <body><p>Story text</p></body>`;
+  const contentFirstMeta = `<meta content="Kindergarten closes after storm damage" property="og:description">`;
+  const navOnly = `<meta name="description" content="Latest news"><p>Weather</p><p>Sport</p>${"<p>More</p>".repeat(10)}<nav><a>Early childhood</a></nav>`;
+
+  assert.equal(articleHtmlMentionsEce(article), true);
+  assert.equal(articleHtmlMentionsEce(contentFirstMeta), true);
+  assert.equal(articleHtmlMentionsEce(navOnly), false);
+});
+
 test("landing intelligence assessment rejects non-news and non-NZ/AU ECE items before ranking", () => {
   assert.deepEqual(
     assessNewsCandidate(
@@ -555,4 +609,15 @@ test("rnz listing survives an unparseable date without throwing", () => {
 
   assert.equal(items.length, 1);
   assert.equal(items[0].publishedAt, null);
+});
+
+test("Google News headlines drop the trailing publisher name", () => {
+  const source = "ABC News & Headlines – Australian Broadcasting Corporation";
+
+  assert.equal(
+    stripPublisherSuffix(`Chair of childcare operator quits after Four Corners exposes abuse scandal - ${source}`, source),
+    "Chair of childcare operator quits after Four Corners exposes abuse scandal",
+  );
+  assert.equal(stripPublisherSuffix("Teachers strike - what parents need to know", "RNZ"), "Teachers strike - what parents need to know");
+  assert.equal(stripPublisherSuffix(` - ${source}`, source), ` - ${source}`);
 });

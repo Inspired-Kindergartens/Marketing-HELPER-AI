@@ -343,6 +343,8 @@ Postmark delivery, open, click, and bounce events are captured two ways:
 - **Live webhook** - Postmark posts events to `/webhooks/postmark/events` whenever the app is running and reachable. These are authenticated by basic auth (`POSTMARK_WEBHOOK_BASIC_AUTH`) and a source-IP allowlist, then stored in the `PostmarkMessageEvent` table.
 - **Cloudflare Worker buffer** - a Cloudflare Worker receives the same webhooks and stores them in its own database continuously, including while this app is turned off. This guarantees no events are lost during downtime.
 
+On `/comms`, Recent messages shows each message's **Sent** date (its Delivery event, `sentAt`) and **Read** date (its first Open event, `openedAt`) as separate date-only columns. Last Sent in Email Count by Service also uses Delivery events, so the two tables agree. `latestOccurredAt` (latest event of any type) is still used for AI context and the RSS feed, not for display.
+
 When the app starts, and then **once every hour** while it runs, it pulls any new events from the Worker and ingests them into the local database. The flow is:
 
 1. Read the persisted cursor (`SyncCursor` table, key `postmark:cloudflare`) holding the highest Worker event id already ingested.
@@ -900,6 +902,20 @@ Local AI configuration is controlled through `.env`:
 - `AI_CHAT_MODEL=llama3.1:8b`
 - `AI_TIMEOUT_MS=60000`
 - `AI_EMBED_MODEL=nomic-embed-text` - the embedding model for the help knowledge base (see below).
+
+### Landing news and weather feed refresh
+
+`src/landing-intelligence.ts` rebuilds the feed on server start and then every 15 minutes (`startLandingIntelligenceFeedLoop`). Page loads only read the in-memory feed. Adding or removing a search text forces a rebuild. Only one refresh runs at a time (`refreshInFlight`). The whole refresh races `REFRESH_DEADLINE_MS` (10 min), so an await that never settles can't hold that slot for ever (that happened on 2026-10-28 and froze the feed for a day). On timeout, the previous items stay, status becomes `error`, and the log line names the sources still pending (`news`, `weather`, `brand mentions`) or the stage it stopped at. The next tick starts a fresh refresh. Each run appends to `logs/landing-intelligence-feed.jsonl`, so a stale last-write time on that file means no refresh has finished.
+
+How news is judged relevant (`assessNewsCandidate`):
+- **NZ/AU check uses the publisher, not the link.** Google News links all go to `news.google.com`, so `parseRss` keeps the `<source url>` as `sourceUrl`, and `publisherHostname` uses it. Without this, 1News, SunLive and Stuff results were rejected as "not NZ/AU".
+- **ECE relevance doesn't have to be in the headline.** Results of the user's saved search texts are marked `eceConfirmed`. Results of `ECE_TERMS` queries are not: Google matches those on page chrome, which let in cricket and election stories (tried and reverted on 2026-10-29). Scraped listing headlines that fail the ECE check but hint at children or teaching (`ECE_HEADLINE_HINT_PATTERN`) get the article fetched. The meta description and first 8 paragraphs are checked (`articleHtmlMentionsEce`), and the result is cached per URL. The whole page isn't checked because site navigation mentions ECE everywhere.
+- **Scraped sections:** RNZ Education and Crime and Justice; NZ Herald Education, NZ and **Bay of Plenty Times**; Stuff NZ and Education; SunLive news.
+- **Headlines lose the publisher suffix.** Google News titles end in ` - <publisher>`; `parseRss` strips it with `stripPublisherSuffix` (exact match on the `<source>` name only), because the publisher is shown separately. The card's publisher text is capped at 40% of the width so a long name (e.g. ABC's) can't hide the headline.
+- **Saved search texts** (`logs/landing-intelligence-search-texts.json`, managed from the landing page) score +100 and skip the 80-candidate cap.
+- **Brand queries** (`BRAND_QUERIES`, `SECTOR_WATCH_QUERIES`, and one per owned centre) still require the term in the headline or summary (`isGroundedMatch`), because Google's phrase matching is loose.
+
+The ticker is a CSS animation (`landing-feed-scroll`). Dragging it scrubs: the landing-page script sets the animation's `currentTime` from the drag distance (Web Animations API), so the ticker carries on from where it was dropped. A drag of 4px or more swallows the following click, so dropping on a story doesn't open it. Listeners are delegated on `document` because the feed fragment is swapped in place on refresh.
 
 ### Updating the local AI model
 

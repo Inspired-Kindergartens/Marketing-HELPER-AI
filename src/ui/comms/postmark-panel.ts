@@ -23,6 +23,14 @@ function formatDate(value: string) {
     : date.toLocaleString("en-NZ", { dateStyle: "medium", timeStyle: "short" });
 }
 
+// Send dates only: Postmark's time of day isn't reliable enough to show.
+function formatDay(value: string) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? "-"
+    : date.toLocaleDateString("en-NZ", { dateStyle: "medium" });
+}
+
 function renderWebhookCheck(data: PostmarkDashboardData) {
   const check = data.webhookCheck;
   if (!check) return "";
@@ -99,13 +107,13 @@ export function renderPostmarkMessageList(data: PostmarkDashboardData, activeFil
               </div>`
             : ""
         }
-        <p class="comms-panel__meta">Centre messages and internal office staff messages are shown. External test activity is excluded from this list.</p>
+        <p class="comms-panel__meta">Centre messages and internal office staff messages are shown. External test activity is excluded from this list. Sent is the day the email was delivered; Read is the day the recipient first opened it, which can be days later.</p>
         <div class="comms-table-wrap table-frame table-frame--scroll">
           <table class="comms-table data-table">
-            <thead><tr><th>Status</th><th>Category</th><th>Recipient</th><th>${hasTags ? "Centre / Tag" : "Centre"}</th><th>Date &amp; Time</th></tr></thead>
+            <thead><tr><th>Status</th><th>Category</th><th>Recipient</th><th>${hasTags ? "Centre / Tag" : "Centre"}</th><th>Sent</th><th>Read</th></tr></thead>
             <tbody>${
               data.recentMessages.length === 0
-                ? `<tr><td class="comms-table__empty" colspan="5">No centre or office staff Postmark webhook messages have been received.</td></tr>`
+                ? `<tr><td class="comms-table__empty" colspan="6">No centre or office staff Postmark webhook messages have been received.</td></tr>`
                 : data.recentMessages.map((message) => `
                   <tr>
                     <td><div class="comms-status-badges flex flex-wrap gap-4">${statusBadge("Delivered", message.delivered, "delivered")}${statusBadge("Opened", message.opened, "opened")}${statusBadge("Clicked", message.clicked, "clicked")}${statusBadge("Bounced", message.bounced, "bounced")}</div></td>
@@ -122,7 +130,8 @@ export function renderPostmarkMessageList(data: PostmarkDashboardData, activeFil
                           ? `<button type="button" class="comms-filter-link" data-centre-key="${message.centreKey}" data-centre-name="${escapeHtml(message.centreName ?? "")}" title="Show emails for ${escapeHtml(message.centreName ?? "")}"><strong>${escapeHtml(message.centreName ?? "")}</strong></button>`
                           : `<strong>${escapeHtml(message.centreName ?? "Office staff")}</strong>`
                     }${hasTags && message.tag ? `<span>${escapeHtml(message.tag)}</span>` : ""}</td>
-                    <td>${escapeHtml(formatDate(message.latestOccurredAt))}</td>
+                    <td>${message.sentAt ? escapeHtml(formatDay(message.sentAt)) : "-"}</td>
+                    <td>${message.openedAt ? escapeHtml(formatDay(message.openedAt)) : "-"}</td>
                   </tr>
                 `).join("")
             }</tbody>
@@ -203,7 +212,7 @@ export function renderPostmarkPanel(options: PostmarkPanelOptions = {}) {
                     <td class="comms-table__numeric data-table__numeric">${centre.delivered}</td>
                     <td class="comms-table__numeric data-table__numeric">${centre.opened}</td>
                     <td class="comms-table__numeric data-table__numeric">${centre.bounced}</td>
-                    <td>${centre.lastSentAt ? escapeHtml(formatDate(centre.lastSentAt)) : "-"}</td>
+                    <td data-sent-at="${centre.lastSentAt ?? ""}">${centre.lastSentAt ? escapeHtml(formatDay(centre.lastSentAt)) : "-"}</td>
                   </tr>
                 `).join("")
             }</tbody>

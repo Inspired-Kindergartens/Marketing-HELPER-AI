@@ -267,6 +267,8 @@ test("comms shell renders Webmail events received from Postmark webhook", () => 
         centreName: null,
         category: "office-staff",
         latestOccurredAt: "2026-05-26T04:23:37.000Z",
+        sentAt: "2026-05-24T04:23:37.000Z",
+        openedAt: "2026-05-26T04:23:37.000Z",
         delivered: true,
         opened: true,
         clicked: true,
@@ -295,7 +297,10 @@ test("comms shell renders Webmail events received from Postmark webhook", () => 
   assert.doesNotMatch(html, /No Postmark tag/);
   assert.match(html, /data-postmark-page="2"/);
   assert.match(html, /\/api\/comms\/postmark\/messages\?page=/);
-  assert.match(html, /Date &amp; Time/);
+  assert.match(html, /<th>Sent<\/th>/);
+  // Sent and Read are separate dates, with no time of day.
+  assert.match(html, /<th>Read<\/th>/);
+  assert.match(html, /<td>24 May 2026<\/td>\s*<td>26 May 2026<\/td>/);
   assert.match(html, /Delivered/);
   assert.match(html, /Opened/);
   assert.match(html, /Clicked/);

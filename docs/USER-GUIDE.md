@@ -16,7 +16,7 @@ The [landing page](/) is your starting point.
 - **Small buttons** underneath open the tools: this Read Me, Upscalar, SharePoint, the website admin, [Code Snippets](/snippets), [Links](/subscriptions) and [Sector Insight](/sector).
 - **Reminders** show tasks that are overdue or due soon. Click one to open the task. If nothing is due, this section is hidden.
 - **Email alert banner.** An amber or red banner appears if our email tracking has gone quiet. Amber (3+ days with no email activity) is worth a look. Red (7+ days) means something is probably broken: click it to go to Webmail, and see *Email alerts* below.
-- **News and weather** scroll along the bottom: severe weather warnings for our area and early-childhood news.
+- **News and weather** scroll along the bottom: severe weather warnings for our area and early-childhood news. The app checks for new items every 15 minutes on its own, so refreshing the page won't fetch news any sooner. The "Updated" time shows the last successful check. If that time is more than about 30 minutes old, something is wrong: tell whoever looks after the app. To make sure a topic is always picked up (for example our organisation's name or a centre), add it as a **search text** under the feed. To go back to a story that has scrolled past, click and drag the feed left or right; it carries on scrolling from where you let go. Hovering over the feed pauses it. Each story shows its headline first, then the publisher and time (long publisher names are cut short with …). Stories matching a search text go to the top. Local stories from the Bay of Plenty Times, SunLive, RNZ, Stuff and 1News are included, even when the headline doesn't mention early childhood but the article does.
 - **Buttons at the very bottom:**
   - **[Upload Contacts](/contacts/upload)** replaces the centre contact list used by the dashboard's Email column.
   - **Restart server** restarts the app if something seems stuck.
@@ -105,7 +105,7 @@ A Beep Beep chat for anything: writing, planning, explaining, checking. Conversa
 
 Everything about the emails and forms we send and receive.
 
-- **Webmail** — emails sent to centres and office staff, and whether they were delivered, opened or clicked. Click a recipient or a centre to see only their emails. **Sort by** re-orders the Recent messages list.
+- **Webmail** — emails sent to centres and office staff, and whether they were delivered, opened or clicked. Click a recipient or a centre to see only their emails. **Sort by** re-orders the Recent messages list. In Recent messages, **Sent** is the day the email was delivered and **Read** is the day it was first opened (often a day or two later); **Last Sent** in Email Count by Service is the send date, so it matches **Sent**. Dates only — Postmark's time of day isn't reliable enough to show.
 - **Panui** — our Mailchimp newsletters and how they performed.
 - **Online Forms** — Formstack form submissions.
 - **Centre Activity** — emails and form submissions per centre together.

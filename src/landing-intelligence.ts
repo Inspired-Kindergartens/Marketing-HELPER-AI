@@ -18,6 +18,8 @@ export type LandingIntelligenceItem = {
   source: string;
   publishedAt: string | null;
   urgent: boolean;
+  // Publisher homepage from Google News' <source url>; href is a news.google.com redirect.
+  sourceUrl?: string | null;
 };
 
 export type LandingAiModelRecommendation = {
@@ -50,6 +52,12 @@ type RssItem = {
   author?: string | null;
   publishedAt: string | null;
   description: string;
+  sourceUrl?: string | null;
+  // Early-childhood relevance established outside the headline: the article page was
+  // read, or the item came from the user's own search text.
+  eceConfirmed?: boolean;
+  // Found by one of the user's saved landing search texts.
+  fromSearchText?: boolean;
 };
 
 type NewsCandidateAssessment = {
@@ -67,6 +75,10 @@ const FIFTEEN_MINUTES_MS = 15 * 60 * 1000;
 const GENERAL_NEWS_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
 const BRAND_NEWS_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 const REQUEST_TIMEOUT_MS = 9000;
+// Hard ceiling on a whole refresh. Every fetch has its own timeout, but a single
+// await that never settles would otherwise pin refreshInFlight forever and every
+// later tick would just re-await it (the feed froze for a day on 2026-10-28).
+const REFRESH_DEADLINE_MS = 10 * 60 * 1000;
 const RECOMMENDED_MODEL = "qwen3:8b";
 const ECE_TERMS =
   '("early childhood" OR "early childhood education" OR ECE OR kindergarten OR preschool OR "pre-school" OR childcare OR "childcare centre" OR "child care" OR "early learning")';
@@ -210,9 +222,18 @@ const RNZ_SCRAPE_SOURCES = [
 ];
 
 const NZ_HERALD_SCRAPE_SOURCES = [
-  "https://www.nzherald.co.nz/topic/education/",
-  "https://www.nzherald.co.nz/nz/",
+  { name: "NZ Herald Education", url: "https://www.nzherald.co.nz/topic/education/" },
+  { name: "NZ Herald", url: "https://www.nzherald.co.nz/nz/" },
+  { name: "Bay of Plenty Times (NZ Herald)", url: "https://www.nzherald.co.nz/bay-of-plenty-times/news/" },
 ];
+
+// Headlines often omit the sector ("Teacher used phone hidden in backpack..."), so a
+// scraped headline that fails the ECE check but hints at children/teaching gets its
+// article read before it is dropped.
+const ECE_HEADLINE_HINT_PATTERN =
+  /teach|child|kid|kindy|kindi|kōhanga|kohanga|school|educat|centre|daycare|day care|whānau|whanau|parent|famil|baby|babies|toddler|tamariki|pēpi|pepi|nann/i;
+const ARTICLE_ECE_CACHE_LIMIT = 2000;
+const articleEceCache = new Map<string, boolean>();
 
 const STUFF_SCRAPE_SOURCES = [
   "https://www.stuff.co.nz/nz-news/education",
@@ -388,6 +409,14 @@ async function fetchText(url: string) {
   }
 }
 
+// Google News appends " - <publisher>" to every headline; the publisher is shown separately.
+export function stripPublisherSuffix(title: string, source: string) {
+  const suffix = ` - ${source}`;
+  const stripped = source && title.endsWith(suffix) ? title.slice(0, -suffix.length).trim() : title;
+
+  return stripped || title;
+}
+
 function parseRss(xml: string): RssItem[] {
   return [...xml.matchAll(/<item\b[\s\S]*?<\/item>/gi)].map((match) => {
     const item = match[0];
@@ -396,12 +425,15 @@ function parseRss(xml: string): RssItem[] {
 
       return found?.[1] ? decodeXml(found[1]) : "";
     };
-    const sourceMatch = item.match(/<source\b[^>]*>([\s\S]*?)<\/source>/i);
+    const sourceMatch = item.match(/<source\b([^>]*)>([\s\S]*?)<\/source>/i);
+    const sourceUrl = sourceMatch?.[1].match(/\burl="([^"]*)"/i)?.[1] ?? null;
+    const source = sourceMatch?.[2] ? decodeXml(sourceMatch[2]) : "Google News";
 
     return {
-      title: value("title"),
+      title: stripPublisherSuffix(value("title"), source),
       link: stripGoogleNewsRedirect(value("link") || null),
-      source: sourceMatch?.[1] ? decodeXml(sourceMatch[1]) : "Google News",
+      source,
+      sourceUrl,
       publishedAt: value("pubDate") ? new Date(value("pubDate")).toISOString() : null,
       description: value("description"),
     };
@@ -427,7 +459,7 @@ function rssItemIdentityKey(item: RssItem) {
   return `${normalizeCentreContactName(item.title)}-${normalizeCentreContactName(item.source)}`;
 }
 
-function hostnameForLink(link: string | null) {
+function hostnameForLink(link: string | null | undefined) {
   if (!link) return "";
 
   try {
@@ -435,6 +467,13 @@ function hostnameForLink(link: string | null) {
   } catch {
     return "";
   }
+}
+
+// Google News links all point at news.google.com; the real publisher is in sourceUrl.
+function publisherHostname(item: { link: string | null; sourceUrl?: string | null }) {
+  const host = hostnameForLink(item.link);
+
+  return host === "news.google.com" ? hostnameForLink(item.sourceUrl) || host : host;
 }
 
 export function isStandaloneVideoLink(link: string | null) {
@@ -484,9 +523,10 @@ export function isNzOrAustraliaRelatedItem(item: {
   link: string | null;
   source: string;
   description: string;
+  sourceUrl?: string | null;
 }) {
-  const combined = `${item.title} ${item.description} ${item.source} ${item.link ?? ""}`;
-  const host = hostnameForLink(item.link);
+  const combined = `${item.title} ${item.description} ${item.source} ${item.link ?? ""} ${item.sourceUrl ?? ""}`;
+  const host = publisherHostname(item);
 
   if (host && NZ_AU_NEWS_HOSTS.has(host)) return true;
   if (NZ_AU_STRONG_RELEVANCE_PATTERN.test(combined)) return true;
@@ -699,7 +739,7 @@ export function assessNewsCandidate(
 ): NewsCandidateAssessment {
   const requireEceRelevance = options.requireEceRelevance ?? true;
   const text = `${item.title} ${item.description} ${item.source}`;
-  const host = hostnameForLink(item.link);
+  const host = publisherHostname(item);
   const reasons: string[] = [];
   let score = 0;
 
@@ -709,7 +749,7 @@ export function assessNewsCandidate(
   if (!isLikelyNewsArticleItem(item)) return { accepted: false, score: 0, reasons: ["not-news-article"] };
   if (!isNzOrAustraliaRelatedItem(item)) return { accepted: false, score: 0, reasons: ["not-nz-au"] };
 
-  if (ECE_STRONG_RELEVANCE_PATTERN.test(text)) {
+  if (ECE_STRONG_RELEVANCE_PATTERN.test(text) || item.eceConfirmed) {
     score += 40;
     reasons.push("ece");
   } else if (requireEceRelevance) {
@@ -726,6 +766,11 @@ export function assessNewsCandidate(
   if (ownedMention) {
     score += 120;
     reasons.push("owned-centre");
+  }
+
+  if (item.fromSearchText) {
+    score += 100;
+    reasons.push("search-text");
   }
 
   if (host && NZ_AU_NEWS_HOSTS.has(host)) {
@@ -813,6 +858,7 @@ function toNewsFeedItem(
       : sentenceCaseBrief(item.description, "Relevant update for early childhood and kindergarten planning."),
     href: item.link,
     source: item.author ? `${item.source} / ${item.author}` : item.source,
+    sourceUrl: item.sourceUrl ?? null,
     publishedAt: item.publishedAt,
     urgent: isUrgentNews(item) || ownedMention != null,
   };
@@ -851,6 +897,7 @@ function isAllowedFeedItem(item: LandingIntelligenceItem, now: number = Date.now
       link: item.href,
       source: item.source,
       description: item.brief,
+      sourceUrl: item.sourceUrl,
     })
   );
 }
@@ -899,8 +946,9 @@ async function fetchNewsItems() {
   const seen = new Set<string>();
   const candidates: RssItem[] = [];
 
-  const addCandidate = (item: RssItem) => {
-    if (candidates.length >= NEWS_CANDIDATE_LIMIT) return;
+  // Results for the user's own search texts bypass the cap; scraped items alone can fill it.
+  const addCandidate = (item: RssItem, fromSearchText = false) => {
+    if (candidates.length >= NEWS_CANDIDATE_LIMIT && !fromSearchText) return;
     const key = rssItemIdentityKey(item);
 
     if (seen.has(key)) return;
@@ -924,13 +972,17 @@ async function fetchNewsItems() {
 
     if (candidates.length >= NEWS_CANDIDATE_LIMIT && !isCustomQuery) break;
 
+    // The user's own search texts are wanted whether or not the headline names the sector.
+    // ECE-term queries are NOT trusted the same way: Google matches them on page chrome, so
+    // they let through cricket and election stories.
     const xml = await fetchText(rssUrl(query)).catch(() => "");
     const tierItems = parseRss(xml)
+      .map((item) => (isCustomQuery ? { ...item, eceConfirmed: true, fromSearchText: true } : item))
       .filter((item) => isQualityNewsCandidate(item, now, GENERAL_NEWS_MAX_AGE_MS, references))
       .sort((left, right) => (right.publishedAt ?? "").localeCompare(left.publishedAt ?? ""));
 
     for (const item of tierItems) {
-      addCandidate(item);
+      addCandidate(item, isCustomQuery);
     }
   }
 
@@ -1029,7 +1081,7 @@ function jsonStringProperty(block: string, property: string) {
   return found?.[1] ? decodeJsonString(found[1]) : "";
 }
 
-export function parseNzHeraldEducationListing(html: string): RssItem[] {
+export function parseNzHeraldEducationListing(html: string, source = "NZ Herald Education"): RssItem[] {
   const blockPattern = /"headline":"((?:[^"\\]|\\.)*)","displayDate":"([^"]*)","publishDate":"([^"]*)","isUpdated":[a-z]+,"description":"((?:[^"\\]|\\.)*)"[^}]*?"websiteUrl":"([^"]*)"/g;
   const genericBlockPattern = /\{[^{}]*"websiteUrl"\s*:\s*"[^"]+"[^{}]*\}|\{[^{}]*"headline"\s*:\s*"[^"]+"[^{}]*"websiteUrl"\s*:\s*"[^"]+"[^{}]*\}/g;
 
@@ -1040,7 +1092,7 @@ export function parseNzHeraldEducationListing(html: string): RssItem[] {
     return {
       title: decodeJsonString(title),
       link,
-      source: "NZ Herald Education",
+      source,
       publishedAt: publishDate && !Number.isNaN(Date.parse(publishDate)) ? new Date(publishDate).toISOString() : null,
       description: decodeJsonString(description),
     };
@@ -1060,7 +1112,7 @@ export function parseNzHeraldEducationListing(html: string): RssItem[] {
       return {
         title,
         link,
-        source: "NZ Herald Education",
+        source,
         publishedAt: publishDate && !Number.isNaN(Date.parse(publishDate)) ? new Date(publishDate).toISOString() : null,
         description: jsonStringProperty(block, "description"),
       };
@@ -1202,26 +1254,70 @@ export function parseSunLiveListing(html: string): RssItem[] {
 async function fetchSectorScrapedItems(): Promise<RssItem[]> {
   const [rnzPages, heraldPages, stuffPages, sunlivePages] = await Promise.all([
     Promise.all(RNZ_SCRAPE_SOURCES.map((source) => fetchText(source.url).then((html) => ({ ...source, html })).catch(() => ({ ...source, html: "" })))),
-    Promise.all(NZ_HERALD_SCRAPE_SOURCES.map((url) => fetchText(url).catch(() => ""))),
+    Promise.all(NZ_HERALD_SCRAPE_SOURCES.map((source) => fetchText(source.url).then((html) => ({ ...source, html })).catch(() => ({ ...source, html: "" })))),
     Promise.all(STUFF_SCRAPE_SOURCES.map((url) => fetchText(url).catch(() => ""))),
     Promise.all(SUNLIVE_SCRAPE_SOURCES.map((url) => fetchText(url).catch(() => ""))),
   ]);
   const now = Date.now();
+  const byLink = new Map<string, RssItem>();
 
-  const rnzItems = rnzPages.flatMap((page) => parseRnzListing(page.html, page.name)).filter(
-    (item) => isQualityNewsCandidate(item, now, GENERAL_NEWS_MAX_AGE_MS),
-  );
-  const heraldItems = heraldPages.flatMap(parseNzHeraldEducationListing).filter(
-    (item) => isQualityNewsCandidate(item, now, GENERAL_NEWS_MAX_AGE_MS),
-  );
-  const stuffItems = stuffPages.flatMap(parseStuffListing).filter(
-    (item) => isQualityNewsCandidate(item, now, GENERAL_NEWS_MAX_AGE_MS),
-  );
-  const sunliveItems = sunlivePages.flatMap(parseSunLiveListing).filter(
-    (item) => isQualityNewsCandidate(item, now, GENERAL_NEWS_MAX_AGE_MS),
+  for (const item of [
+    ...rnzPages.flatMap((page) => parseRnzListing(page.html, page.name)),
+    ...heraldPages.flatMap((page) => parseNzHeraldEducationListing(page.html, page.name)),
+    ...stuffPages.flatMap(parseStuffListing),
+    ...sunlivePages.flatMap(parseSunLiveListing),
+  ]) {
+    const key = item.link ?? rssItemIdentityKey(item);
+    if (!byLink.has(key)) byLink.set(key, item);
+  }
+
+  const checked = await Promise.all(
+    [...byLink.values()].map(async (item): Promise<RssItem | null> => {
+      const { accepted, reasons } = assessNewsCandidate(item, now, GENERAL_NEWS_MAX_AGE_MS);
+
+      if (accepted) return item;
+
+      const failedOnlyOnEce = reasons.length === 1 && reasons[0] === "not-ece";
+
+      if (!failedOnlyOnEce || !item.link || !ECE_HEADLINE_HINT_PATTERN.test(item.title)) return null;
+
+      return (await articleMentionsEce(item.link)) ? { ...item, eceConfirmed: true } : null;
+    }),
   );
 
-  return [...rnzItems, ...heraldItems, ...stuffItems, ...sunliveItems];
+  return checked.filter((item): item is RssItem => item != null);
+}
+
+// Reads the article's summary meta tags and opening paragraphs (not the whole page,
+// whose navigation and related-story links mention ECE on almost every news site).
+export function articleHtmlMentionsEce(html: string) {
+  const summaries = [...html.matchAll(/<meta\b[^>]*>/gi)]
+    .map((match) => match[0])
+    .filter((tag) => /\b(?:name|property)="(?:description|og:description|twitter:description)"/i.test(tag))
+    .map((tag) => tag.match(/\bcontent="([^"]*)"/i)?.[1] ?? "");
+  const opening = [...html.matchAll(/<p\b[^>]*>([\s\S]*?)<\/p>/gi)]
+    .slice(0, 8)
+    .map((match) => match[1].replace(/<[^>]+>/g, " "));
+
+  return ECE_RELEVANCE_PATTERN.test(decodeXml([...summaries, ...opening].join(" ")));
+}
+
+async function articleMentionsEce(link: string) {
+  const cached = articleEceCache.get(link);
+
+  if (cached !== undefined) return cached;
+
+  const html = await fetchText(link).catch(() => "");
+
+  // A failed fetch is not cached, so the article is retried next refresh.
+  if (!html) return false;
+
+  const mentionsEce = articleHtmlMentionsEce(html);
+
+  if (articleEceCache.size >= ARTICLE_ECE_CACHE_LIMIT) articleEceCache.clear();
+  articleEceCache.set(link, mentionsEce);
+
+  return mentionsEce;
 }
 
 function dedupeRssItems(items: RssItem[]): RssItem[] {
@@ -1454,51 +1550,76 @@ export async function refreshLandingIntelligenceFeed(
   }
 
   latestFeed = { ...latestFeed, status: "refreshing", error: null };
-  refreshInFlight = (async () => {
-    const generatedAt = new Date();
+  const generatedAt = new Date();
+  // What the refresh is waiting on, so a deadline hit names the culprit in the log.
+  let stage = "starting";
+  const pending = new Set<string>();
+  const tracked = <T,>(name: string, work: Promise<T>) => {
+    pending.add(name);
+    return work.finally(() => pending.delete(name));
+  };
+  let deadlineTimer: NodeJS.Timeout | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    deadlineTimer = setTimeout(() => {
+      const waitingOn = pending.size ? [...pending].join(", ") : stage;
+      reject(new Error(`Refresh exceeded ${REFRESH_DEADLINE_MS / 60000} min, still waiting on: ${waitingOn}`));
+    }, REFRESH_DEADLINE_MS);
+  });
+
+  const build = async (): Promise<LandingIntelligenceFeed> => {
+    stage = "ollama model pages";
     const aiModel = await crawlOllamaModelPages(config.AI_CHAT_MODEL);
+    stage = "search texts";
     const searchTexts = await readLandingIntelligenceSearchTexts();
+    stage = "sources";
+    const [news, weather, brandMentions] = await Promise.all([
+      tracked("news", fetchNewsItems()).then((result) => {
+        logger?.info({ count: result.length }, "landing-intelligence: news items fetched");
+        return result;
+      }),
+      tracked("weather", fetchWeatherItems()).then((result) => {
+        logger?.info({ count: result.length }, "landing-intelligence: weather items fetched");
+        return result;
+      }),
+      tracked("brand mentions", fetchBrandMentionItems()).then((result) => {
+        logger?.info({ count: result.length }, "landing-intelligence: brand mention items fetched");
+        return result;
+      }),
+    ]);
+    const unique = new Map<string, LandingIntelligenceItem>();
 
-    try {
-      const [news, weather, brandMentions] = await Promise.all([
-        fetchNewsItems().then((result) => {
-          logger?.info({ count: result.length }, "landing-intelligence: news items fetched");
-          return result;
-        }),
-        fetchWeatherItems().then((result) => {
-          logger?.info({ count: result.length }, "landing-intelligence: weather items fetched");
-          return result;
-        }),
-        fetchBrandMentionItems().then((result) => {
-          logger?.info({ count: result.length }, "landing-intelligence: brand mention items fetched");
-          return result;
-        }),
-      ]);
-      const unique = new Map<string, LandingIntelligenceItem>();
+    for (const item of [...brandMentions, ...weather, ...news, ...(aiModel.isUpgrade ? [buildAiModelItem(aiModel)] : [])]) {
+      unique.set(`${item.title}-${item.href ?? ""}`, item);
+    }
 
-      for (const item of [...brandMentions, ...weather, ...news, ...(aiModel.isUpgrade ? [buildAiModelItem(aiModel)] : [])]) {
-        unique.set(`${item.title}-${item.href ?? ""}`, item);
-      }
+    const ranked = [...unique.values()]
+      .filter(isAllowedFeedItem)
+      .sort((left, right) => Number(right.urgent) - Number(left.urgent));
+    stage = "ai briefs";
+    const items = await refineBriefsWithAi(config, ranked.slice(0, 12));
 
-      const ranked = [...unique.values()]
-        .filter(isAllowedFeedItem)
-        .sort((left, right) => Number(right.urgent) - Number(left.urgent));
-      const items = await refineBriefsWithAi(config, ranked.slice(0, 12));
-      const feed: LandingIntelligenceFeed = {
-        generatedAt: generatedAt.toISOString(),
-        nextRefreshAt: new Date(generatedAt.getTime() + FIFTEEN_MINUTES_MS).toISOString(),
-        status: "ready",
-        error: null,
-        items,
-        aiModel,
-        searchTexts,
-      };
+    return {
+      generatedAt: generatedAt.toISOString(),
+      nextRefreshAt: new Date(generatedAt.getTime() + FIFTEEN_MINUTES_MS).toISOString(),
+      status: "ready",
+      error: null,
+      items,
+      aiModel,
+      searchTexts,
+    };
+  };
 
+  // A build that loses the race to the deadline is abandoned: its result never
+  // reaches latestFeed, and the in-flight slot is freed for the next tick.
+  const run: Promise<LandingIntelligenceFeed> = Promise.race([build(), deadline])
+    .then(async (feed) => {
       latestFeed = feed;
-      await logFeed(feed);
+      await logFeed(feed).catch(() => undefined);
       await saveFeedSnapshot(feed).catch(() => undefined);
       return feed;
-    } catch (error) {
+    })
+    .catch(async (error) => {
+      const aiModel = buildAiModelRecommendation(config.AI_CHAT_MODEL);
       const previousItems = latestFeed.items.length ? sanitizeFeed(latestFeed).items : [buildAiModelItem(aiModel)];
       const feed: LandingIntelligenceFeed = {
         generatedAt: generatedAt.toISOString(),
@@ -1507,19 +1628,22 @@ export async function refreshLandingIntelligenceFeed(
         error: "Some feed sources did not respond in time. Showing the latest available items.",
         items: previousItems,
         aiModel,
-        searchTexts,
+        searchTexts: latestFeed.searchTexts,
       };
 
       latestFeed = feed;
       logger?.error({ error }, "Landing intelligence feed refresh failed");
       await logFeed(feed).catch(() => undefined);
       return feed;
-    }
-  })().finally(() => {
-    refreshInFlight = null;
-  });
+    })
+    .finally(() => {
+      clearTimeout(deadlineTimer);
+      // A forced refresh may have replaced us; only clear the slot if it is still ours.
+      if (refreshInFlight === run) refreshInFlight = null;
+    });
 
-  return refreshInFlight;
+  refreshInFlight = run;
+  return run;
 }
 
 export async function startLandingIntelligenceFeedLoop(config: AiConfig, logger?: FastifyBaseLogger) {

@@ -27,6 +27,10 @@ export type PostmarkMessageView = {
   centreName: string | null;
   category: "centre" | "office-staff";
   latestOccurredAt: string;
+  // Delivery time, not latest activity: an Open days later must not move it.
+  sentAt: string | null;
+  // First open, shown beside sentAt so a later open isn't read as a later send.
+  openedAt: string | null;
   delivered: boolean;
   opened: boolean;
   clicked: boolean;
@@ -243,12 +247,21 @@ export async function readPostmarkDashboardData(options: {
       centreName: event.centreName,
       category: event.category,
       latestOccurredAt: event.occurredAt.toISOString(),
+      sentAt: null,
+      openedAt: null,
       delivered: false,
       opened: false,
       clicked: false,
       bounced: false,
     };
 
+    if (event.eventType === "Delivery" && message.sentAt == null) {
+      message.sentAt = event.occurredAt.toISOString();
+    }
+    // Events arrive newest first, so the last Open seen is the first open.
+    if (event.eventType === "Open") {
+      message.openedAt = event.occurredAt.toISOString();
+    }
     message.delivered ||= event.eventType === "Delivery";
     message.opened ||= event.eventType === "Open";
     message.clicked ||= event.eventType === "Click";

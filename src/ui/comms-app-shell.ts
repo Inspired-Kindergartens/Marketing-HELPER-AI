@@ -386,12 +386,13 @@ function renderPostmarkRefreshScript() {
             var rows = Array.from(table.querySelectorAll("tr"));
             rows.sort(function(a, b) {
               if (sortSelect.value === "last-sent") {
-                var dateA = a.querySelector("td:last-child").textContent.trim();
-                var dateB = b.querySelector("td:last-child").textContent.trim();
-                if (dateA === "-" && dateB === "-") return a.querySelector("td").textContent.localeCompare(b.querySelector("td").textContent);
-                if (dateA === "-") return 1;
-                if (dateB === "-") return -1;
-                return new Date(dateB) - new Date(dateA);
+                // Sort on the full timestamp; the cell only shows the day.
+                var dateA = a.querySelector("td:last-child").getAttribute("data-sent-at") || "";
+                var dateB = b.querySelector("td:last-child").getAttribute("data-sent-at") || "";
+                if (!dateA && !dateB) return a.querySelector("td").textContent.localeCompare(b.querySelector("td").textContent);
+                if (!dateA) return 1;
+                if (!dateB) return -1;
+                return dateB.localeCompare(dateA);
               }
               return a.querySelector("td").textContent.localeCompare(b.querySelector("td").textContent);
             });
