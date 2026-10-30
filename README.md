@@ -134,7 +134,8 @@ The landing page links to the main local tools:
 - **Code Snippets** (`/snippets`) - reusable code (tracking tags, embeds, email HTML) with one-click copy and an AI snippet helper.
 - **Links** (`/subscriptions`) - categorised links, such as the services the team subscribes to and the newsletter links under the "Panui Tools" category (no AI chat). Shown as "Links"; the route, tables and code still use the original name "Subscriptions".
 - **Sector Insight** (`/sector`) - competitors and other ECE services with their promotions, meals and transport, a monthly crawler, and an AI chat that answers from the exact matching rows. See [Sector Insight](#sector-insight).
-- **Upload Contacts** (`/contacts/upload`) - replaces the centre contact workbook used by the dashboard's Email column. Linked from the landing page footer, alongside Restart server and Back up data.
+- **Upload Contacts** (`/contacts/upload`) - replaces the centre contact workbook used by the dashboard's Email column. Linked from the landing page footer, alongside Infocare Login, Restart server and Back up data.
+- **Infocare Login** (`/settings/infocare`) - write-only form to change `INFOCAREUSER`/`INFOCAREPASS`. See [Credentials And Secrets](#credentials-and-secrets).
 - **Read Me** (`/readme`) - the plain-language user guide, rendered from `docs/USER-GUIDE.md`.
 
 ### Documentation
@@ -322,7 +323,7 @@ JD Settings maintains the shared profiles editors draw from: per-centre intro pa
 
 ## Backup And Moving To Another Machine
 
-All persistent state lives in **one PostgreSQL database** (`DATABASE_URL`; the `SHADOW_DATABASE_URL` database is Prisma's throwaway migration scratch DB and holds nothing) plus a handful of git-ignored files. The **Back up data** button in the landing footer (`POST /actions/backup`, `src/backup.ts`) bundles all of it into `backups/marketing-helper-backup-YYYYMMDD-HHMM.zip` and downloads it via `GET /backups/:name`:
+All persistent state lives in **one PostgreSQL database** (`DATABASE_URL`; the `SHADOW_DATABASE_URL` database is Prisma's throwaway migration scratch DB and holds nothing) plus a handful of git-ignored files. The **Back up data** button in the landing footer (`POST /actions/backup`, `src/backup.ts`) bundles all of it into `backups/marketing-helper-backup-YYYYMMDD-HHMM.zip` on disk and returns only the saved path. Because the zip contains `.env`, it is deliberately **never served over HTTP** (see [Credentials And Secrets](#credentials-and-secrets)); copy it from the `backups` folder. Contents:
 
 - `database.dump` - `pg_dump --format=custom --no-owner --no-privileges` of the whole database (all tables, including help-KB embeddings and Sector Insight data).
 - `files/` - `.env`, `OAuth.json`, `google-oauth-token.json`, the Google service-account JSON, `centre-contact-list.xlsx`, `uploads/` (task attachments), `INFOCARE/`, `META/`, `logs/` (landing-feed snapshots, Infocare audit log).
@@ -330,15 +331,54 @@ All persistent state lives in **one PostgreSQL database** (`DATABASE_URL`; the `
 
 Not included (rebuilt or re-downloaded): `node_modules`, `dist`, `generated/prisma` (`npm run build`), and the Ollama models in `.local/` (~6.6 GB, `npm run ai:setup`). Everything else is in git.
 
-`pg_dump` is found via `PG_BIN`, then the newest `C:Program FilesPostgreSQL<ver>in`, then `PATH`. The zip is written with Windows' bundled `tar.exe -a`. **The zip contains secrets** (`.env` and OAuth tokens) - treat it like a password file.
+`npm run backup` (`scripts/backup.ts`) makes the identical zip from the command line, which works while the server is stopped (use this at cutover).
+
+`pg_dump` is found via `PG_BIN`, then the newest `C:\Program Files\PostgreSQL\<ver>\bin`, then `PATH`. The zip is written with Windows' bundled `tar.exe -a`. **The zip contains secrets** (`.env` and OAuth tokens) - treat it like a password file.
 
 To restore on a new machine:
 
 1. Install PostgreSQL (same or newer major version, currently 18), Node.js, and Git; clone the repo.
-2. With the app stopped, run `powershell -ExecutionPolicy Bypass -File scriptsestore-backup.ps1 -Backup C:path	omarketing-helper-backup-....zip`. It copies `files/` back into the project (saving any existing `.env` as `.env.before-restore`), creates the role and database named in the restored `DATABASE_URL` if missing (prompts for the `postgres` superuser password; override the superuser with `-PostgresSuperuser`), then runs `pg_restore --clean --if-exists --no-owner` as the app's own login.
-3. `npm install`, `npm run build`, `npm run ai:setup`, then start with `scriptsopen-marketing-helper.ps1` (and `npm run server:install` for the persistent scheduled task).
+2. With the app stopped, run `powershell -ExecutionPolicy Bypass -File scripts\restore-backup.ps1 -Backup C:\path\to\marketing-helper-backup-....zip`. It copies `files/` back into the project (saving any existing `.env` as `.env.before-restore`), creates the role and database named in the restored `DATABASE_URL` if missing (prompts for the `postgres` superuser password; override the superuser with `-PostgresSuperuser`), then runs `pg_restore --clean --if-exists --no-owner` as the app's own login.
+3. `npm install`, `npm run build`, `npm run ai:setup`, then `npm run transfer:check`, then start with `scripts\open-marketing-helper.ps1` (and `npm run server:install` for the persistent scheduled task).
 
 Verified 2026-10-30: a backup restored into a scratch database reproduced all 57 tables and 110,262 rows exactly.
+
+### Transferring to a new machine
+
+The full step-by-step checklist (account ownership checks, cutover order, post-move verification, retiring the old machine) is **[docs/TRANSFER-PLAN.md](docs/TRANSFER-PLAN.md)**.
+
+How settings and credentials move:
+
+- **All settings live in `.env`** (git-ignored), loaded by `dotenv` with `override: true`. `.env.example` is the complete, commented list of every key the app reads; the authoritative list with the purpose and source of each key is `SETTINGS` in `scripts/transfer-check.ts`. Keep the two in step when adding a setting.
+- **On a transfer, `.env` travels inside the backup zip**, alongside the Google OAuth files. None of the credentials are bound to this machine, so the integrations keep working from the new one without being re-issued:
+  - **Infocare** - username/password API login. Not known to be IP-restricted; `transfer:check` proves it from the new machine.
+  - **Google Analytics** - installed-app OAuth client (`OAuth.json`) + refresh token (`google-oauth-token.json`). Portable; if it ever stops working, `npm run google:oauth` issues a new token.
+  - **Meta** - System User access token (non-expiring).
+  - **Postmark** - Postmark posts webhooks to the **Cloudflare Worker**, not to this machine (the app listens on `127.0.0.1` only), so no Postmark/Blacksheep change is needed. Events sent while the app is down queue in the Worker; the pull cursor lives in the database (`SyncCursor`), so the restored app resumes exactly where the old one stopped.
+  - **Cloudflare, Mailchimp, Formstack** - static tokens; portable.
+- **Machine-bound pieces** are re-created rather than copied: Ollama + models (`npm run ai:setup`), the `Marketing Helper AI Server` scheduled task (`npm run server:install`), the desktop shortcut, and GitHub push access (per-repo SSH deploy key via local `core.sshCommand`; the new machine needs its own key).
+- **Do not run two copies.** Both would pull the Cloudflare buffer and write to separate databases. Stop and disable the old scheduled task at cutover.
+
+`npm run transfer:check` (`scripts/transfer-check.ts`) is the readiness gate. It:
+
+1. Lists every setting as OK / MISSING (required) / not set (optional) **without printing values**, with where to obtain each missing one. This doubles as the requirements-gathering list if `.env` has to be rebuilt from scratch.
+2. Checks the git-ignored files, Node, `pg_dump`, the built `dist/`, the scheduled task, the database connection and that every Prisma migration is applied.
+3. Makes one small read-only call per service: Infocare `get_centre_list`, Ollama models present, a one-day GA report, Meta `debug_token` (validity and days to expiry), the Cloudflare Worker with the sync token, Postmark (if a server token is set), Mailchimp `/ping`, Formstack `/forms`, and `git ls-remote origin`. `--offline` skips this step.
+
+It exits non-zero if anything required fails. It also fails if any file under `src/`, `test/`, `scripts/` or `prisma/` is hidden by `.gitignore`. Root-level ignore rules must be anchored with `/`, because `core.ignorecase` on Windows made the old unanchored `INFOCARE-*`/`META-*` rules silently exclude `src/ai/infocare-live.ts` and the `src/storage/meta-*.ts` stores from git until 2026-10-30.
+
+## Credentials And Secrets
+
+Rules: credential values never reach the browser and never reach the AI.
+
+- **Infocare login is write-only from the UI.** `GET /settings/infocare` (`src/ui/infocare-login-page.ts`) renders only "Set / Not set" and the last-changed time (`INFOCARE_LOGIN_UPDATED_AT`), with empty, non-prefilled inputs. `POST /api/settings/infocare` takes `{ username, password }` and:
+  1. Checks each value can be stored in `.env` and read back identically (`formatDotenvLine` picks a quote character the value doesn't contain and round-trips it through `dotenv.parse`).
+  2. Tests the candidate login with a read-only `get_centre_list` call through `createInfocareClient({ env })`. If Infocare rejects it, nothing is written, and the response is a fixed message: Infocare's own error text is never relayed, because it could echo the submitted details.
+  3. Writes both keys with `setDotenvValues` (BOM-safe, so line 1 is replaced rather than duplicated) and updates `process.env`. Infocare clients read `process.env` per request, so the change is live without a restart.
+  4. Appends `{ event: "infocare_login_change", outcome }` (no values) to `logs/infocare-audit.log`. Responses carry only `ok`/`error`.
+- **Backups are disk-only.** See above; `/actions/backup` returns the saved path, never the file.
+- **The AI has no route to the environment.** Nothing under `src/ai/` reads `process.env` (except `LOCALAPPDATA` to locate Ollama), the `.env` file, or names any credential key; the help knowledge base indexes only `knowledge/`, `docs/metric-contracts.md` and one `INFOCARE/` notes file. Infocare live chat calls run server-side through the client, and the model only ever sees returned data. `test/secrets-isolation.test.ts` enforces all of this and that the Infocare page never contains the current login.
+- **At rest**, `.env` and the Google token files are plain text in the project folder, protected by Windows account permissions and git-ignored. The backup zip is likewise unencrypted; treat it as a password file.
 
 ## Environment
 

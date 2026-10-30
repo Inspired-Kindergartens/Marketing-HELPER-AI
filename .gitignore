@@ -12,9 +12,9 @@ uploads
 generated
 .local
 /INFOCARE/
-INFOCARE-*
+/INFOCARE-*
 /META/
-META-*
+/META-*
 OLD.*
 temp-*.sql
 marketing-helper-ai-495603-7bf952d32fa8.json

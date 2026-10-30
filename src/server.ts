@@ -1,4 +1,4 @@
-import { config as loadDotenv } from "dotenv";
+import { config as loadDotenv, parse as parseDotenv } from "dotenv";
 import { mkdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
@@ -40,7 +40,7 @@ import {
 import { ensureWeeklyAnalyticsSnapshot, refreshAnalyticsSnapshot } from "./analytics/snapshot.js";
 import { resolveWindowKey, resolveWindowStartDate } from "./analytics/windows.js";
 import { prisma } from "./db.js";
-import { BACKUP_DIR, createBackup, listBackups } from "./backup.js";
+import { BACKUP_DIR, createBackup } from "./backup.js";
 import { getGoogleAnalyticsConfig, readGoogleAnalyticsConfigStatus } from "./google-analytics/config.js";
 import {
   ensureDailyGoogleAnalyticsSnapshot,
@@ -50,7 +50,9 @@ import {
 import { syncStoredCentreReferences } from "./infocare/centre-sync.js";
 import { readWaitlistDiscoveryReport } from "./infocare/waitlist-report.js";
 import { ensureWeeklyWaitlistReport, refreshWaitlistReport } from "./infocare/waitlist-refresh.js";
-import { getInfocareEnv } from "./infocare/client.js";
+import { createInfocareClient, getInfocareEnv } from "./infocare/client.js";
+import { appendInfocareAuditEvent } from "./infocare/audit-log.js";
+import { renderInfocareLoginPage } from "./ui/infocare-login-page.js";
 import { getFormstackConfig, readFormstackConfigStatus } from "./formstack/config.js";
 import { refreshFormstackData } from "./formstack/refresh.js";
 import { getMailchimpConfig, readMailchimpConfigStatus } from "./mailchimp/config.js";
@@ -447,24 +449,47 @@ function trackAiModelPullProgress(chunk: unknown) {
   }
 }
 
+// Quote with a character the value doesn't contain, then prove dotenv reads it
+// back unchanged (passwords can hold #, $, quotes, spaces...).
+function formatDotenvLine(key: string, value: string) {
+  if (/[\r\n]/.test(value)) {
+    throw new Error(`${key} cannot contain line breaks.`);
+  }
+
+  const quote = ['"', "'", "`"].find((q) => !value.includes(q));
+  const line = quote ? `${key}=${quote}${value}${quote}` : "";
+
+  if (!line || parseDotenv(line)[key] !== value) {
+    throw new Error(`${key} contains a combination of characters that cannot be stored.`);
+  }
+
+  return line;
+}
+
 async function setDotenvValue(key: string, value: string) {
+  await setDotenvValues({ [key]: value });
+}
+
+async function setDotenvValues(values: Record<string, string>) {
   const envPath = join(process.cwd(), ".env");
-  const escaped = `${key}=${value}`;
   let content = "";
 
   try {
     content = await readFile(envPath, "utf8");
   } catch {
-    await writeFile(envPath, `${escaped}\n`, "utf8");
-    return;
+    content = "";
   }
 
-  const pattern = new RegExp(`^${key}=.*$`, "m");
-  const next = pattern.test(content)
-    ? content.replace(pattern, escaped)
-    : `${content.trimEnd()}\n${escaped}\n`;
+  for (const [key, value] of Object.entries(values)) {
+    const line = formatDotenvLine(key, value);
+    // The first line may carry a UTF-8 BOM; keep it rather than appending a duplicate key.
+    const pattern = new RegExp(`^(\\uFEFF?)${key}=.*$`, "m");
+    content = pattern.test(content)
+      ? content.replace(pattern, (_match, bom: string) => `${bom}${line}`)
+      : `${content.trimEnd()}${content.trim() ? "\n" : ""}${line}\n`;
+  }
 
-  await writeFile(envPath, next, "utf8");
+  await writeFile(envPath, content, "utf8");
 }
 
 async function readDotenvValue(key: string) {
@@ -1270,6 +1295,59 @@ app.get<{ Querystring: { status?: string; contactCount?: string; rowCount?: stri
       updatedAt: stat?.mtime ? stat.mtime.toLocaleString("en-NZ") : null,
     }),
   );
+});
+
+// Infocare login: write-only. Neither route ever sends the username or password
+// back to the browser; the AI has no route to them either.
+app.get("/settings/infocare", async (_request, reply) => {
+  const updatedAt = process.env.INFOCARE_LOGIN_UPDATED_AT?.trim();
+
+  return reply.type("text/html; charset=utf-8").send(
+    renderInfocareLoginPage({
+      isConfigured: Boolean(process.env.INFOCAREUSER?.trim() && process.env.INFOCAREPASS?.trim()),
+      updatedAt: updatedAt ? new Date(updatedAt).toLocaleString("en-NZ") : null,
+    }),
+  );
+});
+
+app.post<{ Body: { username?: unknown; password?: unknown } }>("/api/settings/infocare", async (request, reply) => {
+  const username = typeof request.body?.username === "string" ? request.body.username.trim() : "";
+  const password = typeof request.body?.password === "string" ? request.body.password.trim() : "";
+  const fail = (code: number, error: string) => {
+    reply.code(code);
+    return reply.type("application/json; charset=utf-8").send({ ok: false, error });
+  };
+
+  if (!username || !password) {
+    return fail(400, "Enter both a username and a password.");
+  }
+
+  try {
+    formatDotenvLine("INFOCAREUSER", username);
+    formatDotenvLine("INFOCAREPASS", password);
+  } catch (error) {
+    return fail(400, error instanceof Error ? error.message.replace(/^INFOCARE\w+/, "The login") : "The login cannot be stored.");
+  }
+
+  try {
+    const client = createInfocareClient({ env: { ...process.env, INFOCAREUSER: username, INFOCAREPASS: password } });
+    await client.request("get_centre_list");
+  } catch {
+    // Never relay Infocare's message: it may echo the submitted details.
+    await appendInfocareAuditEvent({ at: new Date().toISOString(), event: "infocare_login_change", outcome: "rejected" }).catch(() => undefined);
+    return fail(400, "Infocare did not accept this username and password. Nothing was changed.");
+  }
+
+  const updatedAt = new Date().toISOString();
+  await setDotenvValues({ INFOCAREUSER: username, INFOCAREPASS: password, INFOCARE_LOGIN_UPDATED_AT: updatedAt });
+  // Infocare clients read process.env per request, so this takes effect immediately.
+  process.env.INFOCAREUSER = username;
+  process.env.INFOCAREPASS = password;
+  process.env.INFOCARE_LOGIN_UPDATED_AT = updatedAt;
+  await appendInfocareAuditEvent({ at: updatedAt, event: "infocare_login_change", outcome: "saved" }).catch(() => undefined);
+  app.log.info("Infocare login changed from the settings page");
+
+  return reply.type("application/json; charset=utf-8").send({ ok: true });
 });
 
 app.post("/contacts/upload", async (request, reply) => {
@@ -4964,7 +5042,8 @@ app.post("/actions/backup", async (_request, reply) => {
   try {
     const result = await createBackup(process.cwd(), env.DATABASE_URL);
 
-    return reply.type("application/json; charset=utf-8").send({ ok: true, ...result, downloadUrl: `/backups/${result.fileName}` });
+    // The zip holds .env, so it stays on disk: never served to the browser.
+    return reply.type("application/json; charset=utf-8").send({ ok: true, path: join(process.cwd(), BACKUP_DIR, result.fileName) });
   } catch (error) {
     app.log.error({ error }, "Data backup failed");
     reply.code(500);
@@ -4976,20 +5055,6 @@ app.post("/actions/backup", async (_request, reply) => {
   }
 });
 
-app.get<{ Params: { name: string } }>("/backups/:name", async (request, reply) => {
-  const name = request.params.name;
-
-  if (!(await listBackups(process.cwd())).includes(name)) {
-    reply.code(404);
-    return { error: "Backup not found." };
-  }
-
-  const file = await readFile(join(process.cwd(), BACKUP_DIR, name));
-  return reply
-    .type("application/zip")
-    .header("Content-Disposition", attachmentDownloadHeader(name))
-    .send(file);
-});
 
 app.get("/app.css", async (_request, reply) => {
   const css = await readFile(join(process.cwd(), "src", "ui", "app.css"), "utf8");

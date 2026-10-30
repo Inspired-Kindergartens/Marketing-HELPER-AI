@@ -22,7 +22,8 @@ The [landing page](/) is your starting point.
   - **Restart server** restarts the app if something seems stuck.
   - **Update AI model** appears when a better AI model is available for Beep Beep. It downloads the new model and switches to it. The model you were using is kept as a backup, and any older backup is deleted automatically to free up space.
   - **Rollback AI model** switches Beep Beep back to the backup model if the new one isn't working well.
-  - **Back up data** downloads one zip file holding everything the app knows: the whole database, uploaded task attachments, the contact list, and the passwords and keys the app uses to connect to Infocare, Google, Meta and Postmark. See *Moving the app to another computer* below.
+  - **[Infocare Login](/settings/infocare)** changes the username and password the app uses to read from Infocare. See *Changing the Infocare login* below.
+  - **Back up data** saves one zip file on this computer holding everything the app knows: the whole database, uploaded task attachments, the contact list, and the passwords and keys the app uses to connect to Infocare, Google, Meta and Postmark. For safety it is not downloaded through the browser. A message tells you where it was saved. See *Moving the app to another computer* below.
   - **Look** chooses how the app looks: Default, Light or Dark. See *Appearance* below.
 
 On any page, the **icons down the right-hand edge** take you back to the landing page or straight to another area.
@@ -201,14 +202,27 @@ You can choose how the app looks. At the very bottom of [the landing page](/), n
 
 Your choice changes every page straight away, including any other tabs you have open, and is remembered next time you open the app. It is saved on this computer's browser, so someone else's computer keeps its own choice.
 
+## Changing the Infocare login — [open](/settings/infocare)
+
+When the Infocare password changes, update it here so the dashboard keeps working.
+
+1. Click **Infocare Login** at the bottom of the [landing page](/).
+2. Type the new username and password, then click **Check and save**.
+3. The app first checks the details with Infocare. If Infocare accepts them, they are saved and used straight away, with no restart needed. If not, nothing is changed and you can try again.
+
+For security, the page never shows the current username or password. It only says whether a login is set and when it was last changed. Beep Beep (the AI) has no access to these details, or to any of the app's other passwords and keys.
+
 ## Moving the app to another computer
 
 Everything the app has stored can be moved to a new computer, or kept safe in case this one fails.
 
-1. On this computer, click **Back up data** at the bottom of the [landing page](/). A file called something like `marketing-helper-backup-20261030-1104.zip` downloads (about 60 MB). A copy is also kept in the app's `backups` folder.
+1. On this computer, click **Back up data** at the bottom of the [landing page](/). A file called something like `marketing-helper-backup-20261030-1104.zip` (about 60 MB) is saved in the app's `backups` folder, and a message shows exactly where.
 2. **Keep the zip private.** It contains passwords and API keys. Store it on the work OneDrive or a USB stick, not in email or a shared folder.
 3. On the new computer, whoever looks after the app installs PostgreSQL, Node.js and the app from GitHub, then runs the restore script with the zip (the technical README has the exact steps). It puts the database and files back exactly as they were.
 4. Beep Beep's AI model is not in the backup because it is large and can be downloaded again. The setup step fetches it.
+5. The connections to Infocare, Google Analytics, Meta, Mailchimp, Formstack and the email tracking (Postmark/Cloudflare) all move with the backup. They keep working on the new computer without anyone needing to set them up again. Emails sent while the app is switched off during the move are caught up automatically afterwards.
+
+The full step-by-step checklist for whoever does the move is the [Transfer Plan](https://github.com/Inspired-Kindergartens/Marketing-HELPER-AI/blob/main/docs/TRANSFER-PLAN.md). It includes a check (`npm run transfer:check`) that confirms every password and connection is in place and working on the new computer.
 
 It's a good idea to make a backup now and then (say once a month) even if you're not moving.
 

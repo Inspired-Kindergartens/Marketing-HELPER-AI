@@ -20,3 +20,4 @@ import "./tasks-app-shell.test.js";
 import "./theme.test.js";
 import "./waitlist-report.test.js";
 import "./wiki-store.test.js";
+import "./secrets-isolation.test.js";

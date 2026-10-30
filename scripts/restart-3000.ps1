@@ -7,9 +7,11 @@ if ($line) {
   Start-Sleep -Seconds 1
 }
 
+$repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
+
 $proc = Start-Process `
   -FilePath 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe' `
-  -ArgumentList '-Command', "Set-Location 'D:\iK\Marketing-HELPER-AI'; npm.cmd run dev *> .codex-devserver.log" `
+  -ArgumentList '-Command', "Set-Location '$repoRoot'; npm.cmd run dev *> .codex-devserver.log" `
   -WindowStyle Hidden `
   -PassThru
 

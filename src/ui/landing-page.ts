@@ -349,7 +349,11 @@ export function renderLandingPage(options: LandingPageOptions = {}) {
           <i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i>
           <span class="landing__rollback-ai-label">Rollback AI model</span>
         </button>
-        <button type="button" class="landing__restart inline-flex items-center gap-8 text-muted" data-backup aria-label="Download a full backup of the app's data">
+        <a class="landing__github inline-flex items-center gap-8 text-muted" href="/settings/infocare">
+          <i class="bi bi-shield-lock" aria-hidden="true"></i>
+          <span>Infocare Login</span>
+        </a>
+        <button type="button" class="landing__restart inline-flex items-center gap-8 text-muted" data-backup aria-label="Save a full backup of the app's data on this computer">
           <i class="bi bi-database-down" aria-hidden="true"></i>
           <span class="landing__backup-label">Back up data</span>
         </button>
@@ -456,7 +460,7 @@ export function renderLandingPage(options: LandingPageOptions = {}) {
         }
         btn.addEventListener("click", function () {
           if (btn.disabled) return;
-          if (!window.confirm("Create a full backup (database, uploads and credential files)? It contains passwords and API keys, so keep the zip somewhere safe.")) {
+          if (!window.confirm("Create a full backup (database, uploads and credential files)? It is saved in the app's backups folder on this computer. It contains passwords and API keys, so keep it somewhere safe.")) {
             return;
           }
           btn.disabled = true;
@@ -472,8 +476,8 @@ export function renderLandingPage(options: LandingPageOptions = {}) {
                 done("Backup failed");
                 return;
               }
-              window.location.href = payload.downloadUrl;
-              done("Backup downloaded");
+              window.alert("Backup saved on this computer: " + payload.path);
+              done("Backup saved");
             })
             .catch(function () {
               done("Backup failed");
