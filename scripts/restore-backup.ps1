@@ -1,10 +1,12 @@
-# Restores a "Back up data" zip (landing footer) onto this machine:
-#   1. copies the credential/data files back into the project folder
-#   2. creates the Postgres login + database named in the restored .env if missing
-#   3. loads database.dump into it with pg_restore (replacing existing tables)
+# Restores a "Back up data" backup (landing footer / npm run backup) onto this machine:
+#   1. asks for the backup passphrase and decrypts the .mhbak file
+#   2. copies the credential/data files back into the project folder
+#   3. creates the Postgres login + database named in the restored .env if missing
+#   4. loads database.dump into it with pg_restore (replacing existing tables)
+#   5. encrypts the credentials in .env so they only work on this computer
 #
-# Usage (from the project folder, with the server stopped):
-#   powershell -ExecutionPolicy Bypass -File scripts\restore-backup.ps1 -Backup C:\path\marketing-helper-backup-YYYYMMDD-HHMM.zip
+# Usage (from the project folder, after `npm install`, with the server stopped):
+#   powershell -ExecutionPolicy Bypass -File scripts\restore-backup.ps1 -Backup C:\path\marketing-helper-backup-YYYYMMDD-HHMM.mhbak
 param(
   [Parameter(Mandatory = $true)][string]$Backup,
   [string]$PostgresSuperuser = "postgres"
@@ -32,9 +34,31 @@ function Find-PgTool([string]$name) {
 $psql = Find-PgTool "psql"
 $pgRestore = Find-PgTool "pg_restore"
 
+if (-not (Test-Path (Join-Path $repoRoot "node_modules\.bin\tsx.cmd"))) {
+  throw "Run 'npm install' in the project folder first."
+}
+
 $staging = Join-Path ([System.IO.Path]::GetTempPath()) ("mh-restore-" + [guid]::NewGuid())
-Write-Host "Extracting $Backup ..."
-Expand-Archive -Path $Backup -DestinationPath $staging
+$zip = $Backup
+
+if ($Backup -like "*.mhbak") {
+  $secure = Read-Host "Backup passphrase" -AsSecureString
+  $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+  $zip = Join-Path ([System.IO.Path]::GetTempPath()) ("mh-restore-" + [guid]::NewGuid() + ".zip")
+  try {
+    # Passed to the decryptor through its environment only, never the command line.
+    $env:MH_BACKUP_PASSPHRASE = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
+    Write-Host "Decrypting $Backup ..."
+    & (Join-Path $repoRoot "node_modules\.bin\tsx.cmd") (Join-Path $repoRoot "scripts\backup-decrypt.ts") $Backup $zip
+    if ($LASTEXITCODE -ne 0) { throw "Could not decrypt the backup (see message above)." }
+  } finally {
+    Remove-Item Env:\MH_BACKUP_PASSPHRASE -ErrorAction SilentlyContinue
+    [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+  }
+}
+
+Write-Host "Extracting ..."
+Expand-Archive -Path $zip -DestinationPath $staging
 
 try {
   $dump = Join-Path $staging "database.dump"
@@ -88,8 +112,20 @@ END`$`$;
   & $pgRestore --clean --if-exists --no-owner --no-privileges --dbname $url $dump
   if ($LASTEXITCODE -ne 0) { throw "pg_restore reported errors (see above)" }
 
+  # 4. The restored .env holds credentials in plain text; seal them to this
+  #    computer straight away.
+  Write-Host "Encrypting credentials in .env for this computer ..."
+  Push-Location $repoRoot
+  try {
+    & (Join-Path $repoRoot "node_modules\.bin\tsx.cmd") (Join-Path $repoRoot "scripts\seal-secrets.ts")
+    if ($LASTEXITCODE -ne 0) { throw "Encrypting .env failed - run 'npm run secrets:seal' before starting the app." }
+  } finally {
+    Pop-Location
+  }
+
   Write-Host ""
-  Write-Host "Restore complete. Next: npm install; npm run build; then start the app with scripts\open-marketing-helper.ps1"
+  Write-Host "Restore complete. Next: npm run build; npm run ai:setup; npm run transfer:check; then start the app with scripts\open-marketing-helper.ps1"
 } finally {
   Remove-Item $staging -Recurse -Force -ErrorAction SilentlyContinue
+  if ($zip -ne $Backup) { Remove-Item $zip -Force -ErrorAction SilentlyContinue }
 }

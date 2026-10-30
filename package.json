@@ -23,7 +23,8 @@
     "typecheck": "tsc --noEmit",
     "test": "tsx test/run-tests.ts",
     "transfer:check": "tsx scripts/transfer-check.ts",
-    "backup": "tsx scripts/backup.ts"
+    "backup": "tsx scripts/backup.ts",
+    "secrets:seal": "tsx scripts/seal-secrets.ts"
   },
   "keywords": [],
   "author": "",

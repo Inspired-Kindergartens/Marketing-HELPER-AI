@@ -323,25 +323,32 @@ JD Settings maintains the shared profiles editors draw from: per-centre intro pa
 
 ## Backup And Moving To Another Machine
 
-All persistent state lives in **one PostgreSQL database** (`DATABASE_URL`; the `SHADOW_DATABASE_URL` database is Prisma's throwaway migration scratch DB and holds nothing) plus a handful of git-ignored files. The **Back up data** button in the landing footer (`POST /actions/backup`, `src/backup.ts`) bundles all of it into `backups/marketing-helper-backup-YYYYMMDD-HHMM.zip` on disk and returns only the saved path. Because the zip contains `.env`, it is deliberately **never served over HTTP** (see [Credentials And Secrets](#credentials-and-secrets)); copy it from the `backups` folder. Contents:
+All persistent state lives in **one PostgreSQL database** (`DATABASE_URL`; the `SHADOW_DATABASE_URL` database is Prisma's throwaway migration scratch DB and holds nothing) plus a handful of git-ignored files. **Back up data** in the landing footer opens `/backup` (`src/ui/backup-page.ts`), which asks for a passphrase (minimum 12 characters, typed twice). `POST /actions/backup { passphrase }` (`src/backup.ts`) bundles everything into `backups/marketing-helper-backup-YYYYMMDD-HHMM.mhbak` on disk and returns only the saved path. The file is **never served over HTTP** (see [Credentials And Secrets](#credentials-and-secrets)); copy it from the `backups` folder.
+
+The `.mhbak` file is a zip encrypted with **AES-256-GCM** under a key derived from the passphrase with **scrypt** (N=2^16, r=8, p=1). Layout: `MHBAK1` | salt(16) | iv(12) | ciphertext | tag(16). Nothing inside is readable without the passphrase, a wrong passphrase or any tampering fails the GCM check, and **a lost passphrase cannot be recovered**. Keep it in the organisation's password manager. The zip inside contains:
 
 - `database.dump` - `pg_dump --format=custom --no-owner --no-privileges` of the whole database (all tables, including help-KB embeddings and Sector Insight data).
-- `files/` - `.env`, `OAuth.json`, `google-oauth-token.json`, the Google service-account JSON, `centre-contact-list.xlsx`, `uploads/` (task attachments), `INFOCARE/`, `META/`, `logs/` (landing-feed snapshots, Infocare audit log).
+- `files/` - `.env` **with credentials decrypted** (the at-rest DPAPI seal only works on this computer, so the backup carries plain values under the passphrase and the restore re-seals them), `OAuth.json`, the Google service-account JSON, `centre-contact-list.xlsx`, `uploads/` (task attachments), `INFOCARE/`, `META/`, `logs/` (landing-feed snapshots, Infocare audit log).
 - `MANIFEST.json` - timestamp and the file list.
 
 Not included (rebuilt or re-downloaded): `node_modules`, `dist`, `generated/prisma` (`npm run build`), and the Ollama models in `.local/` (~6.6 GB, `npm run ai:setup`). Everything else is in git.
 
-`npm run backup` (`scripts/backup.ts`) makes the identical zip from the command line, which works while the server is stopped (use this at cutover).
+`npm run backup` (`scripts/backup.ts`) makes the identical file from the command line, which works while the server is stopped (use this at cutover). It asks for the passphrase without echoing it, or reads `MH_BACKUP_PASSPHRASE` for unattended use.
 
-`pg_dump` is found via `PG_BIN`, then the newest `C:\Program Files\PostgreSQL\<ver>\bin`, then `PATH`. The zip is written with Windows' bundled `tar.exe -a`. **The zip contains secrets** (`.env` and OAuth tokens) - treat it like a password file.
+`pg_dump` is found via `PG_BIN`, then the newest `C:\Program Files\PostgreSQL\<ver>\bin`, then `PATH`. The inner zip is written with Windows' bundled `tar.exe -a` to a staging file that is deleted once the encrypted copy exists.
 
 To restore on a new machine:
 
-1. Install PostgreSQL (same or newer major version, currently 18), Node.js, and Git; clone the repo.
-2. With the app stopped, run `powershell -ExecutionPolicy Bypass -File scripts\restore-backup.ps1 -Backup C:\path\to\marketing-helper-backup-....zip`. It copies `files/` back into the project (saving any existing `.env` as `.env.before-restore`), creates the role and database named in the restored `DATABASE_URL` if missing (prompts for the `postgres` superuser password; override the superuser with `-PostgresSuperuser`), then runs `pg_restore --clean --if-exists --no-owner` as the app's own login.
-3. `npm install`, `npm run build`, `npm run ai:setup`, then `npm run transfer:check`, then start with `scripts\open-marketing-helper.ps1` (and `npm run server:install` for the persistent scheduled task).
+1. Install PostgreSQL (same or newer major version, currently 18), Node.js, and Git; clone the repo; `npm install`.
+2. With the app stopped, run `powershell -ExecutionPolicy Bypass -File scripts\restore-backup.ps1 -Backup C:\path\to\marketing-helper-backup-....mhbak`. It:
+   1. Asks for the passphrase (hidden) and decrypts with `scripts/backup-decrypt.ts`. The passphrase reaches the decryptor only through its environment, never the command line.
+   2. Copies `files/` back into the project, saving any existing `.env` as `.env.before-restore`.
+   3. Creates the role and database named in the restored `DATABASE_URL` if missing. It prompts for the `postgres` superuser password; override the superuser with `-PostgresSuperuser`.
+   4. Runs `pg_restore --clean --if-exists --no-owner` as the app's own login.
+   5. Runs `scripts/seal-secrets.ts` to encrypt the credentials for the new computer.
+3. `npm run build`, `npm run ai:setup`, then `npm run transfer:check`, then start with `scripts\open-marketing-helper.ps1` (and `npm run server:install` for the persistent scheduled task).
 
-Verified 2026-10-30: a backup restored into a scratch database reproduced all 57 tables and 110,262 rows exactly.
+Verified 2026-10-30: a backup restored into a scratch database reproduced all 57 tables and 110,262 rows exactly. An encrypted backup made through the app decrypted with the right passphrase, failed with a wrong one, and contained no plain text. The full `restore-backup.ps1` run has not yet been exercised on a second computer.
 
 ### Transferring to a new machine
 
@@ -350,9 +357,9 @@ The full step-by-step checklist (account ownership checks, cutover order, post-m
 How settings and credentials move:
 
 - **All settings live in `.env`** (git-ignored), loaded by `dotenv` with `override: true`. `.env.example` is the complete, commented list of every key the app reads; the authoritative list with the purpose and source of each key is `SETTINGS` in `scripts/transfer-check.ts`. Keep the two in step when adding a setting.
-- **On a transfer, `.env` travels inside the backup zip**, alongside the Google OAuth files. None of the credentials are bound to this machine, so the integrations keep working from the new one without being re-issued:
+- **On a transfer, `.env` travels inside the passphrase-encrypted backup**, alongside the Google OAuth client file. None of the credentials are tied to this machine at the service end, so the integrations keep working from the new one without being re-issued:
   - **Infocare** - username/password API login. Not known to be IP-restricted; `transfer:check` proves it from the new machine.
-  - **Google Analytics** - installed-app OAuth client (`OAuth.json`) + refresh token (`google-oauth-token.json`). Portable; if it ever stops working, `npm run google:oauth` issues a new token.
+  - **Google Analytics** - installed-app OAuth client (`OAuth.json`) + refresh token (encrypted `GOOGLE_ANALYTICS_REFRESH_TOKEN`). Portable; if it ever stops working, `npm run google:oauth` issues a new token. It writes `google-oauth-token.json`, which the next app start moves into `.env` (encrypted) and deletes.
   - **Meta** - System User access token (non-expiring).
   - **Postmark** - Postmark posts webhooks to the **Cloudflare Worker**, not to this machine (the app listens on `127.0.0.1` only), so no Postmark/Blacksheep change is needed. Events sent while the app is down queue in the Worker; the pull cursor lives in the database (`SyncCursor`), so the restored app resumes exactly where the old one stopped.
   - **Cloudflare, Mailchimp, Formstack** - static tokens; portable.
@@ -376,9 +383,20 @@ Rules: credential values never reach the browser and never reach the AI.
   2. Tests the candidate login with a read-only `get_centre_list` call through `createInfocareClient({ env })`. If Infocare rejects it, nothing is written, and the response is a fixed message: Infocare's own error text is never relayed, because it could echo the submitted details.
   3. Writes both keys with `setDotenvValues` (BOM-safe, so line 1 is replaced rather than duplicated) and updates `process.env`. Infocare clients read `process.env` per request, so the change is live without a restart.
   4. Appends `{ event: "infocare_login_change", outcome }` (no values) to `logs/infocare-audit.log`. Responses carry only `ok`/`error`.
-- **Backups are disk-only.** See above; `/actions/backup` returns the saved path, never the file.
+- **Backups are passphrase-encrypted and disk-only.** See above; `/actions/backup` returns the saved path, never the file, and its error response is generic (details go to the server log).
 - **The AI has no route to the environment.** Nothing under `src/ai/` reads `process.env` (except `LOCALAPPDATA` to locate Ollama), the `.env` file, or names any credential key; the help knowledge base indexes only `knowledge/`, `docs/metric-contracts.md` and one `INFOCARE/` notes file. Infocare live chat calls run server-side through the client, and the model only ever sees returned data. `test/secrets-isolation.test.ts` enforces all of this and that the Infocare page never contains the current login.
-- **At rest**, `.env` and the Google token files are plain text in the project folder, protected by Windows account permissions and git-ignored. The backup zip is likewise unencrypted; treat it as a password file.
+- **At rest, credentials in `.env` are encrypted with Windows DPAPI** (`src/secrets.ts`). The keys in `SECRET_KEYS` (Infocare user and password, Meta token, Google refresh token, Postmark tokens, Cloudflare sync token, Mailchimp key, Formstack token) are stored as `dpapi:<base64>` and only decrypt **on this computer**.
+  - **Scope is LocalMachine, not CurrentUser.** The app runs under the work (Azure AD) sign-in while admin terminals use a local account, and per-user sealing locked the server out of its own settings. Any account on this computer that can read the folder can decrypt; a copy of `.env` on any other computer cannot.
+  - **`src/load-env.ts` must be the first import** of anything that reads the environment (it is in `server.ts`, `db.ts` and the scripts). On every start it:
+    1. Seals any credential typed in as plain text, and moves a fresh `google-oauth-token.json` into `.env`, deleting the file only after the sealed copy is proven to decrypt.
+    2. Loads `.env`.
+    3. Decrypts the sealed values into `process.env` for that process only.
+    4. Re-seals at machine scope any value still sealed per-user. A DPAPI blob's `dwFlags` at byte 40 carries `CRYPTPROTECT_LOCAL_MACHINE`.
+  - **`setDotenvValues` (`src/env-file.ts`) always seals `SECRET_KEYS`**, so the Infocare Login page saves an encrypted login. `npm run secrets:seal` seals by hand; `transfer:check` reports each credential as encrypted, plain text, or per-user.
+  - The DPAPI call is one `powershell.exe` per batch, with values passed over stdin/stdout, never the command line.
+  - **Not encrypted:** `DATABASE_URL` (Prisma CLI and the pg tools read it directly; the database only listens on localhost), `OAuth.json` (an installed-app client secret, which Google does not treat as confidential), and the Google service-account JSON (not used by the app at runtime).
+  - **Not protected against** software already running on this computer with access to the folder, since the app itself must decrypt. **BitLocker** protects the stolen-disk case for everything including the database; `transfer:check` warns when it is off.
+- `test/secrets-encryption.test.ts` covers backup round-trip, wrong passphrase and tampering, machine-scope sealing, BOM-safe writes, and awkward password characters.
 
 ## Environment
 

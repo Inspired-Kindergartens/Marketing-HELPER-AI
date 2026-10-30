@@ -23,7 +23,7 @@ The [landing page](/) is your starting point.
   - **Update AI model** appears when a better AI model is available for Beep Beep. It downloads the new model and switches to it. The model you were using is kept as a backup, and any older backup is deleted automatically to free up space.
   - **Rollback AI model** switches Beep Beep back to the backup model if the new one isn't working well.
   - **[Infocare Login](/settings/infocare)** changes the username and password the app uses to read from Infocare. See *Changing the Infocare login* below.
-  - **Back up data** saves one zip file on this computer holding everything the app knows: the whole database, uploaded task attachments, the contact list, and the passwords and keys the app uses to connect to Infocare, Google, Meta and Postmark. For safety it is not downloaded through the browser. A message tells you where it was saved. See *Moving the app to another computer* below.
+  - **[Back up data](/backup)** saves one file on this computer holding everything the app knows: the whole database, uploaded task attachments, the contact list, and the passwords and keys the app uses to connect to Infocare, Google, Meta and Postmark. You choose a passphrase that locks the file. For safety it is not downloaded through the browser; the page tells you where it was saved. See *Moving the app to another computer* below.
   - **Look** chooses how the app looks: Default, Light or Dark. See *Appearance* below.
 
 On any page, the **icons down the right-hand edge** take you back to the landing page or straight to another area.
@@ -212,13 +212,20 @@ When the Infocare password changes, update it here so the dashboard keeps workin
 
 For security, the page never shows the current username or password. It only says whether a login is set and when it was last changed. Beep Beep (the AI) has no access to these details, or to any of the app's other passwords and keys.
 
+## How the app keeps passwords safe
+
+- The passwords and keys the app uses (Infocare, Google, Meta, Postmark, Mailchimp, Formstack) are stored **encrypted**. They can only be unlocked on this computer, so a copy of the settings file taken elsewhere is useless.
+- They are never shown on any page and never given to Beep Beep.
+- Backups are locked with a passphrase you choose.
+- The one thing the app can't do for you is encrypt the whole computer drive. Ask IT to turn on **BitLocker** so a lost or stolen computer doesn't expose the app's data.
+
 ## Moving the app to another computer
 
 Everything the app has stored can be moved to a new computer, or kept safe in case this one fails.
 
-1. On this computer, click **Back up data** at the bottom of the [landing page](/). A file called something like `marketing-helper-backup-20261030-1104.zip` (about 60 MB) is saved in the app's `backups` folder, and a message shows exactly where.
-2. **Keep the zip private.** It contains passwords and API keys. Store it on the work OneDrive or a USB stick, not in email or a shared folder.
-3. On the new computer, whoever looks after the app installs PostgreSQL, Node.js and the app from GitHub, then runs the restore script with the zip (the technical README has the exact steps). It puts the database and files back exactly as they were.
+1. On this computer, click **[Back up data](/backup)** at the bottom of the landing page. Choose a passphrase of at least 12 characters and type it twice. A file called something like `marketing-helper-backup-20261030-1104.mhbak` (about 60 MB) is saved in the app's `backups` folder, and the page shows exactly where.
+2. **Save the passphrase in the organisation's password manager straight away.** Without it the backup can never be opened, and nobody can recover it. Locked like this, the file is safe to store on the work OneDrive or a USB stick. Still don't email it.
+3. On the new computer, whoever looks after the app installs PostgreSQL, Node.js and the app from GitHub, then runs the restore script with the backup file and the passphrase (the technical README has the exact steps). It puts the database and files back exactly as they were, and locks the passwords to the new computer.
 4. Beep Beep's AI model is not in the backup because it is large and can be downloaded again. The setup step fetches it.
 5. The connections to Infocare, Google Analytics, Meta, Mailchimp, Formstack and the email tracking (Postmark/Cloudflare) all move with the backup. They keep working on the new computer without anyone needing to set them up again. Emails sent while the app is switched off during the move are caught up automatically afterwards.
 

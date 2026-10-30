@@ -22,6 +22,7 @@ test("AI code does not read environment variables or .env", () => {
     assert.deepEqual(envReads, [], `${file} reads process.env`);
     assert.doesNotMatch(source, /["'`]\.env["'`]/, `${file} references the .env file`);
     assert.doesNotMatch(source, /INFOCAREUSER|INFOCAREPASS|_TOKEN\b|API_KEY|BASIC_AUTH|DATABASE_URL/, `${file} names a credential`);
+    assert.doesNotMatch(source, /from ["'][./]*(secrets|env-file|load-env)\.js["']/, `${file} imports the credential encryption modules`);
   }
 });
 

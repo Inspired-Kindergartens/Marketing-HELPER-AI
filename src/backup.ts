@@ -1,11 +1,14 @@
-// Full data export so the app can be moved to another machine. One zip holds
-// everything that is NOT in git: the Postgres database (pg_dump custom format),
-// uploaded files, Infocare/Meta working files, landing-feed snapshots and the
-// credential files the integrations need. Restore with scripts/restore-backup.ps1.
+// Full data export so the app can be moved to another machine. One
+// passphrase-encrypted file holds everything that is NOT in git: the Postgres
+// database (pg_dump custom format), uploaded files, Infocare/Meta working files,
+// landing-feed snapshots and the credentials the integrations need. Restore
+// with scripts/restore-backup.ps1.
 import { spawn } from "node:child_process";
+import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from "node:crypto";
 import { existsSync, readdirSync } from "node:fs";
-import { cp, mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { readEnvFileUnsealed } from "./env-file.js";
 
 export const BACKUP_DIR = "backups";
 
@@ -83,12 +86,69 @@ function timestamp(date = new Date()): string {
   return `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}-${pad(date.getHours())}${pad(date.getMinutes())}`;
 }
 
-export async function createBackup(rootDir: string, databaseUrl: string): Promise<BackupResult> {
+// --- Passphrase encryption -------------------------------------------------
+// File layout: MAGIC | salt(16) | iv(12) | AES-256-GCM ciphertext | tag(16).
+// The key is scrypt(passphrase, salt). Nothing in the backup is readable, and
+// any tampering fails the GCM tag check, without the passphrase.
+const MAGIC = Buffer.from("MHBAK1", "ascii");
+const SCRYPT = { N: 2 ** 16, r: 8, p: 1, maxmem: 256 * 1024 * 1024 };
+
+export const MIN_PASSPHRASE_LENGTH = 12;
+
+export function validatePassphrase(passphrase: unknown): string {
+  if (typeof passphrase !== "string" || passphrase.length < MIN_PASSPHRASE_LENGTH) {
+    throw new Error(`The backup passphrase must be at least ${MIN_PASSPHRASE_LENGTH} characters.`);
+  }
+
+  return passphrase;
+}
+
+export async function encryptFile(inputPath: string, outputPath: string, passphrase: string) {
+  const salt = randomBytes(16);
+  const iv = randomBytes(12);
+  const key = scryptSync(validatePassphrase(passphrase), salt, 32, SCRYPT);
+  const cipher = createCipheriv("aes-256-gcm", key, iv);
+  const body = Buffer.concat([cipher.update(await readFile(inputPath)), cipher.final()]);
+
+  await writeFile(outputPath, Buffer.concat([MAGIC, salt, iv, body, cipher.getAuthTag()]));
+}
+
+export async function decryptFile(inputPath: string, outputPath: string, passphrase: string) {
+  const data = await readFile(inputPath);
+
+  if (!data.subarray(0, MAGIC.length).equals(MAGIC)) {
+    throw new Error("Not a Marketing Helper encrypted backup.");
+  }
+
+  const salt = data.subarray(MAGIC.length, MAGIC.length + 16);
+  const iv = data.subarray(MAGIC.length + 16, MAGIC.length + 28);
+  const tag = data.subarray(data.length - 16);
+  const key = scryptSync(passphrase, salt, 32, SCRYPT);
+  const decipher = createDecipheriv("aes-256-gcm", key, iv);
+  decipher.setAuthTag(tag);
+
+  let plain: Buffer;
+  try {
+    plain = Buffer.concat([decipher.update(data.subarray(MAGIC.length + 28, data.length - 16)), decipher.final()]);
+  } catch {
+    throw new Error("Wrong passphrase, or the backup file is damaged.");
+  }
+
+  await writeFile(outputPath, plain);
+}
+
+// The backup is always passphrase-encrypted (.mhbak). Inside it, .env is written
+// with credentials decrypted, because the DPAPI seal only works on this computer;
+// the restore re-seals them for the new one.
+export async function createBackup(rootDir: string, databaseUrl: string, passphrase: string): Promise<BackupResult> {
+  validatePassphrase(passphrase);
+
   const backupDir = join(rootDir, BACKUP_DIR);
   const stamp = timestamp();
   const staging = join(backupDir, `.staging-${stamp}`);
-  const fileName = `marketing-helper-backup-${stamp}.zip`;
-  const zipPath = join(backupDir, fileName);
+  const fileName = `marketing-helper-backup-${stamp}.mhbak`;
+  const zipPath = join(backupDir, `.staging-${stamp}.zip`);
+  const outputPath = join(backupDir, fileName);
 
   await rm(staging, { recursive: true, force: true });
   await mkdir(join(staging, "files"), { recursive: true });
@@ -102,7 +162,8 @@ export async function createBackup(rootDir: string, databaseUrl: string): Promis
       const source = join(rootDir, path);
 
       if (!existsSync(source)) continue;
-      await cp(source, join(staging, "files", path), { recursive: true });
+      if (path === ".env") await writeFile(join(staging, "files", ".env"), readEnvFileUnsealed(rootDir), "utf8");
+      else await cp(source, join(staging, "files", path), { recursive: true });
       includedPaths.push(path);
     }
 
@@ -119,18 +180,12 @@ export async function createBackup(rootDir: string, databaseUrl: string): Promis
       await run("zip", ["-r", "-q", zipPath, "."], staging);
     }
 
-    const { size } = await stat(zipPath);
+    await encryptFile(zipPath, outputPath, passphrase);
+    const { size } = await stat(outputPath);
 
     return { fileName, sizeBytes: size, includedPaths };
   } finally {
     await rm(staging, { recursive: true, force: true });
-  }
-}
-
-export async function listBackups(rootDir: string): Promise<string[]> {
-  try {
-    return (await readdir(join(rootDir, BACKUP_DIR))).filter((name) => /^marketing-helper-backup-\d{8}-\d{4}\.zip$/.test(name)).sort().reverse();
-  } catch {
-    return [];
+    await rm(zipPath, { force: true });
   }
 }

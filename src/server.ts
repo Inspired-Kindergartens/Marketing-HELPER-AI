@@ -1,4 +1,5 @@
-import { config as loadDotenv, parse as parseDotenv } from "dotenv";
+import "./load-env.js";
+import { formatDotenvLine, setDotenvValues } from "./env-file.js";
 import { mkdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
@@ -40,7 +41,8 @@ import {
 import { ensureWeeklyAnalyticsSnapshot, refreshAnalyticsSnapshot } from "./analytics/snapshot.js";
 import { resolveWindowKey, resolveWindowStartDate } from "./analytics/windows.js";
 import { prisma } from "./db.js";
-import { BACKUP_DIR, createBackup } from "./backup.js";
+import { BACKUP_DIR, MIN_PASSPHRASE_LENGTH, createBackup, validatePassphrase } from "./backup.js";
+import { renderBackupPage } from "./ui/backup-page.js";
 import { getGoogleAnalyticsConfig, readGoogleAnalyticsConfigStatus } from "./google-analytics/config.js";
 import {
   ensureDailyGoogleAnalyticsSnapshot,
@@ -300,8 +302,6 @@ import {
 } from "./ai/sector-context.js";
 import { THEME_HEAD_SCRIPT } from "./ui/theme.js";
 
-loadDotenv({ override: true });
-
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   HOST: z.string().default("127.0.0.1"),
@@ -449,47 +449,8 @@ function trackAiModelPullProgress(chunk: unknown) {
   }
 }
 
-// Quote with a character the value doesn't contain, then prove dotenv reads it
-// back unchanged (passwords can hold #, $, quotes, spaces...).
-function formatDotenvLine(key: string, value: string) {
-  if (/[\r\n]/.test(value)) {
-    throw new Error(`${key} cannot contain line breaks.`);
-  }
-
-  const quote = ['"', "'", "`"].find((q) => !value.includes(q));
-  const line = quote ? `${key}=${quote}${value}${quote}` : "";
-
-  if (!line || parseDotenv(line)[key] !== value) {
-    throw new Error(`${key} contains a combination of characters that cannot be stored.`);
-  }
-
-  return line;
-}
-
 async function setDotenvValue(key: string, value: string) {
-  await setDotenvValues({ [key]: value });
-}
-
-async function setDotenvValues(values: Record<string, string>) {
-  const envPath = join(process.cwd(), ".env");
-  let content = "";
-
-  try {
-    content = await readFile(envPath, "utf8");
-  } catch {
-    content = "";
-  }
-
-  for (const [key, value] of Object.entries(values)) {
-    const line = formatDotenvLine(key, value);
-    // The first line may carry a UTF-8 BOM; keep it rather than appending a duplicate key.
-    const pattern = new RegExp(`^(\\uFEFF?)${key}=.*$`, "m");
-    content = pattern.test(content)
-      ? content.replace(pattern, (_match, bom: string) => `${bom}${line}`)
-      : `${content.trimEnd()}${content.trim() ? "\n" : ""}${line}\n`;
-  }
-
-  await writeFile(envPath, content, "utf8");
+  setDotenvValues({ [key]: value });
 }
 
 async function readDotenvValue(key: string) {
@@ -1339,7 +1300,7 @@ app.post<{ Body: { username?: unknown; password?: unknown } }>("/api/settings/in
   }
 
   const updatedAt = new Date().toISOString();
-  await setDotenvValues({ INFOCAREUSER: username, INFOCAREPASS: password, INFOCARE_LOGIN_UPDATED_AT: updatedAt });
+  setDotenvValues({ INFOCAREUSER: username, INFOCAREPASS: password, INFOCARE_LOGIN_UPDATED_AT: updatedAt });
   // Infocare clients read process.env per request, so this takes effect immediately.
   process.env.INFOCAREUSER = username;
   process.env.INFOCAREPASS = password;
@@ -5038,20 +4999,30 @@ app.post("/actions/rollback-ai-model", async (_request, reply) => {
   }
 });
 
-app.post("/actions/backup", async (_request, reply) => {
-  try {
-    const result = await createBackup(process.cwd(), env.DATABASE_URL);
+app.get("/backup", async (_request, reply) => {
+  return reply.type("text/html; charset=utf-8").send(renderBackupPage({ minPassphraseLength: MIN_PASSPHRASE_LENGTH }));
+});
 
-    // The zip holds .env, so it stays on disk: never served to the browser.
+app.post<{ Body: { passphrase?: unknown } }>("/actions/backup", async (request, reply) => {
+  let passphrase: string;
+
+  try {
+    passphrase = validatePassphrase(request.body?.passphrase);
+  } catch (error) {
+    reply.code(400);
+    return reply.type("application/json; charset=utf-8").send({ ok: false, error: error instanceof Error ? error.message : "Invalid passphrase." });
+  }
+
+  try {
+    const result = await createBackup(process.cwd(), env.DATABASE_URL, passphrase);
+
+    // Even encrypted, the backup stays on disk: never served to the browser.
     return reply.type("application/json; charset=utf-8").send({ ok: true, path: join(process.cwd(), BACKUP_DIR, result.fileName) });
   } catch (error) {
     app.log.error({ error }, "Data backup failed");
     reply.code(500);
 
-    return reply.type("application/json; charset=utf-8").send({
-      ok: false,
-      error: error instanceof Error ? error.message : "Backup failed.",
-    });
+    return reply.type("application/json; charset=utf-8").send({ ok: false, error: "Backup failed. See the server log for details." });
   }
 });
 

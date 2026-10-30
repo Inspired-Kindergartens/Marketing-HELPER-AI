@@ -1,8 +1,6 @@
-import { config as loadDotenv } from "dotenv";
+import "./load-env.js";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "../generated/prisma/client.js";
-
-loadDotenv({ override: true });
 
 declare global {
   var prisma: PrismaClient | undefined;

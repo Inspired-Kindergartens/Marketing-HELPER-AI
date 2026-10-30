@@ -8,9 +8,10 @@
 //    credentials work from this machine. `--offline` skips step 3.
 //
 // Exits 1 when anything required is missing or failing, so it can gate a cutover.
-import { config as loadDotenv } from "dotenv";
+import "../src/load-env.js";
+import { parse as parseDotenv } from "dotenv";
 import { execFile } from "node:child_process";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import pg from "pg";
@@ -18,8 +19,7 @@ import { findPgTool } from "../src/backup.js";
 import { GoogleAnalyticsClient } from "../src/google-analytics/client.js";
 import { getGoogleAnalyticsConfig } from "../src/google-analytics/config.js";
 import { getMailchimpConfig } from "../src/mailchimp/config.js";
-
-loadDotenv({ override: true, quiet: true });
+import { canSeal, isMachineSealed, isSealed, isSecretKey } from "../src/secrets.js";
 
 const exec = promisify(execFile);
 const offline = process.argv.includes("--offline");
@@ -45,7 +45,8 @@ export const SETTINGS: Setting[] = [
   { key: "META_ACCESS_TOKEN", required: false, purpose: "Meta Ads API token (expires ~60 days unless System User)", source: "developers.facebook.com/tools/explorer then extend in the Access Token Debugger" },
   { key: "GOOGLE_ANALYTICS_PROPERTY_ID", required: false, purpose: "GA4 property", source: "Google Analytics > Admin > Property details" },
   { key: "GOOGLE_ANALYTICS_OAUTH_PATH", required: false, purpose: "GA OAuth client file (default OAuth.json)", source: "Google Cloud console > Credentials (project marketing-helper-ai)" },
-  { key: "GOOGLE_ANALYTICS_TOKEN_PATH", required: false, purpose: "GA refresh-token file (default google-oauth-token.json)", source: "Created by npm run google:oauth" },
+  { key: "GOOGLE_ANALYTICS_TOKEN_PATH", required: false, purpose: "Where npm run google:oauth writes a new token (default google-oauth-token.json; moved into .env on next start)", source: "Default" },
+  { key: "GOOGLE_ANALYTICS_REFRESH_TOKEN", required: false, purpose: "GA refresh token", source: "npm run google:oauth, then start the app - it moves the token here" },
   { key: "POSTMARK_SERVER_TOKEN", required: false, purpose: "Postmark API (not used in this deployment)", source: "Postmark server > API Tokens (via Blacksheep)" },
   { key: "POSTMARK_WEBHOOK_BASIC_AUTH", required: false, purpose: "Password Postmark uses on the live webhook", source: "Copy from current .env (must match what Blacksheep configured)" },
   { key: "CLOUDFLARE_SYNC_URL", required: false, purpose: "Cloudflare Worker buffering Postmark events", source: "Cloudflare dashboard > Workers > postmark-webhook-events" },
@@ -60,7 +61,6 @@ export const SETTINGS: Setting[] = [
 
 const FILES = [
   { path: "OAuth.json", purpose: "Google Analytics OAuth client" },
-  { path: "google-oauth-token.json", purpose: "Google Analytics refresh token (npm run google:oauth recreates it)" },
   { path: "centre-contact-list.xlsx", purpose: "Centre contact list (Upload Contacts page recreates it)" },
 ];
 
@@ -96,9 +96,13 @@ async function getJson(url: string, init: RequestInit = {}) {
 }
 
 console.log("\n== Settings (.env) ==");
+// Raw file values, to report whether each credential is stored encrypted.
+const stored = parseDotenv(existsSync(join(root, ".env")) ? readFileSync(join(root, ".env"), "utf8") : "");
 for (const s of SETTINGS) {
   const set = val(s.key).length > 0;
-  if (set) line(true, s.key, s.purpose);
+  if (set && isSecretKey(s.key) && canSeal && !isSealed(stored[s.key])) console.log(`WARN  ${s.key} - stored as plain text; run npm run secrets:seal`);
+  else if (set && isSecretKey(s.key) && !isMachineSealed(stored[s.key])) console.log(`WARN  ${s.key} - encrypted for one Windows account only; restart the app to re-encrypt for this computer`);
+  else if (set) line(true, s.key, isSecretKey(s.key) && isSealed(stored[s.key]) ? `${s.purpose} (encrypted)` : s.purpose);
   else if (s.required) line(false, s.key, `MISSING. ${s.purpose}. Get it from: ${s.source}`);
   else console.log(`  -   ${s.key} - not set (optional). ${s.purpose}. Source: ${s.source}`);
 }
@@ -125,6 +129,13 @@ await check("Built app (dist/)", true, async () => {
   return "present";
 });
 if (process.platform === "win32") {
+  // Shell property, readable without admin rights: 1 on, 3 encrypting, 5 suspended, 6 locked.
+  await check(`BitLocker drive encryption (${root.slice(0, 2)})`, false, async () => {
+    const { stdout } = await exec("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `(New-Object -ComObject Shell.Application).NameSpace('${root.slice(0, 2)}').Self.ExtendedProperty('System.Volume.BitLockerProtection')`]);
+    const state = Number.parseInt(stdout.trim(), 10);
+    if (state === 1 || state === 3 || state === 6) return "on";
+    throw new Error("off - a lost or stolen computer exposes the database and files; turn on BitLocker (Settings > Privacy & security > Device encryption / BitLocker)");
+  });
   await check("Scheduled task 'Marketing Helper AI Server'", false, async () => {
     await exec("schtasks.exe", ["/Query", "/TN", "Marketing Helper AI Server"]);
     return "registered";

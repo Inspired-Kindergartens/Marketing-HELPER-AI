@@ -353,10 +353,10 @@ export function renderLandingPage(options: LandingPageOptions = {}) {
           <i class="bi bi-shield-lock" aria-hidden="true"></i>
           <span>Infocare Login</span>
         </a>
-        <button type="button" class="landing__restart inline-flex items-center gap-8 text-muted" data-backup aria-label="Save a full backup of the app's data on this computer">
-          <i class="bi bi-database-down" aria-hidden="true"></i>
-          <span class="landing__backup-label">Back up data</span>
-        </button>
+        <a class="landing__github inline-flex items-center gap-8 text-muted" href="/backup">
+          <i class="bi bi-database-lock" aria-hidden="true"></i>
+          <span>Back up data</span>
+        </a>
         <a class="landing__github inline-flex items-center gap-8 text-muted" href="https://github.com/Inspired-Kindergartens/Marketing-HELPER-AI" target="_blank" rel="noopener noreferrer">
           <i class="bi bi-github" aria-hidden="true"></i>
           <span>View on GitHub</span>
@@ -445,44 +445,6 @@ export function renderLandingPage(options: LandingPageOptions = {}) {
           "Rolling back...",
           "Rolled back"
         );
-      })();
-      (function () {
-        var btn = document.querySelector("[data-backup]");
-        if (!btn) return;
-        var label = btn.querySelector(".landing__backup-label");
-        var defaultText = "Back up data";
-        function done(text) {
-          if (label) label.textContent = text;
-          setTimeout(function () {
-            if (label) label.textContent = defaultText;
-            btn.disabled = false;
-          }, 4000);
-        }
-        btn.addEventListener("click", function () {
-          if (btn.disabled) return;
-          if (!window.confirm("Create a full backup (database, uploads and credential files)? It is saved in the app's backups folder on this computer. It contains passwords and API keys, so keep it somewhere safe.")) {
-            return;
-          }
-          btn.disabled = true;
-          if (label) label.textContent = "Backing up…";
-          fetch("/actions/backup", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: "{}",
-          })
-            .then(function (res) { return res.json(); })
-            .then(function (payload) {
-              if (!payload.ok) {
-                done("Backup failed");
-                return;
-              }
-              window.alert("Backup saved on this computer: " + payload.path);
-              done("Backup saved");
-            })
-            .catch(function () {
-              done("Backup failed");
-            });
-        });
       })();
       (function () {
         var btn = document.querySelector("[data-update-ai-model]");
