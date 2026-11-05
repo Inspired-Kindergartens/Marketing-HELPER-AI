@@ -255,3 +255,14 @@ test("landing page has no manual delete-old-fallback button (the update removes 
   assert.doesNotMatch(html, /Delete old fallback|data-delete-ai-rollback/);
   assert.match(html, /data-rollback-ai-model/);
 });
+
+test("a recommended AI model shows as a reminder with update and dismiss, and never in the feed", () => {
+  const html = renderLandingPage({ aiModelReminder: { model: "example-model", reason: "Recommended for this computer.", confirm: "Install example-model?" } });
+
+  assert.match(html, /AI model update: example-model/);
+  assert.match(html, /Recommended for this computer\./);
+  assert.match(html, /<button type="button" data-update-ai-model data-confirm="Install example-model\?">/);
+  assert.match(html, /<button type="button" data-dismiss-ai-recommendation>Dismiss<\/button>/);
+  assert.match(html, /1 needs attention/);
+  assert.doesNotMatch(renderLandingPage(), /data-dismiss-ai-recommendation>Dismiss/);
+});

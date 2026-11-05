@@ -4,10 +4,13 @@ $taskName = "Marketing Helper AI Server"
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 $runnerPath = Join-Path $repoRoot "scripts\run-build-persistent.cmd"
 $cmdPath = Join-Path $env:SystemRoot "System32\cmd.exe"
+$conhostPath = Join-Path $env:SystemRoot "System32\conhost.exe"
 
+# Headless console: the task runs in the logged-on session, so launching cmd.exe
+# directly opens a visible window, and closing that window stops the server.
 $action = New-ScheduledTaskAction `
-  -Execute $cmdPath `
-  -Argument "/c `"$runnerPath`"" `
+  -Execute $conhostPath `
+  -Argument "--headless `"$cmdPath`" /c `"$runnerPath`"" `
   -WorkingDirectory $repoRoot
 
 $trigger = New-ScheduledTaskTrigger -AtLogOn

@@ -154,6 +154,8 @@ function renderTasksChatScript(): string {
                 if (eventType === "event: chunk") {
                   answer += payload.chunk;
                   output.textContent = answer;
+                } else if (eventType === "event: status") {
+                  if (!answer) output.textContent = payload.message;
                 } else if (eventType === "event: error") {
                   output.textContent = payload.error || "Chat request failed.";
                 }

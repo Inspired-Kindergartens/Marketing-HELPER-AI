@@ -16,7 +16,8 @@ const START_POLL_INTERVAL_MS = 1000;
 // How long Ollama keeps a model in memory after its last request. The default
 // (5 minutes) meant most visits paid a cold load first, which on this machine
 // can take over a minute and pushed requests past their timeout.
-export const AI_KEEP_ALIVE = "30m";
+export const AI_KEEP_ALIVE = "15m";
+const MODEL_TEST_TIMEOUT_MS = 180000;
 
 export async function isAiReady(config: AiConfig): Promise<boolean> {
   // The built-in provider needs no external runtime, so it is always ready.
@@ -39,7 +40,7 @@ export async function isAiReady(config: AiConfig): Promise<boolean> {
 
 // Same discovery order as scripts/open-marketing-helper.ps1: PATH, then the
 // repo-local copy, then a per-user install.
-function findOllamaExecutable(): string | null {
+export function findOllamaExecutable(): string | null {
   const candidates: string[] = [];
 
   const localAppData = process.env.LOCALAPPDATA;
@@ -157,14 +158,52 @@ function warmModel(config: AiConfig, log?: Logger): Promise<void> {
   return promise;
 }
 
+// Asks a newly downloaded model for a real reply, so an update only goes ahead
+// with a model that works on this computer. Throws a message the user can read.
+export async function assertModelAnswers(config: AiConfig, model: string): Promise<void> {
+  let reply = "";
+  try {
+    const response = await fetch(aiUrl(config, "/api/chat"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model,
+        stream: false,
+        think: false,
+        keep_alive: AI_KEEP_ALIVE,
+        messages: [{ role: "user", content: "Reply with the word OK." }],
+      }),
+      signal: AbortSignal.timeout(MODEL_TEST_TIMEOUT_MS),
+    });
+    const payload = (await response.json().catch(() => ({}))) as { message?: { content?: string }; error?: string };
+    if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+    reply = payload.message?.content?.trim() ?? "";
+  } catch (error) {
+    const reason = error instanceof Error && error.name !== "TimeoutError" ? error.message : "it took too long";
+    throw new Error(`The new model didn't answer (${reason}).`);
+  }
+  if (!reply) throw new Error("The new model gave an empty answer.");
+}
+
+// A load still in progress counts as not ready: Ollama can list a model before
+// it is able to answer.
+export async function isModelReady(config: AiConfig): Promise<boolean> {
+  return !warmPromises.has(config.AI_CHAT_MODEL) && (await isModelLoaded(config));
+}
+
 /**
  * Ensures the local AI runtime is up, starting it if it is not. Safe to call
  * unawaited from a page route: it never throws, and concurrent callers share a
  * single start attempt. Once the runtime answers, it also loads
  * `config.AI_CHAT_MODEL` in the background so the first request is not a cold
- * start - pass a config with a different model to warm that one instead.
+ * start. Pass `loadModel: false` to start the runtime without loading anything
+ * into memory.
  */
-export async function ensureAiRunning(config: AiConfig, log?: Logger): Promise<boolean> {
+export async function ensureAiRunning(
+  config: AiConfig,
+  log?: Logger,
+  { loadModel = true }: { loadModel?: boolean } = {},
+): Promise<boolean> {
   if (config.AI_PROVIDER !== "ollama") return true;
 
   let ready = await isAiReady(config);
@@ -179,7 +218,7 @@ export async function ensureAiRunning(config: AiConfig, log?: Logger): Promise<b
     ready = await startPromise;
   }
 
-  if (ready) void warmModel(config, log);
+  if (ready && loadModel) void warmModel(config, log);
   return ready;
 }
 

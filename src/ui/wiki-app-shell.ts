@@ -99,10 +99,10 @@ function renderWikiChatScript(): string {
               var part = await reader.read();
               if (part.done) break;
               buffer += decoder.decode(part.value, { stream: true });
-              var events = buffer.split("\n\n");
+              var events = buffer.split("\\n\\n");
               buffer = events.pop() || "";
               events.forEach(function(eventText) {
-                var lines = eventText.split("\n");
+                var lines = eventText.split("\\n");
                 var eventType = lines.find(function(line) { return line.indexOf("event: ") === 0; });
                 var eventData = lines.find(function(line) { return line.indexOf("data: ") === 0; });
                 if (!eventType || !eventData) return;
@@ -111,6 +111,8 @@ function renderWikiChatScript(): string {
                   answer += payload.chunk;
                   output.textContent = answer;
                   messages.scrollTop = messages.scrollHeight;
+                } else if (eventType === "event: status") {
+                  if (!answer) output.textContent = payload.message;
                 } else if (eventType === "event: error") {
                   output.textContent = payload.error || "Chat request failed.";
                 }

@@ -1,6 +1,6 @@
 $ErrorActionPreference = "Stop"
 
-$Model = if ($env:AI_CHAT_MODEL) { $env:AI_CHAT_MODEL } else { "llama3.1:8b" }
+$Model = if ($env:AI_CHAT_MODEL) { $env:AI_CHAT_MODEL } else { (Select-String -Path (Join-Path $PSScriptRoot "..\.env.example") -Pattern '^AI_CHAT_MODEL=(.+)$').Matches[0].Groups[1].Value.Trim() }
 $BaseUrl = if ($env:AI_BASE_URL) { $env:AI_BASE_URL.TrimEnd("/") } else { "http://127.0.0.1:11434" }
 
 function Find-Ollama {

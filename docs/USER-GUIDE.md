@@ -2,7 +2,7 @@
 
 Marketing Helper brings everything the marketing team needs into one place: how full each kindergarten is, who is on the waitlists, how our Facebook and Instagram ads are doing, website visits, emails, job adverts, and a set of handy tools.
 
-It runs on this computer only. Open it from the desktop shortcut, or go to [the landing page](/).
+It runs on this computer only. Open it from the desktop shortcut, or go to [the landing page](/). It starts by itself in the background when you log in to Windows, so you won't see a window for it.
 
 **Beep Beep** is the app's built-in AI helper. Most pages have a Beep Beep chat on the right. Type a question, press **Enter** (or **Send**), and Beep Beep answers using what is on that page. **Clear** starts a fresh conversation.
 
@@ -14,14 +14,14 @@ The [landing page](/) is your starting point.
 
 - **Big buttons** open the main areas: [Marketing](/app), [Tasks](/tasks), [General Chat](/chat), [Communications](/comms), [Job Descriptions](/jd) and [Things To Know](/wiki).
 - **Small buttons** underneath open the tools: this Read Me, Upscalar, SharePoint, the website admin, [Code Snippets](/snippets), [Links](/subscriptions) and [Sector Insight](/sector).
-- **Reminders** show tasks that are overdue or due soon. Click one to open the task. If nothing is due, this section is hidden.
+- **Reminders** show tasks that are overdue or due soon. Click one to open the task. If nothing is due, this section is hidden. A recommended AI model update also appears here and stays until you choose **Update AI model** or **Dismiss**. If you dismiss it, you can still update later from the button at the bottom of the page.
 - **Email alert banner.** An amber or red banner appears if our email tracking has gone quiet. Amber (3+ days with no email activity) is worth a look. Red (7+ days) means something is probably broken: click it to go to Webmail, and see *Email alerts* below.
 - **News and weather** scroll along the bottom: severe weather warnings for our area and early-childhood news. The app checks for new items every 15 minutes on its own, so refreshing the page won't fetch news any sooner. The "Updated" time shows the last successful check. If that time is more than about 30 minutes old, something is wrong: tell whoever looks after the app. To make sure a topic is always picked up (for example our organisation's name or a centre), add it as a **search text** under the feed. To go back to a story that has scrolled past, click and drag the feed left or right; it carries on scrolling from where you let go. Hovering over the feed pauses it. Each story shows its headline first, then the publisher and time (long publisher names are cut short with …). Stories matching a search text go to the top. Local stories from the Bay of Plenty Times, SunLive, RNZ, Stuff and 1News are included, even when the headline doesn't mention early childhood but the article does.
 - **Buttons at the very bottom:**
   - **[Upload Contacts](/contacts/upload)** replaces the centre contact list used by the dashboard's Email column.
   - **Restart server** restarts the app if something seems stuck.
-  - **Update AI model** appears when a better AI model is available for Beep Beep. It downloads the new model and switches to it. The model you were using is kept as a backup, and any older backup is deleted automatically to free up space.
-  - **Rollback AI model** switches Beep Beep back to the backup model if the new one isn't working well.
+  - **Update AI model** appears when a new AI model is recommended for Beep Beep. It tells you what it's installing and how big it is, downloads the model, and checks it works before switching. If the check fails, your current model stays and the button shows why. The model you were using is kept as a backup, and any older backup is deleted automatically to free up space.
+  - **Rollback AI model** switches Beep Beep back to the backup model if the new one isn't working well. The app then stops recommending the model you rolled back from.
   - **[Infocare Login](/settings/infocare)** changes the username and password the app uses to read from Infocare. See *Changing the Infocare login* below.
   - **[Back up data](/backup)** saves one file on this computer holding everything the app knows: the whole database, uploaded task attachments, the contact list, and the passwords and keys the app uses to connect to Infocare, Google, Meta and Postmark. You choose a passphrase that locks the file. For safety it is not downloaded through the browser; the page tells you where it was saved. See *Moving the app to another computer* below.
   - **Look** chooses how the app looks: Default, Light or Dark. See *Appearance* below.
@@ -191,6 +191,20 @@ Every other early childhood service around our kindergartens (childcare centres,
 Upload the latest centre contact list (the Excel workbook). The **Email** buttons on the Marketing page use it to find each centre's address.
 
 ---
+
+## When Beep Beep is working
+
+Beep Beep's AI only loads when it's needed, so it isn't using the computer's memory the rest of the time. After a quiet spell, the first reply can take up to a minute, and the chat shows **Loading the AI model** while you wait. It unloads again after 15 minutes without use.
+
+Besides answering your questions, it does a few jobs by itself:
+
+- **[Things To Know](/wiki):** files each article you save and writes its tags and summary.
+- **[Sector Insight](/sector):** reads competitor websites about once a month.
+- **Help library:** checks each day for new or changed help pages, so it can find them when you ask a question.
+
+The news and weather on the landing page don't use AI. They still update every 15 minutes.
+
+Beep Beep's AI files are stored once, inside the app's own folder.
 
 ## Appearance
 

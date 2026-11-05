@@ -29,7 +29,7 @@ import {
   planLiveInfocareRequest,
   runLiveInfocareRequest,
 } from "./ai/infocare-live.js";
-import { readAiConfig, type AiConfig } from "./ai/config.js";
+import { RECOMMENDED_AI_MODEL, readAiConfig, type AiConfig } from "./ai/config.js";
 import { buildChatDocumentPrompt, extractChatDocument } from "./ai/document-reader.js";
 import {
   clearSnapshotRefreshOutcome,
@@ -129,7 +129,7 @@ import {
   POSTMARK_ALERT_AMBER_DAYS,
   POSTMARK_ALERT_RED_DAYS,
   renderLandingIntelligenceFeed,
-  renderLandingPage,
+  renderLandingPage, renderReminders,
 } from "./ui/landing-page.js";
 import type { PostmarkAlert } from "./ui/landing-page.js";
 import {
@@ -234,7 +234,7 @@ import {
   countArchivedWikiArticles,
 } from "./storage/wiki-store.js";
 import { buildWikiTaggingChatMessages, parseWikiTaggingResponse } from "./ai/wiki-context.js";
-import { ensureAiRunning, isAiReady } from "./ai/runtime.js";
+import { assertModelAnswers, ensureAiRunning, findOllamaExecutable, isAiReady, isModelReady } from "./ai/runtime.js";
 import { renderWikiAppShell, resolveWikiFocusPanelId } from "./ui/wiki-app-shell.js";
 import { renderSnippetsAppShell } from "./ui/snippets-app-shell.js";
 import {
@@ -327,7 +327,7 @@ const envSchema = z.object({
   GOOGLE_ANALYTICS_REFRESH_TOKEN: z.string().trim().default(""),
   AI_PROVIDER: z.enum(["builtin", "ollama"]).default("builtin"),
   AI_BASE_URL: z.string().url().default("http://127.0.0.1:11434"),
-  AI_CHAT_MODEL: z.string().trim().default("llama3.1:8b"),
+  AI_CHAT_MODEL: z.string().trim().default(RECOMMENDED_AI_MODEL),
   AI_TIMEOUT_MS: z.coerce.number().int().min(1000).max(300000).default(60000),
   // Small embedding model for the AI chats' help knowledge retrieval.
   AI_EMBED_MODEL: z.string().trim().default("nomic-embed-text"),
@@ -372,17 +372,13 @@ await app.register(multipart, {
 
 const VALID_PANEL_IDS = new Set(["analytics", "waitlist", "meta-ads", "google-analytics", "notes", "chat"]);
 const META_ADS_AUTO_REFRESH_MAX_AGE_MS = 24 * 60 * 60 * 1000;
-const RECOMMENDED_AI_CHAT_MODEL = "qwen3:8b";
-// Job Description intro paragraphs always use this model, whatever the chat
-// model is, so it must never be removed when an older chat model is cleaned up.
-const JD_INTRO_AI_MODEL = "llama3.1:8b";
 let aiModelUpdateInProgress = false;
 let aiModelUpdateStatus: {
   state: "idle" | "downloading" | "success" | "error";
   model: string;
   progress: number | null;
   detail: string | null;
-} = { state: "idle", model: RECOMMENDED_AI_CHAT_MODEL, progress: null, detail: null };
+} = { state: "idle", model: RECOMMENDED_AI_MODEL, progress: null, detail: null };
 
 async function readGeneralChatStreamInput(request: { headers: Record<string, string | string[] | undefined>; body?: { prompt?: string }; parts?: () => AsyncIterable<unknown> }) {
   const contentType = String(request.headers["content-type"] ?? "").toLowerCase();
@@ -477,17 +473,23 @@ async function deleteDotenvValue(key: string) {
   }
 }
 
+// Every Ollama the app starts or calls keeps its models in this one folder, so
+// they aren't downloaded again for each Windows account. Set before anything
+// starts Ollama; child processes inherit it.
+process.env.OLLAMA_MODELS = join(process.cwd(), ".local", "ollama-models");
+
 async function updateRecommendedAiModel() {
   if (aiModelUpdateInProgress) {
-    return { started: false, inProgress: true, model: RECOMMENDED_AI_CHAT_MODEL };
+    return { started: false, inProgress: true, model: RECOMMENDED_AI_MODEL };
   }
 
   const currentModel = aiConfig.AI_CHAT_MODEL;
   const fallbackModel = process.env.AI_CHAT_MODEL_FALLBACK || await readDotenvValue("AI_CHAT_MODEL_FALLBACK");
 
   aiModelUpdateInProgress = true;
-  aiModelUpdateStatus = { state: "downloading", model: RECOMMENDED_AI_CHAT_MODEL, progress: null, detail: null };
-  const child = spawn("ollama", ["pull", RECOMMENDED_AI_CHAT_MODEL], {
+  aiModelUpdateStatus = { state: "downloading", model: RECOMMENDED_AI_MODEL, progress: null, detail: null };
+  let pullError: string | null = null;
+  const child = spawn(findOllamaExecutable() ?? "ollama", ["pull", RECOMMENDED_AI_MODEL], {
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
   });
@@ -498,13 +500,14 @@ async function updateRecommendedAiModel() {
   });
   child.stderr.on("data", (chunk) => {
     trackAiModelPullProgress(chunk);
+    pullError = /Error: *([^\r\n]+)/.exec(String(chunk))?.[1]?.trim() ?? pullError;
     app.log.warn({ output: String(chunk).trim() }, "Ollama model update output");
   });
   child.on("error", (error) => {
     aiModelUpdateInProgress = false;
     aiModelUpdateStatus = {
       state: "error",
-      model: RECOMMENDED_AI_CHAT_MODEL,
+      model: RECOMMENDED_AI_MODEL,
       progress: null,
       detail: error instanceof Error ? error.message : "Ollama could not be started.",
     };
@@ -514,59 +517,60 @@ async function updateRecommendedAiModel() {
     void (async () => {
       try {
         if (code === 0) {
-          if (currentModel !== RECOMMENDED_AI_CHAT_MODEL) {
+          // Test before switching: a model that can't answer here must never
+          // replace the working one, or cost the user their rollback model.
+          aiModelUpdateStatus = { state: "downloading", model: RECOMMENDED_AI_MODEL, progress: 100, detail: "testing model" };
+          try {
+            await assertModelAnswers(aiConfig, RECOMMENDED_AI_MODEL);
+          } catch (error) {
+            if (!sameOllamaModel(RECOMMENDED_AI_MODEL, currentModel) && !sameOllamaModel(RECOMMENDED_AI_MODEL, fallbackModel)) {
+              await removeOllamaModel(RECOMMENDED_AI_MODEL);
+            }
+            throw error;
+          }
+
+          if (currentModel !== RECOMMENDED_AI_MODEL) {
             await setDotenvValue("AI_CHAT_MODEL_FALLBACK", currentModel);
             process.env.AI_CHAT_MODEL_FALLBACK = currentModel;
           }
-          await setDotenvValue("AI_CHAT_MODEL", RECOMMENDED_AI_CHAT_MODEL);
-          aiConfig.AI_CHAT_MODEL = RECOMMENDED_AI_CHAT_MODEL;
-          process.env.AI_CHAT_MODEL = RECOMMENDED_AI_CHAT_MODEL;
-          app.log.info({ model: RECOMMENDED_AI_CHAT_MODEL }, "AI chat model updated");
-          // Load the new model into Ollama's memory now so the first chat message
-          // doesn't pay the cold-start cost.
-          aiModelUpdateStatus = { state: "downloading", model: RECOMMENDED_AI_CHAT_MODEL, progress: 100, detail: "loading model" };
-          await fetch(`${aiConfig.AI_BASE_URL}/api/generate`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ model: RECOMMENDED_AI_CHAT_MODEL, prompt: "", stream: false }),
-            signal: AbortSignal.timeout(120000),
-          }).catch((error) => {
-            app.log.warn({ error }, "New AI model warm-up failed; it will load on first chat instead");
-          });
+          await setDotenvValue("AI_CHAT_MODEL", RECOMMENDED_AI_MODEL);
+          aiConfig.AI_CHAT_MODEL = RECOMMENDED_AI_MODEL;
+          process.env.AI_CHAT_MODEL = RECOMMENDED_AI_MODEL;
+          app.log.info({ model: RECOMMENDED_AI_MODEL }, "AI chat model updated");
           // Refresh the feed before reporting success so the reloaded landing page
           // no longer shows the upgrade card or the update button.
           // The model that was the backup before this update is no longer
           // needed: the model just replaced is the new backup. Remove it from
           // Ollama to free disk space. A failure is logged, never fatal.
-          aiModelUpdateStatus = { state: "downloading", model: RECOMMENDED_AI_CHAT_MODEL, progress: 100, detail: "removing old fallback" };
+          aiModelUpdateStatus = { state: "downloading", model: RECOMMENDED_AI_MODEL, progress: 100, detail: "removing old fallback" };
           if (fallbackModel) await removeOldFallbackModel(fallbackModel);
-          aiModelUpdateStatus = { state: "downloading", model: RECOMMENDED_AI_CHAT_MODEL, progress: 100, detail: "finalising" };
+          aiModelUpdateStatus = { state: "downloading", model: RECOMMENDED_AI_MODEL, progress: 100, detail: "finalising" };
           await refreshLandingIntelligenceFeed(aiConfig, app.log).catch(() => undefined);
-          aiModelUpdateStatus = { state: "success", model: RECOMMENDED_AI_CHAT_MODEL, progress: 100, detail: null };
+          aiModelUpdateStatus = { state: "success", model: RECOMMENDED_AI_MODEL, progress: 100, detail: null };
         } else {
           aiModelUpdateStatus = {
             state: "error",
-            model: RECOMMENDED_AI_CHAT_MODEL,
+            model: RECOMMENDED_AI_MODEL,
             progress: null,
-            detail: `Ollama pull exited with code ${code}.`,
+            detail: `The download failed (${pullError ?? `code ${code}`}).`,
           };
-          app.log.error({ code, model: RECOMMENDED_AI_CHAT_MODEL }, "Ollama model update failed");
+          app.log.error({ code, model: RECOMMENDED_AI_MODEL }, "Ollama model update failed");
         }
       } catch (error) {
         aiModelUpdateStatus = {
           state: "error",
-          model: RECOMMENDED_AI_CHAT_MODEL,
+          model: RECOMMENDED_AI_MODEL,
           progress: null,
           detail: error instanceof Error ? error.message : "AI model update failed.",
         };
-        app.log.error({ error, model: RECOMMENDED_AI_CHAT_MODEL }, "Ollama model update failed");
+        app.log.error({ error, model: RECOMMENDED_AI_MODEL }, "Ollama model update failed");
       } finally {
         aiModelUpdateInProgress = false;
       }
     })();
   });
 
-  return { started: true, inProgress: true, model: RECOMMENDED_AI_CHAT_MODEL };
+  return { started: true, inProgress: true, model: RECOMMENDED_AI_MODEL };
 }
 
 // Ollama treats "name" and "name:latest" as the same model.
@@ -576,14 +580,13 @@ function sameOllamaModel(left: string | null | undefined, right: string | null |
 }
 
 // Deletes a superseded fallback chat model from Ollama, unless anything in the
-// app still uses it: the active model, the rollback backup, the Job
-// Description model or the help knowledge base's embedding model.
+// app still uses it: the active model, the rollback backup or the help
+// knowledge base's embedding model.
 async function removeOldFallbackModel(model: string): Promise<void> {
   const inUse = [
     aiConfig.AI_CHAT_MODEL,
     process.env.AI_CHAT_MODEL_FALLBACK,
-    RECOMMENDED_AI_CHAT_MODEL,
-    JD_INTRO_AI_MODEL,
+    RECOMMENDED_AI_MODEL,
     env.AI_EMBED_MODEL,
   ];
   if (inUse.some((name) => sameOllamaModel(name, model))) {
@@ -591,21 +594,53 @@ async function removeOldFallbackModel(model: string): Promise<void> {
     return;
   }
 
+  await removeOllamaModel(model);
+}
+
+async function removeOllamaModel(model: string): Promise<void> {
   await new Promise<void>((resolve) => {
-    const child = spawn("ollama", ["rm", model], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+    const child = spawn(findOllamaExecutable() ?? "ollama", ["rm", model], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
     child.stderr.on("data", (chunk) => {
-      app.log.warn({ output: String(chunk).trim() }, "Ollama old fallback removal output");
+      app.log.warn({ output: String(chunk).trim() }, "Ollama model removal output");
     });
     child.on("error", (error) => {
-      app.log.error({ error, model }, "Old AI fallback model removal failed to start");
+      app.log.error({ error, model }, "AI model removal failed to start");
       resolve();
     });
     child.on("exit", (code) => {
-      if (code === 0) app.log.info({ model }, "Old AI fallback model removed");
-      else app.log.error({ code, model }, "Old AI fallback model removal failed");
+      if (code === 0) app.log.info({ model }, "AI model removed");
+      else app.log.error({ code, model }, "AI model removal failed");
       resolve();
     });
   });
+}
+
+// A recommendation stays on the landing page until the user updates to it or
+// dismisses it. The dismissal names the model, so a new recommendation shows again.
+const AI_RECOMMENDATION_DISMISSED_KEY = "AI_MODEL_RECOMMENDATION_DISMISSED";
+
+async function readAiModelReminder() {
+  const { aiModel } = getLandingIntelligenceFeed();
+  const dismissed =
+    process.env[AI_RECOMMENDATION_DISMISSED_KEY] || (await readDotenvValue(AI_RECOMMENDATION_DISMISSED_KEY));
+
+  return aiModel.isUpgrade && dismissed !== aiModel.recommendedModel
+    ? { model: aiModel.recommendedModel, reason: aiModel.sellingPoint, confirm: aiModel.updatePrompt }
+    : null;
+}
+
+async function readLandingReminders() {
+  const [reminders, agreementStatus, aiModelReminder] = await Promise.all([
+    getDueAndOverdueTasks(),
+    getAgreementStatus(),
+    readAiModelReminder(),
+  ]);
+  const ktcaReminder =
+    agreementStatus.expired || agreementStatus.expiringSoon
+      ? { expired: agreementStatus.expired, daysUntilExpiry: agreementStatus.daysUntilExpiry ?? 0 }
+      : null;
+
+  return { reminders, ktcaReminder, aiModelReminder };
 }
 
 async function rollbackAiModel() {
@@ -622,6 +657,11 @@ async function rollbackAiModel() {
   aiConfig.AI_CHAT_MODEL = fallbackModel;
   process.env.AI_CHAT_MODEL = fallbackModel;
   process.env.AI_CHAT_MODEL_FALLBACK = currentModel;
+  // Rolling back says the recommended model wasn't wanted, so don't offer it again.
+  if (currentModel === RECOMMENDED_AI_MODEL) {
+    await setDotenvValue(AI_RECOMMENDATION_DISMISSED_KEY, currentModel);
+    process.env[AI_RECOMMENDATION_DISMISSED_KEY] = currentModel;
+  }
   void refreshLandingIntelligenceFeed(aiConfig, app.log);
 
   return { model: fallbackModel, fallbackModel: currentModel };
@@ -1150,22 +1190,13 @@ async function getPostmarkAlert(now = new Date()): Promise<PostmarkAlert | null>
 
 app.get("/", async (_request, reply) => {
   void tickWeeklySnapshotRefresh(app.log);
-  const [reminders, agreementStatus, postmarkAlert] = await Promise.all([
-    getDueAndOverdueTasks(),
-    getAgreementStatus(),
-    getPostmarkAlert(),
-  ]);
-  const ktcaReminder =
-    agreementStatus.expired || agreementStatus.expiringSoon
-      ? { expired: agreementStatus.expired, daysUntilExpiry: agreementStatus.daysUntilExpiry ?? 0 }
-      : null;
+  const [landingReminders, postmarkAlert] = await Promise.all([readLandingReminders(), getPostmarkAlert()]);
   return reply
     .type("text/html; charset=utf-8")
     .send(
       renderLandingPage({
-        reminders,
+        ...landingReminders,
         intelligenceFeed: getLandingIntelligenceFeed(),
-        ktcaReminder,
         postmarkAlert,
       }),
     );
@@ -1351,6 +1382,14 @@ app.post("/contacts/upload", async (request, reply) => {
     await unlink(tempPath).catch(() => undefined);
   }
 });
+
+// The model unloads when idle, so a reply can wait on a cold load. Every chat
+// panel shows this in place of its pending text until the first chunk arrives.
+async function announceModelLoad(writeEvent: (event: string, data: unknown) => void) {
+  if (aiConfig.AI_PROVIDER === "ollama" && !(await isModelReady(aiConfig))) {
+    writeEvent("status", { message: "Loading the AI model. This can take up to a minute..." });
+  }
+}
 
 app.get<{ Querystring: { conversation?: string; group?: string } }>("/chat", async (request, reply) => {
   // Every AI-dependent page warms the local runtime the same way.
@@ -1559,6 +1598,7 @@ app.post<{ Params: { id: string }; Body: { prompt?: string } }>(
         }
       }
 
+      await announceModelLoad(writeEvent);
       const groundingWithWiki = streamInput.hasDocument
         ? liveGrounding
         : await withWikiGrounding(prompt, liveGrounding);
@@ -1596,7 +1636,8 @@ app.post<{ Params: { id: string }; Body: { prompt?: string } }>(
 
 app.get<{ Querystring: { centre?: string; window?: string; panel?: string; sort?: string; waitlistSection?: string; googleAnalyticsSection?: string; gaRange?: string; gaFrom?: string; gaTo?: string; gaFromMonth?: string; gaFromYear?: string; gaToMonth?: string; gaToYear?: string; metaRefreshed?: string; integrationError?: string } }>("/app", async (request, reply) => {
   void tickWeeklySnapshotRefresh(app.log);
-  void ensureAiRunning(aiConfig, app.log);
+  // Most visits here don't use Beep Beep, so leave the model unloaded.
+  void ensureAiRunning(aiConfig, app.log, { loadModel: false });
 
   const latestSnapshotSet = await readLatestAnalyticsSnapshotSet();
   const centre = Number.parseInt(String(request.query?.centre ?? ""), 10);
@@ -1980,22 +2021,15 @@ function parseExtrasFromForm(body: Record<string, unknown>): Record<string, stri
   return found ? extras : undefined;
 }
 
-// JD blurb generation deliberately uses llama3.1:8b instead of whatever
-// model the dashboard chat is configured for: it's not a "thinking" model,
-// so it skips the multi-minute hidden <think> reasoning that made qwen3
-// time out on this hardware for a multi-paragraph draft (measured ~13
-// tokens/sec, 39s+ for even a one-sentence reply). The timeout is generous
-// because a cold load plus generation measured ~80s CPU-only, and much more
-// when something else (e.g. a game) holds the GPU.
-const jdBlurbAiConfig: AiConfig = {
-  ...aiConfig,
-  AI_CHAT_MODEL: "llama3.1:8b",
-  AI_TIMEOUT_MS: 240000,
-};
+// JD drafts run with thinking off: a thinking model's hidden reasoning made a
+// multi-paragraph draft time out on this hardware (measured ~13 tokens/sec).
+// The timeout is generous because a cold load plus generation measured ~80s
+// CPU-only, and much more when something else (e.g. a game) holds the GPU.
+const JD_BLURB_AI_TIMEOUT_MS = 240000;
 
 app.get<{ Querystring: { panel?: string; jd?: string } }>("/jd", async (request, reply) => {
   // Load the blurb model while the user is still reading the page.
-  void ensureAiRunning(jdBlurbAiConfig, app.log);
+  void ensureAiRunning(aiConfig, app.log);
 
   const selectedJdId = parsePositiveInt(request.query?.jd);
   const focusPanelId =
@@ -2262,8 +2296,9 @@ async function generateJdIntroParagraphIfEmpty(id: number): Promise<string | nul
   const JD_INTRO_AI_TIMEOUT_MS = 120000;
   const introParagraph = cleanGeneratedIntroParagraph(
     await runLocalChat(
-      { ...aiConfig, AI_CHAT_MODEL: JD_INTRO_AI_MODEL, AI_TIMEOUT_MS: JD_INTRO_AI_TIMEOUT_MS },
+      { ...aiConfig, AI_TIMEOUT_MS: JD_INTRO_AI_TIMEOUT_MS },
       messages,
+      { think: false },
     ),
   );
 
@@ -2292,7 +2327,7 @@ function generateJdBlurb(id: number): Promise<string> {
 async function runJdBlurbGeneration(id: number): Promise<string> {
   // Make sure the local AI server is up (starting it if needed) before
   // asking it for anything; otherwise the request just fails.
-  if (!(await ensureAiRunning(jdBlurbAiConfig, app.log))) {
+  if (!(await ensureAiRunning(aiConfig, app.log))) {
     throw new AiClientError("The local AI server isn't running and couldn't be started.", 503);
   }
 
@@ -2324,7 +2359,7 @@ async function runJdBlurbGeneration(id: number): Promise<string> {
     fallbackBlurbs,
     isEnviroschool: centreProfile?.isEnviroschool ?? false,
   });
-  const html = await runLocalChat(jdBlurbAiConfig, messages);
+  const html = await runLocalChat({ ...aiConfig, AI_TIMEOUT_MS: JD_BLURB_AI_TIMEOUT_MS }, messages, { think: false });
   await saveBlurb(id, html);
   return html;
 }
@@ -2657,6 +2692,7 @@ app.post<{
     if (aiConfig.AI_PROVIDER === "builtin") {
       writeEvent("chunk", { chunk: unavailable });
     } else {
+      await announceModelLoad(writeEvent);
       for await (const chunk of streamLocalChat(aiConfig, buildSnippetsAiChatMessages(context, prompt, request.body?.messages))) {
         writeEvent("chunk", { chunk });
       }
@@ -2995,6 +3031,7 @@ app.post<{
     if (aiConfig.AI_PROVIDER === "builtin") {
       writeEvent("chunk", { chunk: fallback });
     } else {
+      await announceModelLoad(writeEvent);
       for await (const chunk of streamLocalChat(aiConfig, buildSectorAiChatMessages(context, prompt, request.body?.messages))) {
         writeEvent("chunk", { chunk });
       }
@@ -4243,15 +4280,8 @@ app.post<{
     return { error: !prompt ? "Prompt is required." : "Prompt is too long. Keep it under 2,000 characters." };
   }
 
-  const localCommsGrounding = await buildLocalCommsGrounding(prompt);
-  const help = await findHelpGrounding(prompt, request.body?.messages, commsChatHelpOptions(!!localCommsGrounding?.grounding));
-  const postmarkData = localCommsGrounding?.postmark ?? await readPostmarkDashboardData();
-  const context = buildCommsAiDashboardContext({
-    postmark: postmarkData,
-    mailchimp: await readMailchimpDashboardData({ serverPrefix: mailchimpConfigStatus.serverPrefix ?? undefined }),
-    formstack: await readFormstackDashboardData(),
-  });
-
+  // Open the stream before the lookups below: help retrieval can queue behind a
+  // model load, and the panel needs to say so while it waits.
   reply.raw.writeHead(200, {
     "Content-Type": "text/event-stream; charset=utf-8",
     "Cache-Control": "no-cache, no-transform",
@@ -4262,6 +4292,32 @@ app.post<{
     reply.raw.write(`event: ${event}\n`);
     reply.raw.write(`data: ${JSON.stringify(data)}\n\n`);
   };
+
+  await announceModelLoad(writeEvent);
+
+  const prepared = await (async () => {
+    const localCommsGrounding = await buildLocalCommsGrounding(prompt);
+    const help = await findHelpGrounding(prompt, request.body?.messages, commsChatHelpOptions(!!localCommsGrounding?.grounding));
+    const postmarkData = localCommsGrounding?.postmark ?? await readPostmarkDashboardData();
+    const context = buildCommsAiDashboardContext({
+      postmark: postmarkData,
+      mailchimp: await readMailchimpDashboardData({ serverPrefix: mailchimpConfigStatus.serverPrefix ?? undefined }),
+      formstack: await readFormstackDashboardData(),
+    });
+
+    return { localCommsGrounding, help, context };
+  })().catch((error: unknown) => {
+    app.log.warn({ error }, "Communications chat could not prepare its context");
+    writeEvent("error", { error: error instanceof Error ? error.message : "Chat request failed." });
+    return null;
+  });
+
+  if (!prepared) {
+    reply.raw.end();
+    return;
+  }
+
+  const { localCommsGrounding, help, context } = prepared;
 
   try {
     if (aiConfig.AI_PROVIDER === "builtin") {
@@ -4321,6 +4377,7 @@ app.post<{
     if (aiConfig.AI_PROVIDER === "builtin") {
       writeEvent("chunk", { chunk: buildBuiltinTasksAnswer(context, prompt) });
     } else {
+      await announceModelLoad(writeEvent);
       for await (const chunk of streamLocalChat(aiConfig, buildTasksAiChatMessages(context, prompt, request.body?.messages))) {
         writeEvent("chunk", { chunk });
       }
@@ -4563,37 +4620,8 @@ app.post<{
     }
   }
 
-  const help = await findHelpGrounding(prompt, request.body?.messages, DATA_CHAT_HELP_OPTIONS);
-  const latestSnapshotSet = await readLatestAnalyticsSnapshotSet();
-  const latestRunDate = latestSnapshotSet ? new Date(latestSnapshotSet.runDate) : new Date();
-  const windowStartDate = resolveWindowStartDate(latestRunDate, selectedWindowKey);
-  const metaAdsDashboardData = await readMetaAdsDashboardData({
-    fromDate: windowStartDate,
-    toDate: latestRunDate,
-  });
-  const googleAnalyticsSnapshot = await readLatestGoogleAnalyticsDailySnapshot(env.GOOGLE_ANALYTICS_PROPERTY_ID);
-  const selectedCentreNotes =
-    memorySelectedCentreKey == null
-      ? []
-      : await readLatestMetaRecommendationNotesForCentre(memorySelectedCentreKey, 10);
-  const context = buildAiDashboardContext({
-    snapshotSet: latestSnapshotSet,
-    selectedCentreKey: memorySelectedCentreKey,
-    selectedWindowKey,
-    metaAdsDashboardData,
-    googleAnalyticsSnapshot,
-    selectedCentreNotes,
-  });
-  const messages = buildAiChatMessages(
-    buildDashboardSystemPrompt(),
-    context,
-    prompt,
-    request.body?.messages,
-    memory,
-    await withWikiGrounding(prompt, joinGrounding(liveGrounding, help?.text)),
-  );
-  const deterministicAnswer = buildDeterministicChatAnswer(context, prompt);
-
+  // Open the stream before the lookups below: help retrieval can queue behind a
+  // model load, and the panel needs to say so while it waits.
   reply.raw.writeHead(200, {
     "Content-Type": "text/event-stream; charset=utf-8",
     "Cache-Control": "no-cache, no-transform",
@@ -4604,6 +4632,53 @@ app.post<{
     reply.raw.write(`event: ${event}\n`);
     reply.raw.write(`data: ${JSON.stringify(data)}\n\n`);
   };
+
+  await announceModelLoad(writeEvent);
+
+  const prepared = await (async () => {
+    const help = await findHelpGrounding(prompt, request.body?.messages, DATA_CHAT_HELP_OPTIONS);
+    const latestSnapshotSet = await readLatestAnalyticsSnapshotSet();
+    const latestRunDate = latestSnapshotSet ? new Date(latestSnapshotSet.runDate) : new Date();
+    const windowStartDate = resolveWindowStartDate(latestRunDate, selectedWindowKey);
+    const metaAdsDashboardData = await readMetaAdsDashboardData({
+      fromDate: windowStartDate,
+      toDate: latestRunDate,
+    });
+    const googleAnalyticsSnapshot = await readLatestGoogleAnalyticsDailySnapshot(env.GOOGLE_ANALYTICS_PROPERTY_ID);
+    const selectedCentreNotes =
+      memorySelectedCentreKey == null
+        ? []
+        : await readLatestMetaRecommendationNotesForCentre(memorySelectedCentreKey, 10);
+    const context = buildAiDashboardContext({
+      snapshotSet: latestSnapshotSet,
+      selectedCentreKey: memorySelectedCentreKey,
+      selectedWindowKey,
+      metaAdsDashboardData,
+      googleAnalyticsSnapshot,
+      selectedCentreNotes,
+    });
+    const messages = buildAiChatMessages(
+      buildDashboardSystemPrompt(),
+      context,
+      prompt,
+      request.body?.messages,
+      memory,
+      await withWikiGrounding(prompt, joinGrounding(liveGrounding, help?.text)),
+    );
+
+    return { help, context, messages, deterministicAnswer: buildDeterministicChatAnswer(context, prompt) };
+  })().catch((error: unknown) => {
+    app.log.warn({ error }, "Dashboard chat could not prepare its context");
+    writeEvent("error", { error: error instanceof Error ? error.message : "Chat request failed." });
+    return null;
+  });
+
+  if (!prepared) {
+    reply.raw.end();
+    return;
+  }
+
+  const { help, context, messages, deterministicAnswer } = prepared;
 
   const writeAnswerChunks = (answer: string) => {
     for (const chunk of answer.split(/(\s+)/).filter(Boolean)) {
@@ -4983,6 +5058,24 @@ app.get("/actions/update-ai-model/status", async (_request, reply) => {
   return reply.type("application/json; charset=utf-8").send({ ok: true, ...aiModelUpdateStatus });
 });
 
+app.post("/actions/dismiss-ai-recommendation", async (_request, reply) => {
+  const { aiModel } = getLandingIntelligenceFeed();
+
+  if (!aiModel.isUpgrade) {
+    reply.code(400);
+
+    return reply.type("application/json; charset=utf-8").send({ ok: false, error: "No AI model is being recommended." });
+  }
+
+  await setDotenvValue(AI_RECOMMENDATION_DISMISSED_KEY, aiModel.recommendedModel);
+  process.env[AI_RECOMMENDATION_DISMISSED_KEY] = aiModel.recommendedModel;
+  const { reminders, ktcaReminder, aiModelReminder } = await readLandingReminders();
+
+  return reply
+    .type("application/json; charset=utf-8")
+    .send({ ok: true, html: renderReminders(reminders, ktcaReminder, aiModelReminder) });
+});
+
 app.post("/actions/rollback-ai-model", async (_request, reply) => {
   try {
     const result = await rollbackAiModel();
@@ -5279,9 +5372,9 @@ async function start() {
   logIntegrationConfigWarnings();
   void checkPostmarkWebhookOnStartup();
   startCloudflarePostmarkSyncLoop();
-  // Start Ollama and load the chat model as soon as the app opens, so the
-  // first AI request isn't stuck behind a cold model load.
-  void ensureAiRunning(aiConfig, app.log);
+  // Start Ollama but leave the chat model unloaded: AI use is occasional, and
+  // the model would otherwise hold most of the 4GB GPU from logon.
+  void ensureAiRunning(aiConfig, app.log, { loadModel: false });
   void startLandingIntelligenceFeedLoop(aiConfig, app.log);
   startHelpKbSyncLoop();
   startSectorSyncLoop();

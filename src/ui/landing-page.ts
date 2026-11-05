@@ -69,6 +69,27 @@ function renderKtcaReminderItem(reminder: KtcaReminder): string {
   `;
 }
 
+export type AiModelReminder = {
+  model: string;
+  reason: string;
+  confirm: string;
+};
+
+// Stays in the strip until the user updates or dismisses this recommendation.
+function renderAiModelReminderItem(reminder: AiModelReminder): string {
+  return `
+    <div class="landing-reminder flex flex-col gap-4 text-body">
+      <span class="landing-reminder__due label-case text-muted">Recommended</span>
+      <span class="landing-reminder__title font-strong text-strong">AI model update: ${escapeHtml(reminder.model)}</span>
+      <span class="landing-reminder__meta text-muted">${escapeHtml(reminder.reason)}</span>
+      <span class="flex flex-wrap gap-8">
+        <button type="button" data-update-ai-model data-confirm="${escapeHtml(reminder.confirm)}"><span class="landing__update-ai-label">Update AI model</span></button>
+        <button type="button" data-dismiss-ai-recommendation>Dismiss</button>
+      </span>
+    </div>
+  `;
+}
+
 export type KtcaReminder = {
   expired: boolean;
   daysUntilExpiry: number;
@@ -107,20 +128,33 @@ function renderPostmarkAlert(alert: PostmarkAlert | null | undefined): string {
   `;
 }
 
-function renderReminders(reminders: TaskReminderFeed | undefined, ktcaReminder?: KtcaReminder | null): string {
+export function renderReminders(
+  reminders: TaskReminderFeed | undefined,
+  ktcaReminder?: KtcaReminder | null,
+  aiModelReminder?: AiModelReminder | null,
+): string {
   const taskItems = reminders
     ? [
         ...reminders.overdue.map((reminder) => renderReminderItem(reminder, true)),
         ...reminders.dueSoon.map((reminder) => renderReminderItem(reminder, false)),
       ]
     : [];
-  const items = [...(ktcaReminder ? [renderKtcaReminderItem(ktcaReminder)] : []), ...taskItems].join("");
-  const total = (reminders?.total ?? 0) + (ktcaReminder ? 1 : 0);
+  const items = [
+    ...(aiModelReminder ? [renderAiModelReminderItem(aiModelReminder)] : []),
+    ...(ktcaReminder ? [renderKtcaReminderItem(ktcaReminder)] : []),
+    ...taskItems,
+  ].join("");
+  const total = (reminders?.total ?? 0) + (ktcaReminder ? 1 : 0) + (aiModelReminder ? 1 : 0);
   if (total === 0) return "";
   const overdueCount = (reminders?.overdue.length ?? 0) + (ktcaReminder ? 1 : 0);
-  const heading = overdueCount > 0 ? `${overdueCount} overdue · ${total} need attention` : `${total} due soon`;
+  const heading =
+    overdueCount > 0
+      ? `${overdueCount} overdue · ${total} need attention`
+      : aiModelReminder
+        ? `${total} need${total === 1 ? "s" : ""} attention`
+        : `${total} due soon`;
   return `
-    <aside class="landing__reminders flex flex-col gap-10" aria-label="Task reminders">
+    <aside class="landing__reminders flex flex-col gap-10" aria-label="Task reminders" data-reminders-strip>
       <h2 class="landing-reminders__heading font-strong label-case text-muted">${escapeHtml(heading)}</h2>
       <div class="landing-reminders__list flex flex-col gap-10">${items}</div>
     </aside>
@@ -145,11 +179,9 @@ function renderFeedItem(item: LandingIntelligenceItem) {
   const icon =
     item.kind === "weather"
       ? "bi-cloud-rain"
-      : item.kind === "ai-model"
-        ? "bi-cpu"
-        : item.kind === "system"
-          ? "bi-info-circle"
-          : "bi-newspaper";
+      : item.kind === "system"
+        ? "bi-info-circle"
+        : "bi-newspaper";
   const body = `
     <span class="landing-feed-item__icon inline-flex justify-center"><i class="bi ${icon}" aria-hidden="true"></i></span>
     <span class="landing-feed-item__content min-w-0 flex items-center gap-8 nowrap">
@@ -206,7 +238,7 @@ export function renderLandingIntelligenceFeed(feed: LandingIntelligenceFeed | un
     id: "feed-loading",
     kind: "system",
     title: "Gathering local intelligence",
-    brief: "News, weather, and AI model checks will appear here after the first refresh.",
+    brief: "News and weather will appear here after the first refresh.",
     href: null,
     source: "Marketing Helper AI",
     publishedAt: null,
@@ -253,6 +285,7 @@ export type LandingPageOptions = {
   reminders?: TaskReminderFeed;
   intelligenceFeed?: LandingIntelligenceFeed;
   ktcaReminder?: KtcaReminder | null;
+  aiModelReminder?: AiModelReminder | null;
   postmarkAlert?: PostmarkAlert | null;
 };
 
@@ -278,7 +311,7 @@ export function renderLandingPage(options: LandingPageOptions = {}) {
 
   const placeholderTiles: string[] = [];
 
-  const remindersHtml = renderReminders(options.reminders, options.ktcaReminder);
+  const remindersHtml = renderReminders(options.reminders, options.ktcaReminder, options.aiModelReminder);
 
   const secondaryTileRow = secondaryTiles
     .map(
@@ -341,11 +374,11 @@ export function renderLandingPage(options: LandingPageOptions = {}) {
           <i class="bi bi-arrow-clockwise" aria-hidden="true"></i>
           <span class="landing__restart-label">Restart server</span>
         </button>
-        ${(options.intelligenceFeed?.aiModel?.isUpgrade ?? true) ? `<button type="button" class="landing__restart inline-flex items-center gap-8 text-muted" data-update-ai-model aria-label="Update the local AI model">
+        ${(options.intelligenceFeed?.aiModel?.isUpgrade ?? true) ? `<button type="button" class="landing__restart inline-flex items-center gap-8 text-muted" data-update-ai-model data-confirm="${escapeHtml(options.intelligenceFeed?.aiModel?.updatePrompt ?? "")}" aria-label="Update the local AI model">
           <i class="bi bi-cpu" aria-hidden="true"></i>
           <span class="landing__update-ai-label">Update AI model</span>
         </button>` : ""}
-        <button type="button" class="landing__restart inline-flex items-center gap-8 text-muted" data-rollback-ai-model aria-label="Rollback the local AI model"${options.intelligenceFeed?.aiModel?.fallbackModel ? "" : " disabled"}>
+        <button type="button" class="landing__restart inline-flex items-center gap-8 text-muted" data-rollback-ai-model data-confirm="${escapeHtml(options.intelligenceFeed?.aiModel?.rollbackPrompt ?? "")}" aria-label="Rollback the local AI model"${options.intelligenceFeed?.aiModel?.fallbackModel ? "" : " disabled"}>
           <i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i>
           <span class="landing__rollback-ai-label">Rollback AI model</span>
         </button>
@@ -416,7 +449,7 @@ export function renderLandingPage(options: LandingPageOptions = {}) {
           var label = btn.querySelector(labelSelector);
           btn.addEventListener("click", function () {
             if (btn.disabled) return;
-            if (!window.confirm(confirmText)) {
+            if (!window.confirm(btn.dataset.confirm || confirmText)) {
               return;
             }
             btn.disabled = true;
@@ -440,26 +473,35 @@ export function renderLandingPage(options: LandingPageOptions = {}) {
         bindAction(
           "[data-rollback-ai-model]",
           ".landing__rollback-ai-label",
-          "Rollback AI Chat to the fallback model?",
+          "Switch back to the previous AI model?",
           "/actions/rollback-ai-model",
           "Rolling back...",
           "Rolled back"
         );
       })();
       (function () {
-        var btn = document.querySelector("[data-update-ai-model]");
-        if (!btn) return;
-        var label = btn.querySelector(".landing__update-ai-label");
+        var buttons = Array.from(document.querySelectorAll("[data-update-ai-model]"));
+        if (!buttons.length) return;
         var defaultText = "Update AI model";
         function setLabel(text) {
-          if (label) label.textContent = text;
+          document.querySelectorAll(".landing__update-ai-label").forEach(function (label) {
+            label.textContent = text;
+          });
+        }
+        function setDisabled(disabled) {
+          buttons.forEach(function (button) { button.disabled = disabled; });
         }
         function reset(message) {
           setLabel(message);
           setTimeout(function () {
             setLabel(defaultText);
-            btn.disabled = false;
+            setDisabled(false);
           }, 4000);
+        }
+        // Stays on the button until the next attempt, so the reason can be read.
+        function showFailure(detail) {
+          setLabel("Update failed: " + (detail || "unknown error") + " Your current model is unchanged.");
+          setDisabled(false);
         }
         function pollStatus(deadline) {
           fetch("/actions/update-ai-model/status", { cache: "no-store" })
@@ -471,7 +513,7 @@ export function renderLandingPage(options: LandingPageOptions = {}) {
                 return;
               }
               if (status.state === "error") {
-                reset("Update failed");
+                showFailure(status.detail);
                 return;
               }
               if (status.state === "downloading") {
@@ -499,18 +541,19 @@ export function renderLandingPage(options: LandingPageOptions = {}) {
           .then(function (res) { return res.json(); })
           .then(function (status) {
             if (status.state === "downloading") {
-              btn.disabled = true;
+              setDisabled(true);
               setLabel("Downloading…");
               pollStatus(Date.now() + 45 * 60 * 1000);
             }
+            if (status.state === "error") showFailure(status.detail);
           })
           .catch(function () {});
-        btn.addEventListener("click", function () {
-          if (btn.disabled) return;
-          if (!window.confirm("Pull the recommended Ollama model and set it for AI Chat? The current model will be kept as rollback fallback.")) {
+        function startUpdate() {
+          if (buttons[0].disabled) return;
+          if (!window.confirm(buttons[0].dataset.confirm || "Install the recommended AI model?")) {
             return;
           }
-          btn.disabled = true;
+          setDisabled(true);
           setLabel("Starting…");
           fetch("/actions/update-ai-model", {
             method: "POST",
@@ -523,14 +566,39 @@ export function renderLandingPage(options: LandingPageOptions = {}) {
                 reset("Update failed");
                 return;
               }
-              // Poll for up to 45 minutes — qwen3:8b is a ~5 GB download.
+              // Poll for up to 45 minutes: a model is a multi-GB download.
               pollStatus(Date.now() + 45 * 60 * 1000);
             })
             .catch(function () {
               reset("Update failed");
             });
-        });
+        }
+        buttons.forEach(function (button) { button.addEventListener("click", startUpdate); });
       })();
+      document.addEventListener("click", function (event) {
+        var dismiss = event.target.closest("[data-dismiss-ai-recommendation]");
+        if (!dismiss) return;
+        dismiss.disabled = true;
+        fetch("/actions/dismiss-ai-recommendation", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: "{}",
+        })
+          .then(function (res) { return res.json(); })
+          .then(function (payload) {
+            if (!payload.ok) throw new Error("Dismiss failed");
+            var strip = document.querySelector("[data-reminders-strip]");
+            if (!strip) return;
+            var wrapper = document.createElement("div");
+            wrapper.innerHTML = payload.html;
+            if (wrapper.firstElementChild) strip.replaceWith(wrapper.firstElementChild);
+            else strip.remove();
+          })
+          .catch(function () {
+            dismiss.disabled = false;
+            dismiss.textContent = "Dismiss failed";
+          });
+      });
       (function () {
         var feed = document.querySelector("[data-landing-feed]");
         if (!feed) return;

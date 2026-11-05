@@ -2283,6 +2283,10 @@ function renderAiChatScript() {
                 throw new Error(payload.error || "AI request failed.");
               }
 
+              if (parsed.event === "status" && !hasStarted) {
+                bodyElement.textContent = payload.message;
+              }
+
               if (parsed.event === "sources") {
                 sources = payload.sources || [];
               }

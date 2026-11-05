@@ -1,5 +1,5 @@
 param(
-  [string]$Model = "llama3.1:8b",
+  [string]$Model = "",
   # Embedding model for the AI chats' help knowledge retrieval (AI_EMBED_MODEL).
   [string]$EmbedModel = "nomic-embed-text",
   [string]$RuntimeDir = ".local\ollama",
@@ -8,6 +8,10 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+if (-not $Model) {
+  $Model = if ($env:AI_CHAT_MODEL) { $env:AI_CHAT_MODEL } else { (Select-String -Path (Join-Path $PSScriptRoot "..\.env.example") -Pattern '^AI_CHAT_MODEL=(.+)$').Matches[0].Groups[1].Value.Trim() }
+}
 
 function Resolve-RepoPath {
   param([string]$Path)

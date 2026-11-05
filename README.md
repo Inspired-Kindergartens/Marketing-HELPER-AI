@@ -112,6 +112,14 @@ Start the compiled server in a background supervisor:
 npm run server:background
 ```
 
+Install the logon task that keeps the server running (`Marketing Helper AI Server`):
+
+```bash
+npm run server:install
+```
+
+Run this from the Windows account that should own the server, because the task is registered for the current user. It launches `scripts/run-build-persistent.cmd` through `conhost.exe --headless`, so no console window appears. Output goes to `.persistent-server.log`, or to `.persistent-server-fallback.log` if that file is locked. A detached Ollama process can hold the lock after the server's process tree is killed.
+
 By default the app runs on `http://127.0.0.1:3000`.
 
 Useful checks:
@@ -935,6 +943,20 @@ Interpretation:
 - Ads with matched page traffic suggest families are reaching relevant pages.
 - Active ads with little matched traffic may need creative, link, targeting, or landing-page review.
 
+## When the AI Runs
+
+Ollama starts with the server, but the chat model (`AI_CHAT_MODEL`) does not load at startup: `start()` calls `ensureAiRunning(aiConfig, app.log, { loadModel: false })`. The model loads on first use, or when `/chat`, `/jd`, `/snippets` or `/wiki` is opened, and unloads after `AI_KEEP_ALIVE` (15 minutes) without a request. When a streamed chat reply has to wait for the load, `announceModelLoad` sends a `status` SSE event and the panel shows that message until the first chunk arrives.
+
+| Job | Trigger | Model |
+| --- | --- | --- |
+| Beep Beep chats | The user asks | Chat model |
+| JD intro paragraphs and blurbs | The user asks | Chat model, with `think: false` so hidden reasoning can't time out a long draft |
+| Things To Know category, tags and summary | An article is saved | Chat model |
+| Sector Insight extraction | Daily check; runs when the last complete run is over 30 days old, or on **Update now** | Chat model |
+| Help knowledge base embeddings | Daily check for changed documents, plus each chat question | `AI_EMBED_MODEL`, CPU only |
+
+The landing feed uses no AI.
+
 ## AI Chat Panel
 
 The panel shows a generated summary for the selected centre and includes an interactive local AI composer named Beep Beep. The summary combines:
@@ -977,13 +999,13 @@ Local AI configuration is controlled through `.env`:
 
 - `AI_PROVIDER=builtin`
 - `AI_BASE_URL=http://127.0.0.1:11434`
-- `AI_CHAT_MODEL=llama3.1:8b`
+- `AI_CHAT_MODEL=qwen3:8b`
 - `AI_TIMEOUT_MS=60000`
 - `AI_EMBED_MODEL=nomic-embed-text` - the embedding model for the help knowledge base (see below).
 
 ### Landing news and weather feed refresh
 
-`src/landing-intelligence.ts` rebuilds the feed on server start and then every 15 minutes (`startLandingIntelligenceFeedLoop`). Page loads only read the in-memory feed. Adding or removing a search text forces a rebuild. Only one refresh runs at a time (`refreshInFlight`). The whole refresh races `REFRESH_DEADLINE_MS` (10 min), so an await that never settles can't hold that slot for ever (that happened on 2026-10-28 and froze the feed for a day). On timeout, the previous items stay, status becomes `error`, and the log line names the sources still pending (`news`, `weather`, `brand mentions`) or the stage it stopped at. The next tick starts a fresh refresh. Each run appends to `logs/landing-intelligence-feed.jsonl`, so a stale last-write time on that file means no refresh has finished.
+`src/landing-intelligence.ts` rebuilds the feed on server start and then every 15 minutes (`startLandingIntelligenceFeedLoop`). Page loads only read the in-memory feed. Headlines and briefs are shown as the publisher supplied them, with no AI rewriting. Adding or removing a search text forces a rebuild. Only one refresh runs at a time (`refreshInFlight`). The whole refresh races `REFRESH_DEADLINE_MS` (10 min), so an await that never settles can't hold that slot for ever (that happened on 2026-10-28 and froze the feed for a day). On timeout, the previous items stay, status becomes `error`, and the log line names the sources still pending (`news`, `weather`, `brand mentions`) or the stage it stopped at. The next tick starts a fresh refresh. Each run appends to `logs/landing-intelligence-feed.jsonl`, so a stale last-write time on that file means no refresh has finished.
 
 How news is judged relevant (`assessNewsCandidate`):
 - **NZ/AU check uses the publisher, not the link.** Google News links all go to `news.google.com`, so `parseRss` keeps the `<source url>` as `sourceUrl`, and `publisherHostname` uses it. Without this, 1News, SunLive and Stuff results were rejected as "not NZ/AU".
@@ -995,9 +1017,24 @@ How news is judged relevant (`assessNewsCandidate`):
 
 The ticker is a CSS animation (`landing-feed-scroll`). Dragging it scrubs: the landing-page script sets the animation's `currentTime` from the drag distance (Web Animations API), so the ticker carries on from where it was dropped. A drag of 4px or more swallows the following click, so dropping on a story doesn't open it. Listeners are delegated on `document` because the feed fragment is swapped in place on refresh.
 
+### The AI model design
+
+The app has one AI model, held in the `AI_CHAT_MODEL` variable. Every feature uses that variable, and no function may ask for a particular model.
+
+1. Claude recommends a model by changing `RECOMMENDED_AI_MODEL` in `src/ai/config.ts`, the only place a chat model is named.
+2. The user installs it with **Update AI model**, and it becomes the model everywhere.
+3. The model it replaced is kept as the rollback model (`AI_CHAT_MODEL_FALLBACK`), so **Rollback AI model** can restore it if performance is poor.
+4. The model before that is permanently deleted to free storage.
+
+So at most two chat models are ever installed: the current one and the rollback one. The one named exception is the help search model (`AI_EMBED_MODEL`): it cannot chat, runs on the CPU only, and does a job chat models can't.
+
+All models are stored once in `.local/ollama-models`. `src/server.ts` and `scripts/open-marketing-helper.ps1` set `OLLAMA_MODELS` so that Ollama never falls back to its per-account default folder. To turn a model's thinking off for one task, pass `{ think: false }` to `runLocalChat` rather than using a different model. `test/ai-model-design.test.ts` fails if a model is hard-coded. `aiConfig` is changed in place by update and rollback, so read it at call time and never copy it at startup.
+
 ### Updating the local AI model
 
-The landing page footer has **Update AI model** (shown when `RECOMMENDED_MODEL` in `src/landing-intelligence.ts` differs from `AI_CHAT_MODEL`; the model actually pulled is `RECOMMENDED_AI_CHAT_MODEL` in `src/server.ts`, so keep the two in step) and **Rollback AI model**. An update pulls the recommended model with `ollama pull`, moves the current model to `AI_CHAT_MODEL_FALLBACK`, switches `AI_CHAT_MODEL`, and warms the new model up. It then runs `ollama rm` on the model that was the fallback *before* the update, since it is no longer needed, unless it is still in use as the active model, the new fallback, the Job Description model (`JD_INTRO_AI_MODEL`, always `llama3.1:8b`) or the embedding model (`AI_EMBED_MODEL`). A removal failure is logged and never fails the update. Rollback swaps `AI_CHAT_MODEL` and `AI_CHAT_MODEL_FALLBACK`.
+A recommendation appears as a card in the landing page reminders strip when `RECOMMENDED_AI_MODEL` differs from `AI_CHAT_MODEL`. The card stays until the user updates or dismisses it, including across restarts. **Dismiss** stores the model in `AI_MODEL_RECOMMENDATION_DISMISSED`, so a later recommendation shows again. It is not part of the news feed.
+
+The landing page footer also has **Update AI model** (shown whenever the recommended model isn't installed, so a dismissed update can still be installed) and **Rollback AI model**. An update pulls the recommended model with `ollama pull`, then asks it for a real reply (`assertModelAnswers`). If it doesn't answer, the update stops: nothing is switched, the rollback model is kept, the new download is removed, and the reason stays on the button. If it answers, the current model moves to `AI_CHAT_MODEL_FALLBACK` and `AI_CHAT_MODEL` switches. It then runs `ollama rm` on the model that was the fallback *before* the update, since it is no longer needed, unless it is still in use as the active model, the new fallback or the embedding model (`AI_EMBED_MODEL`). A removal failure is logged and never fails the update. Rollback swaps `AI_CHAT_MODEL` and `AI_CHAT_MODEL_FALLBACK`, and rolling back from the recommended model also dismisses that recommendation. When changing `RECOMMENDED_AI_MODEL`, update `RECOMMENDED_AI_MODEL_SIZE` and `RECOMMENDED_AI_MODEL_REASON` too, because the card and confirmation show them.
 
 Leave `AI_PROVIDER` unset, or set it to `builtin`, when you want Beep Beep to run with no external model dependency. Set `AI_PROVIDER=ollama` only when you want the optional local LLM path. `npm run ai:setup` downloads Ollama's standalone Windows runtime into `.local/ollama`, stores model files under `.local/ollama-models`, starts the local runtime, and pulls the configured model. Use `npm run ai:doctor` if the Ollama-backed chat path reports that the local AI is unavailable.
 

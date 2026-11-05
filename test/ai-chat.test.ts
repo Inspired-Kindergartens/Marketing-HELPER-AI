@@ -9,6 +9,7 @@ import {
 } from "../src/ai/chat.js";
 import { buildChatMemory, inferSelectedCentreFromMessages } from "../src/ai/chat-memory.js";
 import { runLocalChat } from "../src/ai/client.js";
+import { assertModelAnswers } from "../src/ai/runtime.js";
 import { buildAiDashboardContext, type AiDashboardContext } from "../src/ai/context.js";
 import { buildChatDocumentPrompt, extractChatDocument } from "../src/ai/document-reader.js";
 import { renderGeneralChatPage } from "../src/ui/general-chat-page.js";
@@ -1198,4 +1199,56 @@ test("campaign timing questions add a hidden guardrail to model messages", () =>
   assert.match(messages[1]?.content ?? "", /Campaign timing guardrail/);
   assert.match(messages[1]?.content ?? "", /no active ads/);
   assert.match(messages[1]?.content ?? "", /Do not expose internal field names/);
+});
+
+test("runLocalChat sends the think option only when a caller sets it", async () => {
+  const realFetch = globalThis.fetch;
+  const bodies: Record<string, unknown>[] = [];
+  globalThis.fetch = (async (_url: string, init: { body: string }) => {
+    bodies.push(JSON.parse(init.body));
+    return new Response(JSON.stringify({ message: { content: "ok" } }), { status: 200 });
+  }) as unknown as typeof fetch;
+
+  const config = {
+    AI_PROVIDER: "ollama" as const,
+    AI_BASE_URL: "http://127.0.0.1:11434",
+    AI_CHAT_MODEL: "test",
+    AI_TIMEOUT_MS: 1000,
+  };
+
+  try {
+    await runLocalChat(config, [{ role: "user", content: "hi" }]);
+    await runLocalChat(config, [{ role: "user", content: "hi" }], { think: false });
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+
+  assert.equal("think" in bodies[0]!, false);
+  assert.equal(bodies[1]!.think, false);
+});
+
+test("assertModelAnswers only passes a model that gives a real reply", async () => {
+  const realFetch = globalThis.fetch;
+  const config = {
+    AI_PROVIDER: "ollama" as const,
+    AI_BASE_URL: "http://127.0.0.1:11434",
+    AI_CHAT_MODEL: "test",
+    AI_TIMEOUT_MS: 1000,
+  };
+  const respondWith = (status: number, body: unknown) => {
+    globalThis.fetch = (async () => new Response(JSON.stringify(body), { status })) as unknown as typeof fetch;
+  };
+
+  try {
+    respondWith(200, { message: { content: "OK" } });
+    await assertModelAnswers(config, "new-model");
+
+    respondWith(200, { message: { content: "   " } });
+    await assert.rejects(assertModelAnswers(config, "new-model"), /empty answer/);
+
+    respondWith(500, { error: "model requires more system memory" });
+    await assert.rejects(assertModelAnswers(config, "new-model"), /didn't answer \(model requires more system memory\)/);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
 });

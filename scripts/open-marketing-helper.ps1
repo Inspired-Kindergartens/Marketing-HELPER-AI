@@ -2,6 +2,8 @@ $ErrorActionPreference = "Stop"
 
 $taskName = "Marketing Helper AI Server"
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
+# One model folder for every launch path, matching src/server.ts.
+$env:OLLAMA_MODELS = Join-Path $repoRoot ".local\ollama-models"
 $url = "http://127.0.0.1:3000/"
 $healthUrl = "http://127.0.0.1:3000/health"
 $ollamaUrl = "http://127.0.0.1:11434"

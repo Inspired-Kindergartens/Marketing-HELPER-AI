@@ -15,6 +15,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import pg from "pg";
+import { RECOMMENDED_AI_MODEL } from "../src/ai/config.js";
 import { findPgTool } from "../src/backup.js";
 import { GoogleAnalyticsClient } from "../src/google-analytics/client.js";
 import { getGoogleAnalyticsConfig } from "../src/google-analytics/config.js";
@@ -36,6 +37,7 @@ export const SETTINGS: Setting[] = [
   { key: "AI_PROVIDER", required: false, purpose: "AI backend (ollama)", source: "Leave as ollama" },
   { key: "AI_BASE_URL", required: false, purpose: "Local Ollama address", source: "Default http://127.0.0.1:11434" },
   { key: "AI_CHAT_MODEL", required: false, purpose: "Beep Beep chat model", source: "Copy from current .env; downloaded by npm run ai:setup" },
+  { key: "AI_MODEL_RECOMMENDATION_DISMISSED", required: false, purpose: "AI model recommendation the user dismissed", source: "Set by the Dismiss button on the landing page" },
   { key: "AI_CHAT_MODEL_FALLBACK", required: false, purpose: "Rollback model", source: "Set automatically by Update AI model" },
   { key: "AI_EMBED_MODEL", required: false, purpose: "Help-library embedding model", source: "Default nomic-embed-text" },
   { key: "AI_TIMEOUT_MS", required: false, purpose: "AI request timeout", source: "Copy from current .env" },
@@ -178,7 +180,7 @@ if (offline) {
   await check("Ollama + models", false, async () => {
     const tags = await getJson(`${(val("AI_BASE_URL") || "http://127.0.0.1:11434").replace(/\/$/, "")}/api/tags`);
     const names = ((tags.models as { name: string }[]) ?? []).map((m) => m.name);
-    const wanted = [val("AI_CHAT_MODEL") || "llama3.1:8b", val("AI_EMBED_MODEL") || "nomic-embed-text"];
+    const wanted = [val("AI_CHAT_MODEL") || RECOMMENDED_AI_MODEL, val("AI_EMBED_MODEL") || "nomic-embed-text"];
     const missing = wanted.filter((w) => !names.some((n) => n === w || n === `${w}:latest`));
     if (missing.length) throw new Error(`not downloaded: ${missing.join(", ")} - run npm run ai:setup`);
     return wanted.join(", ");

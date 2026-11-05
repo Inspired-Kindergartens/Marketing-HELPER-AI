@@ -4,14 +4,18 @@ import os from "node:os";
 
 import type { FastifyBaseLogger } from "fastify";
 
-import type { AiConfig } from "./ai/config.js";
-import { runLocalChat } from "./ai/client.js";
+import {
+  RECOMMENDED_AI_MODEL,
+  RECOMMENDED_AI_MODEL_REASON,
+  RECOMMENDED_AI_MODEL_SIZE,
+  type AiConfig,
+} from "./ai/config.js";
 import { prisma } from "./db.js";
 import { normalizeCentreContactName, readCentreContactList } from "./storage/centre-contact-store.js";
 
 export type LandingIntelligenceItem = {
   id: string;
-  kind: "news" | "weather" | "ai-model" | "system";
+  kind: "news" | "weather" | "system";
   title: string;
   brief: string;
   href: string | null;
@@ -79,7 +83,6 @@ const REQUEST_TIMEOUT_MS = 9000;
 // await that never settles would otherwise pin refreshInFlight forever and every
 // later tick would just re-await it (the feed froze for a day on 2026-10-28).
 const REFRESH_DEADLINE_MS = 10 * 60 * 1000;
-const RECOMMENDED_MODEL = "qwen3:8b";
 const ECE_TERMS =
   '("early childhood" OR "early childhood education" OR ECE OR kindergarten OR preschool OR "pre-school" OR childcare OR "childcare centre" OR "child care" OR "early learning")';
 export const NEWS_QUERY_TIERS = [
@@ -265,7 +268,7 @@ let latestFeed: LandingIntelligenceFeed = {
   status: "idle",
   error: null,
   items: [],
-  aiModel: buildAiModelRecommendation("llama3.1:8b"),
+  aiModel: buildAiModelRecommendation(RECOMMENDED_AI_MODEL),
   searchTexts: [],
 };
 let refreshInFlight: Promise<LandingIntelligenceFeed> | null = null;
@@ -1447,84 +1450,26 @@ function buildAiModelRecommendation(
   fallbackModel: string | null = process.env.AI_CHAT_MODEL_FALLBACK || null,
 ): LandingAiModelRecommendation {
   const normalised = currentModel.trim().toLowerCase();
-  const isUpgrade = normalised !== RECOMMENDED_MODEL;
+  const isUpgrade = normalised !== RECOMMENDED_AI_MODEL;
+  const willDelete = !!fallbackModel && fallbackModel !== RECOMMENDED_AI_MODEL && fallbackModel !== currentModel;
   const spec = getComputerSpec();
-  const currentSize = normalised.startsWith("llama3.1") ? "4.9GB, 128K context" : "installed/current local model";
-  const recommendedSize = "5.2GB, 40K context";
 
   return {
     currentModel,
-    recommendedModel: RECOMMENDED_MODEL,
+    recommendedModel: RECOMMENDED_AI_MODEL,
     fallbackModel,
     isUpgrade,
     sellingPoint: isUpgrade
-      ? "Qwen3 8B is a same-size local chat upgrade with stronger reasoning, tool-use support, and multi-turn instruction following than the current Llama 3.1 8B default."
-      : "Qwen3 8B is already selected for local AI chat.",
+      ? RECOMMENDED_AI_MODEL_REASON
+      : `${RECOMMENDED_AI_MODEL} is already selected for local AI chat.`,
     updatePrompt: isUpgrade
-      ? `Pull ${RECOMMENDED_MODEL} and set AI_CHAT_MODEL=${RECOMMENDED_MODEL} for the local chat server.`
+      ? `Install ${RECOMMENDED_AI_MODEL}? It's ${RECOMMENDED_AI_MODEL_SIZE}. ${RECOMMENDED_AI_MODEL_REASON} Your current model (${currentModel}) stays as your rollback${willDelete ? `, and ${fallbackModel} will be permanently deleted` : ""}.`
       : "No model update is currently recommended.",
-    comparison: `${currentModel}: ${currentSize}. ${RECOMMENDED_MODEL}: ${recommendedSize}, with Ollama library tags for tools and thinking plus stronger reasoning/tool-use positioning.`,
+    comparison: `Current: ${currentModel}. Recommended: ${RECOMMENDED_AI_MODEL}.`,
     computerSpec: `${spec.cpuModel}; ${spec.logicalCores} logical cores; ${spec.totalRamGB.toFixed(1)}GB RAM; ${spec.platform}. ${spec.canOperate ? "This is suitable for an 8B Ollama model in local chat." : "This may be tight for an 8B Ollama model; keep the fallback model available."}`,
     canOperate: spec.canOperate,
-    rollbackPrompt: fallbackModel ? `Rollback available to ${fallbackModel}. The previous model is kept as fallback; the one before it is removed during update.` : null,
+    rollbackPrompt: fallbackModel ? `Switch back to ${fallbackModel}? ${currentModel} stays installed.` : null,
   };
-}
-
-function buildAiModelItem(aiModel: LandingAiModelRecommendation): LandingIntelligenceItem {
-  return {
-    id: "ai-model-recommendation",
-    kind: "ai-model",
-    title: aiModel.isUpgrade ? `AI model upgrade available: ${aiModel.recommendedModel}` : "AI model is current",
-    brief: aiModel.sellingPoint,
-    href: "https://ollama.com/library/qwen3",
-    source: `Current: ${aiModel.currentModel}`,
-    publishedAt: null,
-    urgent: false,
-  };
-}
-
-async function crawlOllamaModelPages(currentModel: string) {
-  await Promise.allSettled([
-    fetchText("https://ollama.com/library/qwen3"),
-    fetchText("https://ollama.com/library/llama3.1"),
-  ]);
-
-  return buildAiModelRecommendation(currentModel);
-}
-
-async function refineBriefsWithAi(config: AiConfig, items: LandingIntelligenceItem[]) {
-  if (config.AI_PROVIDER !== "ollama" || items.length === 0) {
-    return items;
-  }
-
-  try {
-    const answer = await runLocalChat(
-      { ...config, AI_TIMEOUT_MS: Math.min(config.AI_TIMEOUT_MS, 12000) },
-      [
-        {
-          role: "system",
-          content:
-            "Rewrite RSS feed briefs for a kindergarten marketing dashboard. Return strict JSON only: an array of {id, brief}. Each brief must be one sentence, under 24 words, factual, and not sensational.",
-        },
-        {
-          role: "user",
-          content: JSON.stringify(
-            items.map((item) => ({ id: item.id, title: item.title, brief: item.brief })),
-          ),
-        },
-      ],
-    );
-    const parsed = JSON.parse(answer) as { id?: string; brief?: string }[];
-    const byId = new Map(parsed.map((item) => [item.id, item.brief]));
-
-    return items.map((item) => {
-      const brief = byId.get(item.id);
-
-      return brief ? { ...item, brief: sentenceCaseBrief(brief, item.brief) } : item;
-    });
-  } catch {
-    return items;
-  }
 }
 
 async function logFeed(feed: LandingIntelligenceFeed) {
@@ -1567,8 +1512,7 @@ export async function refreshLandingIntelligenceFeed(
   });
 
   const build = async (): Promise<LandingIntelligenceFeed> => {
-    stage = "ollama model pages";
-    const aiModel = await crawlOllamaModelPages(config.AI_CHAT_MODEL);
+    const aiModel = buildAiModelRecommendation(config.AI_CHAT_MODEL);
     stage = "search texts";
     const searchTexts = await readLandingIntelligenceSearchTexts();
     stage = "sources";
@@ -1588,15 +1532,14 @@ export async function refreshLandingIntelligenceFeed(
     ]);
     const unique = new Map<string, LandingIntelligenceItem>();
 
-    for (const item of [...brandMentions, ...weather, ...news, ...(aiModel.isUpgrade ? [buildAiModelItem(aiModel)] : [])]) {
+    for (const item of [...brandMentions, ...weather, ...news]) {
       unique.set(`${item.title}-${item.href ?? ""}`, item);
     }
 
     const ranked = [...unique.values()]
       .filter(isAllowedFeedItem)
       .sort((left, right) => Number(right.urgent) - Number(left.urgent));
-    stage = "ai briefs";
-    const items = await refineBriefsWithAi(config, ranked.slice(0, 12));
+    const items = ranked.slice(0, 12);
 
     return {
       generatedAt: generatedAt.toISOString(),
@@ -1620,7 +1563,7 @@ export async function refreshLandingIntelligenceFeed(
     })
     .catch(async (error) => {
       const aiModel = buildAiModelRecommendation(config.AI_CHAT_MODEL);
-      const previousItems = latestFeed.items.length ? sanitizeFeed(latestFeed).items : [buildAiModelItem(aiModel)];
+      const previousItems = latestFeed.items.length ? sanitizeFeed(latestFeed).items : [];
       const feed: LandingIntelligenceFeed = {
         generatedAt: generatedAt.toISOString(),
         nextRefreshAt: new Date(generatedAt.getTime() + FIFTEEN_MINUTES_MS).toISOString(),

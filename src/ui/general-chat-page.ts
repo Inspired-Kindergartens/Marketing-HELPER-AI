@@ -447,6 +447,9 @@ export function renderGeneralChatPage(data: GeneralChatPageData) {
                     if (payload.role === "assistant") markMessageSaved(pendingAssistantRow, payload.messageId);
                     updateThreadMessageCount(payload.messageCount);
                   }
+                  if (event === "status" && !sourceText) {
+                    setMessageContent(pendingAssistantRow, payload.message);
+                  }
                   if (event === "chunk") {
                     sourceText += payload.chunk || "";
                     setMessageContent(pendingAssistantRow, sourceText);

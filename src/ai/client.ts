@@ -89,7 +89,11 @@ function createThinkStreamFilter() {
   return { take, flush };
 }
 
-export async function runLocalChat(config: AiConfig, messages: AiChatMessage[]) {
+export async function runLocalChat(
+  config: AiConfig,
+  messages: AiChatMessage[],
+  { think }: { think?: boolean } = {},
+) {
   if (config.AI_PROVIDER === "builtin") {
     return runBuiltinChat(messages);
   }
@@ -110,6 +114,7 @@ export async function runLocalChat(config: AiConfig, messages: AiChatMessage[]) 
       body: JSON.stringify({
         model: config.AI_CHAT_MODEL,
         stream: false,
+        ...(think === undefined ? {} : { think }),
         messages,
         keep_alive: AI_KEEP_ALIVE,
         options: {

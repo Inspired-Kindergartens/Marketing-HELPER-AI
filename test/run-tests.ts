@@ -1,4 +1,5 @@
 import "./ai-chat.test.js";
+import "./ai-model-design.test.js";
 import "./analytics-compute.test.js";
 import "./append-only-storage.test.js";
 import "./app-shell.test.js";
