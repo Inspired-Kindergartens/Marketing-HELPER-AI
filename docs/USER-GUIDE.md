@@ -139,6 +139,8 @@ Overdue and upcoming tasks also show on the landing page.
 
 A Beep Beep chat for anything: writing, planning, explaining, checking. Conversations are saved, so you can come back to them and sort them into groups. You can also attach a document (a PDF, a text file, or a CSV spreadsheet export) and ask about it.
 
+**Member email lists.** Ask *"Give me the member parents email list for every kindergarten"* (here or in the [Marketing](/app) chat). Beep Beep reads Infocare and gives one list per kindergarten, ready to paste into an email's To field. It includes caregivers of children enrolled today who are ticked as an Association member in Infocare, each person once per kindergarten. Arataki, Avenues, Brookfield, Gwen Rogers, Karamuramu, Katikati, Maungaarangi and Maunganui All Day are left out. Members with no email in Infocare aren't listed, but the reply says how many there are. Use **Bcc** when emailing a whole list.
+
 ---
 
 ## Communications — [open](/comms)

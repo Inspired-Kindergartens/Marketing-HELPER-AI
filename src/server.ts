@@ -4703,7 +4703,7 @@ app.post<{
         answer,
         model: "live Infocare read-only",
         context: {
-          selectedCentre: livePlan.intent.kind === "centre_list" ? null : livePlan.intent.centre.name,
+          selectedCentre: "centre" in livePlan.intent ? livePlan.intent.centre.name : null,
           selectedWindowKey,
           snapshotCreatedAt: null,
         },
@@ -4846,7 +4846,7 @@ app.post<{
       const liveResult = await runLiveInfocareRequest(livePlan.intent);
       liveGrounding = buildLiveInfocareGrounding(liveResult, livePrompt);
       const answer = formatLiveInfocareAnswer(liveResult, livePrompt);
-      const selectedCentreName = livePlan.intent.kind === "centre_list" ? null : livePlan.intent.centre.name;
+      const selectedCentreName = "centre" in livePlan.intent ? livePlan.intent.centre.name : null;
 
       reply.raw.writeHead(200, {
         "Content-Type": "text/event-stream; charset=utf-8",
@@ -4863,7 +4863,7 @@ app.post<{
         model: "live Infocare read-only",
         context: {
           selectedCentre: selectedCentreName,
-          selectedCentreKey: livePlan.intent.kind === "centre_list" ? null : livePlan.intent.centre.centreKey,
+          selectedCentreKey: "centre" in livePlan.intent ? livePlan.intent.centre.centreKey : null,
           selectedWindowKey,
           snapshotCreatedAt: null,
         },

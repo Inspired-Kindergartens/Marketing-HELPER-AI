@@ -20,9 +20,18 @@ type LiveInfocareIntent =
   | { kind: "centre_list" }
   | { kind: "centre_overview"; centre: CentreReference }
   | { kind: "child_list"; centre: CentreReference; category: InfocareChildListCategory; emailOnly: boolean }
-  | { kind: "license"; centre: CentreReference };
+  | { kind: "license"; centre: CentreReference }
+  | { kind: "member_email_lists"; centres: CentreReference[] };
+
+export type MemberEmailList = {
+  centre: CentreReference;
+  childCount: number;
+  members: { name: string; email: string }[];
+  membersWithoutEmail: number;
+};
 
 export type LiveInfocareResult =
+  | { kind: "member_email_lists"; lists: MemberEmailList[]; excludedCentres: string[]; contactLookups: number; contactFailures: number; generatedAt: string }
   | { kind: "centre_list"; centres: CentreReference[]; generatedAt: string }
   | { kind: "centre_overview"; centre: CentreReference; current: InfocareChild[]; waiting: InfocareChild[]; notStarted: InfocareChild[]; licenses: InfocareLicense[]; generatedAt: string }
   | { kind: "child_list"; centre: CentreReference; category: InfocareChildListCategory; children: InfocareChild[]; contactsByChildKey: Record<number, InfocareContact[]>; emailOnly: boolean; contactLookups: number; contactFailures: number; detailLookups: number; detailFailures: number; generatedAt: string }
@@ -40,6 +49,21 @@ const CHILD_DETAIL_LOOKUP_DELAY_MS = 125;
 const MAX_CONTACT_LOOKUPS = 180;
 const CONTACT_LOOKUP_DELAY_MS = 125;
 const RECENT_LEFT_LOOKBACK_DAYS = 90;
+const MEMBER_CONTACT_LOOKUP_WORKERS = 4;
+
+// Kindergartens left out of the member email lists, by the user's request.
+// Matched on the leading words of the Infocare name, so "Maunganui All Day"
+// does not also drop Maungatapu.
+export const MEMBER_LIST_EXCLUDED_CENTRES = [
+  "Arataki",
+  "Avenues",
+  "Brookfield",
+  "Gwen Rogers",
+  "Karamuramu",
+  "Katikati",
+  "Maungaarangi",
+  "Maunganui All Day",
+] as const;
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -340,9 +364,28 @@ function isLicensePrompt(prompt: string) {
   return /\b(license|licence|capacity|max children|max u2|max o2|under 2 capacity|over 2 capacity)\b/i.test(prompt);
 }
 
+// "Members" means caregivers ticked as Association Membership in Infocare.
+// Needs a family/kindergarten word too, so "list the task members" stays out.
+export function isMemberEmailListPrompt(prompt: string) {
+  return /\b(members?|membership)\b/i.test(prompt) &&
+    /\b(parents?|caregivers?|whanau|whānau|famil(?:y|ies)|kindergartens?|centres?|infor?care|association)\b/i.test(prompt) &&
+    /\b(emails?|e-mail|list|lists|to field|outlook|recipients?)\b/i.test(prompt);
+}
+
+export function isMemberListExcludedCentre(name: string) {
+  const normalized = normalizeSearchText(name);
+
+  return MEMBER_LIST_EXCLUDED_CENTRES.some((excluded) => {
+    const phrase = normalizeSearchText(excluded);
+
+    return normalized === phrase || normalized.startsWith(`${phrase} `);
+  });
+}
+
 export function isLiveInfocarePrompt(prompt: string) {
   return (
     /\binfor?care\b/i.test(prompt) ||
+    isMemberEmailListPrompt(prompt) ||
     isCentreListPrompt(prompt) ||
     isLicensePrompt(prompt) ||
     resolveCategory(prompt) !== null ||
@@ -461,6 +504,18 @@ export function planLiveInfocareRequest(
 ): { intent: LiveInfocareIntent | null; error: string | null } {
   if (!isLiveInfocarePrompt(prompt)) {
     return { intent: null, error: null };
+  }
+
+  if (isMemberEmailListPrompt(prompt)) {
+    return {
+      intent: {
+        kind: "member_email_lists",
+        centres: centres.filter((centre) =>
+          !centre.ignored && centre.openStatus === "Open" && !isMemberListExcludedCentre(centre.name),
+        ),
+      },
+      error: null,
+    };
   }
 
   if (isCentreListPrompt(prompt)) {
@@ -605,6 +660,77 @@ async function fetchLicenseList(client: InfocareClientLike, centre: CentreRefere
   return parsed.license_list;
 }
 
+function isAssociationMember(contact: InfocareContact) {
+  const flag = (contact as Record<string, unknown>)["Association Membership"];
+
+  return flag === true || (typeof flag === "string" && /^(true|yes|y|member)$/i.test(flag.trim()));
+}
+
+function memberEmail(contact: InfocareContact) {
+  const raw = contact as Record<string, unknown>;
+
+  for (const key of ["email", "email_other"]) {
+    const value = typeof raw[key] === "string" ? (raw[key] as string).trim().toLowerCase() : "";
+
+    if (EMAIL_PATTERN.test(value)) {
+      return value;
+    }
+  }
+
+  return null;
+}
+
+// Contact lists for a whole centre, a few at a time: one centre is ~50
+// children, and doing 18 centres one by one would take many minutes.
+async function fetchMemberEmailList(
+  client: InfocareClientLike,
+  centre: CentreReference,
+  now: Date,
+): Promise<MemberEmailList & { contactFailures: number }> {
+  const children = await fetchChildList(client, centre, "Current enrolments", now);
+  const contacts: InfocareContact[] = [];
+  let contactFailures = 0;
+  let next = 0;
+
+  async function worker() {
+    while (next < children.length) {
+      const child = children[next++];
+
+      try {
+        contacts.push(...await fetchContactList(client, child.child_key));
+      } catch {
+        contactFailures += 1;
+      }
+    }
+  }
+
+  await Promise.all(Array.from({ length: MEMBER_CONTACT_LOOKUP_WORKERS }, worker));
+
+  // A caregiver with two children here appears once.
+  const byEmail = new Map<string, string>();
+  const withoutEmail = new Set<number>();
+
+  for (const contact of contacts.filter(isAssociationMember)) {
+    const email = memberEmail(contact);
+
+    if (!email) {
+      withoutEmail.add(contact.contact_key);
+    } else if (!byEmail.has(email)) {
+      byEmail.set(email, getContactName(contact).replace(/\s+/g, " ").trim());
+    }
+  }
+
+  return {
+    centre,
+    childCount: children.length,
+    members: [...byEmail.entries()]
+      .map(([email, name]) => ({ name, email }))
+      .sort((a, b) => a.name.localeCompare(b.name) || a.email.localeCompare(b.email)),
+    membersWithoutEmail: withoutEmail.size,
+    contactFailures,
+  };
+}
+
 export async function runLiveInfocareRequest(
   intent: LiveInfocareIntent,
   options: { client?: InfocareClientLike; now?: Date } = {},
@@ -612,6 +738,29 @@ export async function runLiveInfocareRequest(
   const client = options.client ?? createInfocareClient();
   const now = options.now ?? new Date();
   const generatedAt = now.toISOString();
+
+  if (intent.kind === "member_email_lists") {
+    const lists: MemberEmailList[] = [];
+    let contactLookups = 0;
+    let contactFailures = 0;
+
+    for (const centre of [...intent.centres].sort((a, b) => a.name.localeCompare(b.name))) {
+      const { contactFailures: failures, ...list } = await fetchMemberEmailList(client, centre, now);
+
+      lists.push(list);
+      contactLookups += list.childCount;
+      contactFailures += failures;
+    }
+
+    return {
+      kind: "member_email_lists",
+      lists,
+      excludedCentres: [...MEMBER_LIST_EXCLUDED_CENTRES],
+      contactLookups,
+      contactFailures,
+      generatedAt,
+    };
+  }
 
   if (intent.kind === "centre_list") {
     const response = await client.request("get_centre_list", {});
@@ -900,7 +1049,38 @@ function formatEmailList(result: Extract<LiveInfocareResult, { kind: "child_list
   ].filter((line, index, lines) => line !== "" || lines[index - 1] !== "").join("\n");
 }
 
+function formatMemberRecipient(member: { name: string; email: string }) {
+  const name = member.name.replace(/"/g, "'");
+
+  return name ? `"${name}" <${member.email}>` : member.email;
+}
+
+function formatMemberEmailLists(result: Extract<LiveInfocareResult, { kind: "member_email_lists" }>) {
+  const total = result.lists.reduce((sum, list) => sum + list.members.length, 0);
+  const withoutEmail = result.lists.reduce((sum, list) => sum + list.membersWithoutEmail, 0);
+
+  return [
+    `Infocare member caregiver email lists: ${result.lists.length} kindergarten${result.lists.length === 1 ? "" : "s"}, ${total} member${total === 1 ? "" : "s"} (current enrolments, ${result.generatedAt.slice(0, 10)}).`,
+    `Excluded: ${result.excludedCentres.join(", ")}.`,
+    ...result.lists.map((list) => [
+      `**${list.centre.name.replace(/\s+/g, " ").trim()}** (${list.members.length})`,
+      list.members.length > 0 ? list.members.map(formatMemberRecipient).join("; ") : "No members with an email address.",
+    ].join("\n\n")),
+    withoutEmail > 0
+      ? `${withoutEmail} member${withoutEmail === 1 ? " has" : "s have"} no email address in Infocare and ${withoutEmail === 1 ? "is" : "are"} not listed.`
+      : "",
+    result.contactFailures > 0
+      ? `${result.contactFailures} contact lookup${result.contactFailures === 1 ? "" : "s"} failed, so those children's caregivers are missing. Ask again to retry.`
+      : "",
+    "No Infocare records were changed.",
+  ].filter(Boolean).join("\n\n");
+}
+
 export function formatLiveInfocareAnswer(result: LiveInfocareResult, prompt = "") {
+  if (result.kind === "member_email_lists") {
+    return formatMemberEmailLists(result);
+  }
+
   if (result.kind === "centre_list") {
     const openCentres = result.centres.filter((centre) => centre.openStatus === "Open");
 
@@ -1114,6 +1294,23 @@ export function buildLiveInfocareGrounding(result: LiveInfocareResult, prompt: s
         waitingCount: result.waiting.length,
         notStartedCount: result.notStarted.length,
         licenses: [...new Set(result.licenses.map(formatLicense))],
+      }),
+    ].join("\n");
+  }
+
+  if (result.kind === "member_email_lists") {
+    return [
+      ...instructions,
+      JSON.stringify({
+        kind: result.kind,
+        generatedAt: result.generatedAt,
+        excludedCentres: result.excludedCentres,
+        lists: result.lists.map((list) => ({
+          centre: list.centre.name,
+          memberCount: list.members.length,
+          membersWithoutEmail: list.membersWithoutEmail,
+        })),
+        contactFailures: result.contactFailures,
       }),
     ].join("\n");
   }

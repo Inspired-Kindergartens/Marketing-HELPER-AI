@@ -524,6 +524,79 @@ test("live Infocare primary caregiver contact prompts default to current enrolme
   assert.match(answer, /No Infocare records were changed/);
 });
 
+test("live Infocare member email lists cover every kindergarten except the excluded ones", async () => {
+  const centre = (centreKey: number, name: string) => ({
+    centreKey,
+    name,
+    openStatus: "Open",
+    ignored: false,
+    lastSyncedAt: "2026-11-10T00:00:00.000Z",
+  });
+  const centres = [
+    centre(107, "Arataki  Kindergarten"),
+    centre(6200001, "Maunganui All Day Kindergarten"),
+    centre(125, "Maungaarangi Kindergarten and Whānau Centre"),
+    centre(113, "Maungatapu Kindergarten"),
+    centre(132, "Matua Kindergarten"),
+  ];
+  const prompt = "give me the email lists of all member parents for each kindergarten";
+
+  assert.equal(isLiveInfocarePrompt(prompt), true);
+  assert.equal(isLiveInfocarePrompt("list the task board members"), false);
+
+  const plan = planLiveInfocareRequest(prompt, centres, 113);
+
+  assert.equal(plan.intent?.kind, "member_email_lists");
+  assert.deepEqual(
+    plan.intent?.kind === "member_email_lists" ? plan.intent.centres.map((row) => row.name) : null,
+    ["Maungatapu Kindergarten", "Matua Kindergarten"],
+  );
+
+  const contactsByChild: Record<number, Record<string, unknown>[]> = {
+    1: [
+      { contact_key: 11, first_name: "Aroha", last_name: "Smith", email: "Aroha@Example.com", "Association Membership": true },
+      { contact_key: 12, first_name: "Not", last_name: "Member", email: "not.member@example.com", "Association Membership": false },
+    ],
+    // Sibling of child 1: the same caregiver must appear once.
+    2: [{ contact_key: 11, first_name: "Aroha", last_name: "Smith", email: "aroha@example.com", "Association Membership": true }],
+    3: [
+      { contact_key: 31, first_name: "Ben", last_name: "Other", email: "", email_other: "ben@example.com", "Association Membership": true },
+      { contact_key: 32, first_name: "No", last_name: "Email", email: "", "Association Membership": true },
+    ],
+  };
+  const result = await runLiveInfocareRequest(plan.intent!, {
+    client: {
+      async request(mode: string, parameters: Record<string, unknown>) {
+        assert.match(mode, /^get_/);
+
+        if (mode === "get_contact_list") {
+          return { msg_status: "OK", contact_list: contactsByChild[Number(parameters.child_key)] ?? [] };
+        }
+
+        assert.equal(parameters.category, "Current enrolments");
+
+        return {
+          msg_status: "OK",
+          child_list: parameters.centre_key === 113
+            ? [{ child_key: 1 }, { child_key: 2 }]
+            : [{ child_key: 3 }],
+        };
+      },
+    } as never,
+    now: new Date("2026-11-10T01:00:00.000Z"),
+  });
+  const answer = formatLiveInfocareAnswer(result, prompt);
+
+  assert.equal(result.kind, "member_email_lists");
+  assert.match(answer, /2 kindergartens, 2 members/);
+  assert.match(answer, /\*\*Matua Kindergarten\*\* \(1\)\n\n"Ben Other" <ben@example\.com>/);
+  assert.match(answer, /\*\*Maungatapu Kindergarten\*\* \(1\)\n\n"Aroha Smith" <aroha@example\.com>\n/);
+  assert.doesNotMatch(answer, /not\.member@example\.com/);
+  assert.match(answer, /Excluded: Arataki, Avenues/);
+  assert.match(answer, /1 member has no email address/);
+  assert.ok(answer.indexOf("Matua") < answer.indexOf("Maungatapu"));
+});
+
 test("live Infocare overview and capacity prompts use only read modes", async () => {
   const centre = {
     centreKey: 117,

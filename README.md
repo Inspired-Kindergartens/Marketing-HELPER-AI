@@ -1036,6 +1036,16 @@ The panel shows a generated summary for the selected centre and includes an inte
 
 The composer streams from `/api/ai/chat/stream`, sends the selected centre and selected window, and keeps a short in-browser history so follow-up questions have conversational context. Answers are grounded in a fresh dashboard context built on each request from Infocare analytics, Meta Ads, Google Analytics, and centre-level recommendation data, plus the Things To Know wiki and excerpts from the [help knowledge base](#help-knowledge-base-rag) (Infocare, Meta and Google Analytics sources). A **Sources** line under each answer names the help pages used.
 
+### Member email lists (live Infocare)
+
+Asking any Beep Beep chat (Marketing, General Chat) for member parent / caregiver email lists, for example *"Give me the member parents email list for every kindergarten"*, runs a read-only Infocare lookup in `src/ai/infocare-live.ts` and answers directly, without the AI model.
+
+- **Trigger**: `isMemberEmailListPrompt` - "member(s)/membership", plus a family or kindergarten word (parents, caregivers, whānau, kindergarten, centre, Infocare, association), plus a list word (email, list, To field, Outlook, recipients). It is checked before centre resolution, so no centre is needed.
+- **Who is a member**: a contact from `get_contact_list` whose `Association Membership` field is `true`. Email is `email`, falling back to `email_other`. Contacts are de-duplicated by email within a kindergarten (siblings share caregivers).
+- **Which children**: `Current enrolments` for today, per centre.
+- **Which kindergartens**: every open, non-ignored centre except `MEMBER_LIST_EXCLUDED_CENTRES` (Arataki, Avenues, Brookfield, Gwen Rogers, Karamuramu, Katikati, Maungaarangi, Maunganui All Day), matched on the leading words of the Infocare name.
+- **Output**: one block per kindergarten, A-Z: `**Name** (count)` then `"First Last" <email>; ...`, ready for an email To field. Members with no email are counted, not listed. Contact lookups run 4 at a time; the whole run (~850 lookups) takes seconds.
+
 ## General Chat Page
 
 `/chat` is a standalone general-help chat page for Beep Beep. It is not grounded in a selected centre or marketing dashboard context. Use it for general writing, planning, explanation, troubleshooting, and technical help.
