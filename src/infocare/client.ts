@@ -11,6 +11,11 @@ export const ALLOWED_INFOCARE_MODES = [
   "get_contact_list",
   "get_license_list",
   "get_booking_list",
+  // Enrolment Quality: a whole centre's bookings for a date range in one call,
+  // and the staff roster used to suggest an operating capacity. Read-only.
+  "get_attendance_list",
+  "get_roster_list",
+  "get_staff_list",
 ] as const;
 
 export const BLOCKED_INFOCARE_MODES = [

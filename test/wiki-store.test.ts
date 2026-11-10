@@ -1044,3 +1044,25 @@ test("copy wraps loose text so it does not merge with the next block", () => {
 
   assert.match(shell, /nodeType !== 3/);
 });
+
+// --- Links to folders on this PC ---------------------------------------------
+
+test("a Windows folder path typed as a link is kept as a file:/// link", () => {
+  const out = sanitizeJdBlurbHtml('<p><a href="D:\\Apps\\IK Data - Documents\\Panui">Panui</a></p>');
+  assert.equal(out, '<p><a href="file:///D:/Apps/IK%20Data%20-%20Documents/Panui" rel="noopener noreferrer">Panui</a></p>');
+  assert.equal(sanitizeJdBlurbHtml(out), out);
+});
+
+test("a network share path and a # in a folder name survive as a file link", () => {
+  assert.match(sanitizeJdBlurbHtml('<a href="\\\\server\\share\\A#1">x</a>'), /href="file:\/\/server\/share\/A%231"/);
+});
+
+test("the wiki editor keeps typing after a link out of the link, and opens folder links via the server", () => {
+  const shell = renderWikiAppShell({
+    list: { articles: [], search: "", categories: [] },
+    article: { article: null },
+    editor: { article: null, categories: [] },
+  });
+  assert.match(shell, /beforeinput/);
+  assert.match(shell, /\/api\/wiki\/open-local/);
+});

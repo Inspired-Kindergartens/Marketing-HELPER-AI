@@ -4,6 +4,7 @@ import { mkdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { basename, extname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import Fastify from "fastify";
 import multipart from "@fastify/multipart";
 import { z } from "zod";
@@ -65,7 +66,36 @@ import {
   readCentreReferences,
   readCentreSnapshotHistory,
   readLatestAnalyticsSnapshotSet,
+  readOpenCentreReferences,
+  type LatestSnapshotSet,
 } from "./storage/analytics-store.js";
+import {
+  addMonths,
+  buildEnrolmentQualityGrounding,
+  buildEnrolmentQualityRows,
+  buildOrganisationRollRow,
+  monthKey,
+  ORGANISATION_ROW_KEY,
+  resolveRollSort,
+  resolveRollWindowKey,
+  rollSignalForRow,
+  ROLL_HISTORY_MONTHS,
+  sortEnrolmentQualityRows,
+  type RollSort,
+  type RollWindowKey,
+} from "./analytics/enrolment-quality.js";
+import {
+  deleteOperatingCapacity,
+  isValidMonth,
+  readCentreMonthlyRolls,
+  readOperatingCapacities,
+  saveOperatingCapacity,
+} from "./storage/enrolment-quality-store.js";
+import { getRollHistoryProgress, runRollHistorySync } from "./infocare/roll-history.js";
+import { renderEnrolmentQualityBody, type EnrolmentQualityView } from "./ui/enrolment-quality-panel.js";
+import { enrolmentQualityPdfFilename, generateEnrolmentQualityPdfBuffer } from "./ui/enrolment-quality-pdf.js";
+import { analyticsPdfFilename, generateAnalyticsPdfBuffer } from "./ui/analytics-pdf.js";
+import { generateWaitlistPdfBuffer, waitlistPdfFilename } from "./ui/waitlist-pdf.js";
 import { matchCentreContact, readCentreContactList, readCentreContactListStats } from "./storage/centre-contact-store.js";
 import {
   addGeneralChatMessage,
@@ -120,6 +150,7 @@ import {
   renderMetaNotificationHistoryPagination,
   renderMetaNotificationHistoryRows,
   resolveDefaultAnalyticsCentreKey,
+  resolveServiceSort,
 } from "./ui/app-shell.js";
 import { renderCommsAppShell, VALID_COMMS_PANEL_IDS } from "./ui/comms-app-shell.js";
 import { renderPostmarkMessageList } from "./ui/comms/postmark-panel.js";
@@ -370,7 +401,7 @@ await app.register(multipart, {
   },
 });
 
-const VALID_PANEL_IDS = new Set(["analytics", "waitlist", "meta-ads", "google-analytics", "notes", "chat"]);
+const VALID_PANEL_IDS = new Set(["analytics", "enrolment-quality", "waitlist", "meta-ads", "google-analytics", "notes", "chat"]);
 const META_ADS_AUTO_REFRESH_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 let aiModelUpdateInProgress = false;
 let aiModelUpdateStatus: {
@@ -1634,12 +1665,12 @@ app.post<{ Params: { id: string }; Body: { prompt?: string } }>(
   },
 );
 
-app.get<{ Querystring: { centre?: string; window?: string; panel?: string; sort?: string; waitlistSection?: string; googleAnalyticsSection?: string; gaRange?: string; gaFrom?: string; gaTo?: string; gaFromMonth?: string; gaFromYear?: string; gaToMonth?: string; gaToYear?: string; metaRefreshed?: string; integrationError?: string } }>("/app", async (request, reply) => {
+app.get<{ Querystring: { centre?: string; window?: string; panel?: string; sort?: string; rollWindow?: string; rollSort?: string; rollOpen?: string; waitlistSection?: string; googleAnalyticsSection?: string; gaRange?: string; gaFrom?: string; gaTo?: string; gaFromMonth?: string; gaFromYear?: string; gaToMonth?: string; gaToYear?: string; metaRefreshed?: string; integrationError?: string } }>("/app", async (request, reply) => {
   void tickWeeklySnapshotRefresh(app.log);
   // Most visits here don't use Beep Beep, so leave the model unloaded.
   void ensureAiRunning(aiConfig, app.log, { loadModel: false });
 
-  const latestSnapshotSet = await readLatestAnalyticsSnapshotSet();
+  const latestSnapshotSet = await withRollSignals(await readLatestAnalyticsSnapshotSet());
   const centre = Number.parseInt(String(request.query?.centre ?? ""), 10);
   const selectedWindowKey = resolveWindowKey(request.query?.window);
   const serviceSort = request.query?.sort ?? null;
@@ -1770,11 +1801,20 @@ app.get<{ Querystring: { centre?: string; window?: string; panel?: string; sort?
       : await readLatestMetaRecommendationNotesForCentre(resolvedSelectedCentreKey, 3);
   const centreContacts = await readCentreContactList();
   const snapshotRefreshState = getSnapshotRefreshState();
+  const enrolmentQuality = await loadEnrolmentQualityView(
+    resolveRollWindowKey(request.query?.rollWindow),
+    resolveRollSort(request.query?.rollSort),
+    parseRollOpen(request.query?.rollOpen),
+  ).catch((error: unknown) => {
+    app.log.warn({ error }, "Enrolment Quality unavailable");
+    return null;
+  });
 
   return reply
     .type("text/html; charset=utf-8")
     .send(
       renderAppShell(snapshotSet, {
+        enrolmentQuality,
         selectedCentreKey: resolvedSelectedCentreKey,
         selectedWindowKey,
         serviceSort,
@@ -3047,6 +3087,202 @@ app.post<{
   }
 });
 
+// --- Enrolment Quality ------------------------------------------------------------
+// % full roll by month per centre. The panel body is a fragment swapped in
+// place by its own script (window, sort, capacity edits, fetch progress).
+
+// The open row after a fragment swap: a centre, or 0 for All kindergartens.
+function parseRollOpen(value: unknown): number | null {
+  return String(value ?? "") === String(ORGANISATION_ROW_KEY) ? ORGANISATION_ROW_KEY : parsePositiveInt(value);
+}
+
+async function loadEnrolmentQualityView(
+  windowKey: RollWindowKey,
+  sort: RollSort,
+  openCentreKey: number | null = null,
+): Promise<EnrolmentQualityView> {
+  const currentMonth = monthKey(new Date());
+  const [centres, months, capacities] = await Promise.all([
+    readOpenCentreReferences(),
+    readCentreMonthlyRolls(addMonths(currentMonth, -(ROLL_HISTORY_MONTHS - 1)), currentMonth),
+    readOperatingCapacities(),
+  ]);
+  const rows = buildEnrolmentQualityRows({ centres, months, capacities, windowKey, currentMonth });
+
+  return {
+    rows: sortEnrolmentQualityRows(rows, sort),
+    organisation: buildOrganisationRollRow(rows),
+    windowKey,
+    sort,
+    currentMonth,
+    progress: getRollHistoryProgress(),
+    openCentreKey,
+  };
+}
+
+// The Infocare Analytics urgency score uses each centre's % full roll (newest
+// complete month, and a year before). Attached at read time so the table,
+// bands and Beep Beep all score the same way; without roll data a centre is
+// scored on enrolled children against its licence, as before.
+async function withRollSignals(set: LatestSnapshotSet | null): Promise<LatestSnapshotSet | null> {
+  if (!set) return set;
+  try {
+    const view = await loadEnrolmentQualityView("2Y", "asc");
+    const signals = new Map(view.rows.map((row) => [row.centreKey, rollSignalForRow(row)]));
+    return {
+      ...set,
+      snapshots: set.snapshots.map((snapshot) => ({ ...snapshot, ...(signals.get(snapshot.centreKey) ?? {}) })),
+    };
+  } catch (error) {
+    app.log.warn({ error }, "Roll figures unavailable for the urgency score");
+    return set;
+  }
+}
+
+// Dashboard chat grounding: only for questions about roll, enrolment levels
+// or trends, so other questions keep the room in the 4,096-token window.
+// An enhancement only: any failure leaves the chat answering without it.
+const ENROLMENT_QUALITY_PROMPT_PATTERN =
+  /\b(roll|enrolment|enrollment|enrolled|occupancy|utili[sz]ation|capacity|placements?|slipp|declin|dropp|falling|trend|diminish|attendance|how full|doing well)/i;
+
+async function findEnrolmentQualityGrounding(prompt: string, selectedCentreKey: number | null): Promise<string | null> {
+  if (!ENROLMENT_QUALITY_PROMPT_PATTERN.test(prompt)) return null;
+  try {
+    const view = await loadEnrolmentQualityView("12M", "interest");
+    return buildEnrolmentQualityGrounding(view.rows, view.windowKey, {
+      includeCentreKeys: selectedCentreKey == null ? [] : [selectedCentreKey],
+    });
+  } catch (error) {
+    app.log.warn({ error }, "Enrolment Quality grounding unavailable");
+    return null;
+  }
+}
+
+app.get<{ Querystring: { rollWindow?: string; rollSort?: string; rollOpen?: string } }>(
+  "/fragments/enrolment-quality",
+  async (request, reply) => {
+    const view = await loadEnrolmentQualityView(
+      resolveRollWindowKey(request.query?.rollWindow),
+      resolveRollSort(request.query?.rollSort),
+      parseRollOpen(request.query?.rollOpen),
+    );
+    return reply.type("text/html; charset=utf-8").send(renderEnrolmentQualityBody(view));
+  },
+);
+
+app.post("/api/enrolment-quality/sync", async (_request, reply) => {
+  if (getRollHistoryProgress().running) {
+    reply.code(409);
+    return { error: "An update from Infocare is already running." };
+  }
+  void runRollHistorySync(app.log);
+  return { ok: true };
+});
+
+app.get("/api/enrolment-quality/sync/status", async () => getRollHistoryProgress());
+
+// The panel's PDF button: the same period and order as on screen.
+app.get<{ Querystring: { rollWindow?: string; rollSort?: string } }>("/api/enrolment-quality/pdf", async (request, reply) => {
+  const view = await loadEnrolmentQualityView(
+    resolveRollWindowKey(request.query?.rollWindow),
+    resolveRollSort(request.query?.rollSort),
+  );
+  const buffer = await generateEnrolmentQualityPdfBuffer(view);
+  return reply
+    .type("application/pdf")
+    .header("Content-Disposition", attachmentDownloadHeader(enrolmentQualityPdfFilename(view)))
+    .send(buffer);
+});
+
+// Infocare Analytics' print button: the same window and order as on screen.
+app.get<{ Querystring: { window?: string; sort?: string } }>("/api/analytics/pdf", async (request, reply) => {
+  const snapshotSet = await withRollSignals(await readLatestAnalyticsSnapshotSet());
+  if (!snapshotSet?.snapshots.length) {
+    return reply.code(404).send({ error: "No Infocare analytics snapshot yet." });
+  }
+  const windowKey = resolveWindowKey(request.query?.window);
+  const buffer = await generateAnalyticsPdfBuffer(snapshotSet, windowKey, resolveServiceSort(request.query?.sort));
+  return reply
+    .type("application/pdf")
+    .header("Content-Disposition", attachmentDownloadHeader(analyticsPdfFilename(windowKey)))
+    .send(buffer);
+});
+
+// Waitlist Quality's print button: the latest waitlist report.
+app.get("/api/waitlist/pdf", async (_request, reply) => {
+  const report = await readWaitlistDiscoveryReport();
+  if (!report) {
+    return reply.code(404).send({ error: "No waitlist report yet." });
+  }
+  const buffer = await generateWaitlistPdfBuffer(report);
+  return reply
+    .type("application/pdf")
+    .header("Content-Disposition", attachmentDownloadHeader(waitlistPdfFilename()))
+    .send(buffer);
+});
+
+app.post<{ Body: { centreKey?: unknown; capacity?: unknown; under2Capacity?: unknown; effectiveFrom?: unknown; note?: unknown } }>(
+  "/api/enrolment-quality/capacity",
+  async (request, reply) => {
+    const centreKey = parsePositiveInt(request.body?.centreKey);
+    const capacity = parsePositiveInt(request.body?.capacity);
+    const effectiveFrom = request.body?.effectiveFrom;
+    if (centreKey == null || capacity == null || capacity > 500 || !isValidMonth(effectiveFrom)) {
+      reply.code(400);
+      return { error: "A centre, a capacity between 1 and 500 and a month are required." };
+    }
+    // Optional: the under-2 part of the total (0 is allowed: no under-2s run).
+    const rawUnder2 = request.body?.under2Capacity;
+    const under2Capacity = rawUnder2 == null || rawUnder2 === "" ? null : Number(rawUnder2);
+    if (under2Capacity != null && (!Number.isInteger(under2Capacity) || under2Capacity < 0 || under2Capacity > capacity)) {
+      reply.code(400);
+      return { error: "Under-2 places must be a whole number from 0 up to the total capacity." };
+    }
+    const note = typeof request.body?.note === "string" ? request.body.note.slice(0, 200) : null;
+    await saveOperatingCapacity({ centreKey, capacity, under2Capacity, effectiveFrom, note });
+    return { ok: true };
+  },
+);
+
+app.post<{ Body: { centreKey?: unknown; effectiveFrom?: unknown } }>(
+  "/api/enrolment-quality/capacity/delete",
+  async (request, reply) => {
+    const centreKey = parsePositiveInt(request.body?.centreKey);
+    const effectiveFrom = request.body?.effectiveFrom;
+    if (centreKey == null || !isValidMonth(effectiveFrom)) {
+      reply.code(400);
+      return { error: "A centre and a month are required." };
+    }
+    await deleteOperatingCapacity(centreKey, effectiveFrom);
+    return { ok: true };
+  },
+);
+
+// Checked after startup and daily, but it only fetches finished months that
+// are not stored yet, so in practice it runs once a month, when a month ends
+// (one month per centre). The current month is fetched only by the panel's
+// "Update from Infocare" button.
+const ROLL_HISTORY_STARTUP_DELAY_MS = 180_000;
+const ROLL_HISTORY_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
+function startRollHistorySyncLoop() {
+  const run = () => {
+    try {
+      getInfocareEnv();
+    } catch {
+      return; // Infocare not configured on this machine.
+    }
+    // Finished months only: this calls Infocare once a month, when a month
+    // has ended (on the 1st, or the first day the app runs after it). Other
+    // checks find nothing missing and make no calls.
+    void runRollHistorySync(app.log, { includeCurrentMonth: false }).catch((error) =>
+      app.log.warn({ error }, "Enrolment Quality: monthly check failed"),
+    );
+  };
+  setTimeout(run, ROLL_HISTORY_STARTUP_DELAY_MS).unref();
+  setInterval(run, ROLL_HISTORY_CHECK_INTERVAL_MS).unref();
+}
+
 // Checked shortly after startup and daily after that; an update only runs when
 // the last complete one is a month old (or nothing has been collected yet).
 const SECTOR_STARTUP_DELAY_MS = 120_000;
@@ -3236,6 +3472,28 @@ app.post<{ Params: { id: string } }>("/api/wiki/:id/generate-tags", async (reque
       error: error instanceof Error ? error.message : "Could not generate tags.",
     };
   }
+});
+
+// Browsers won't follow file:// links from an http page, so a wiki link to a
+// folder on this PC is opened by the server in Explorer instead. A folder opens
+// as itself; a file is only selected in its folder, never run, so a link can't
+// launch a program.
+app.post<{ Body: { url?: unknown } }>("/api/wiki/open-local", async (request, reply) => {
+  let localPath: string;
+  try {
+    localPath = fileURLToPath(String(request.body?.url ?? ""));
+  } catch {
+    reply.code(400);
+    return { error: "That link is not a folder on this computer." };
+  }
+  const target = await stat(localPath).catch(() => null);
+  if (!target) {
+    reply.code(404);
+    return { error: `Not found: ${localPath}` };
+  }
+  const args = target.isDirectory() ? [localPath] : [`/select,${localPath}`];
+  spawn("explorer.exe", args, { detached: true, stdio: "ignore", windowsHide: false }).unref();
+  return { ok: true };
 });
 
 app.post<{ Body: Record<string, unknown> }>("/api/wiki", async (request, reply) => {
@@ -4454,7 +4712,7 @@ app.post<{
   }
 
   const help = await findHelpGrounding(prompt, request.body?.messages, DATA_CHAT_HELP_OPTIONS);
-  const latestSnapshotSet = await readLatestAnalyticsSnapshotSet();
+  const latestSnapshotSet = await withRollSignals(await readLatestAnalyticsSnapshotSet());
   const latestRunDate = latestSnapshotSet ? new Date(latestSnapshotSet.runDate) : new Date();
   const windowStartDate = resolveWindowStartDate(latestRunDate, selectedWindowKey);
   const metaAdsDashboardData = await readMetaAdsDashboardData({
@@ -4498,7 +4756,7 @@ app.post<{
         prompt,
         request.body?.messages,
         memory,
-        await withWikiGrounding(prompt, joinGrounding(liveGrounding, help?.text)),
+        await withWikiGrounding(prompt, joinGrounding(liveGrounding, await findEnrolmentQualityGrounding(prompt, memorySelectedCentreKey), help?.text)),
       ),
     );
 
@@ -4637,7 +4895,7 @@ app.post<{
 
   const prepared = await (async () => {
     const help = await findHelpGrounding(prompt, request.body?.messages, DATA_CHAT_HELP_OPTIONS);
-    const latestSnapshotSet = await readLatestAnalyticsSnapshotSet();
+    const latestSnapshotSet = await withRollSignals(await readLatestAnalyticsSnapshotSet());
     const latestRunDate = latestSnapshotSet ? new Date(latestSnapshotSet.runDate) : new Date();
     const windowStartDate = resolveWindowStartDate(latestRunDate, selectedWindowKey);
     const metaAdsDashboardData = await readMetaAdsDashboardData({
@@ -4663,7 +4921,7 @@ app.post<{
       prompt,
       request.body?.messages,
       memory,
-      await withWikiGrounding(prompt, joinGrounding(liveGrounding, help?.text)),
+      await withWikiGrounding(prompt, joinGrounding(liveGrounding, await findEnrolmentQualityGrounding(prompt, memorySelectedCentreKey), help?.text)),
     );
 
     return { help, context, messages, deterministicAnswer: buildDeterministicChatAnswer(context, prompt) };
@@ -5378,6 +5636,7 @@ async function start() {
   void startLandingIntelligenceFeedLoop(aiConfig, app.log);
   startHelpKbSyncLoop();
   startSectorSyncLoop();
+  startRollHistorySyncLoop();
   void logJdAgreementStatusOnStartup();
 
   if (mailchimpConfigStatus.isConfigured) {

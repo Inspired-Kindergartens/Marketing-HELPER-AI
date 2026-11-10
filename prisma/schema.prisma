@@ -80,6 +80,8 @@ model CentreReference {
   createdAt                      DateTime                        @default(now())
   updatedAt                      DateTime                        @updatedAt
   manualCapacity                 ManualCentreCapacity?
+  monthlyRolls                   CentreMonthlyRoll[]
+  operatingCapacities            CentreOperatingCapacity[]
   snapshots                      ServiceAnalyticsSnapshot[]
   metaCampaigns                  MetaCampaign[]
   metaAdSets                     MetaAdSet[]
@@ -122,6 +124,46 @@ model ManualCentreCapacity {
   createdAt        DateTime        @default(now())
   updatedAt        DateTime        @updatedAt
   centre           CentreReference @relation(fields: [centreKey], references: [centreKey], onDelete: Cascade, onUpdate: Cascade)
+}
+
+// Enrolment Quality: one row per centre per month, summarised from Infocare
+// attendance (bookings), licence days and the staff roster. The current month
+// is refreshed until it ends; % full roll is worked out when displayed, so a
+// changed operating capacity re-colours history without refetching.
+model CentreMonthlyRoll {
+  id            Int             @id @default(autoincrement())
+  centreKey     Int
+  month         String
+  openDays      Int
+  avgPlacements Float
+  avgAm         Float
+  avgPm         Float
+  avgLicence    Float
+  avgLicenceU2  Float           @default(0)
+  contactStaff  Int?
+  sessional     Boolean         @default(false)
+  complete      Boolean         @default(false)
+  fetchedAt     DateTime        @default(now())
+  centre        CentreReference @relation(fields: [centreKey], references: [centreKey], onDelete: Cascade, onUpdate: Cascade)
+
+  @@unique([centreKey, month])
+  @@index([month])
+}
+
+// The number of places a centre actually runs at (can be below its licence),
+// from a month onwards. The newest entry on or before a month applies.
+model CentreOperatingCapacity {
+  id            Int             @id @default(autoincrement())
+  centreKey     Int
+  effectiveFrom String
+  capacity       Int
+  under2Capacity Int?
+  note          String?
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+  centre        CentreReference @relation(fields: [centreKey], references: [centreKey], onDelete: Cascade, onUpdate: Cascade)
+
+  @@unique([centreKey, effectiveFrom])
 }
 
 model AnalyticsSnapshotRun {

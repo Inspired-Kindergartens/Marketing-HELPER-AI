@@ -3,6 +3,8 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { renderAppShell, renderMetaRecommendationNotePopup } from "../src/ui/app-shell.js";
+import { generateAnalyticsPdfBuffer } from "../src/ui/analytics-pdf.js";
+import { generateWaitlistPdfBuffer } from "../src/ui/waitlist-pdf.js";
 import type { WaitlistDiscoveryReport } from "../src/infocare/waitlist-report.js";
 import type { ServiceAnalyticsSnapshot } from "../src/infocare/models.js";
 import type { LatestSnapshotSet } from "../src/storage/analytics-store.js";
@@ -782,6 +784,75 @@ test("dashboard and chat panels expose scoped print actions", () => {
   assert.match(html, /delete document\.documentElement\.dataset\.printMode/);
   assert.match(html, /const chatHistory = \[\]/);
   assert.match(html, /messages: chatHistory/);
+});
+
+function pdfReportFixtures() {
+  const snapshotSet: LatestSnapshotSet = {
+    runDate: "2026-05-12T00:00:00.000Z",
+    source: "test",
+    createdAt: "2026-05-12T00:00:00.000Z",
+    snapshots: [
+      buildSnapshot({ centreKey: 1, serviceName: "Arataki Kindergarten" }),
+      buildSnapshot({ centreKey: 2, serviceName: "Matua Kindergarten", waitlistCount: 12 }),
+    ],
+  };
+  const report: WaitlistDiscoveryReport = {
+    generatedAt: "2026-05-01T00:00:00.000Z",
+    openCentreCount: 2,
+    totalWaitlistCount: 20,
+    waitlistStartingDateCount: 4,
+    startDateCount: 4,
+    missingStartDateCount: 16,
+    medianDays: 180,
+    averageDays: 200,
+    oldestDays: 900,
+    shortPlusTypicalCount: 12,
+    shortPlusTypicalTotal: 20,
+    longRunningCount: 8,
+    longRunningTotal: 20,
+    largestWaitlists: [
+      { centre: "Arataki Kindergarten", waitlist: 12, oldestDays: 900, shortWaitCount: 3, typicalWaitCount: 4, longRunningWaitCount: 3, veryLongRunningWaitCount: 2 },
+      { centre: "Matua Kindergarten", waitlist: 8, oldestDays: 400, shortWaitCount: 2, typicalWaitCount: 3, longRunningWaitCount: 3, veryLongRunningWaitCount: 0 },
+    ],
+    longTailWaitlists: [],
+    distribution: [],
+    ageProfileByThreshold: [{ category: "Short wait", under5: 5, turning5: 0, aged5Plus: 0, unknownDob: 0, total: 5 }],
+    thresholds: [],
+    recentDemand: {
+      lastMonth: [{ centre: "Arataki Kindergarten", newEnrolments: 3, newWaitlistEntries: 5, combined: 8 }],
+      lastTwoMonths: [],
+      lastThreeMonths: [],
+    },
+  };
+  return { snapshotSet, report };
+}
+
+test("Infocare Analytics and Waitlist Quality print buttons download their PDFs", () => {
+  const { snapshotSet, report } = pdfReportFixtures();
+  const html = renderAppShell(snapshotSet, { waitlistReport: report, selectedWindowKey: "6M", serviceSort: "asc" });
+
+  assert.match(html, /class="panel-action-button" href="\/api\/analytics\/pdf\?window=6M&amp;sort=asc" download/);
+  assert.match(html, /class="panel-action-button" href="\/api\/waitlist\/pdf" download/);
+  assert.doesNotMatch(html, /Print console/); // the analytics PDF replaces it
+
+  const focused = renderAppShell(snapshotSet, { waitlistReport: report, focusPanelId: "waitlist" });
+  assert.match(focused, /href="\/api\/waitlist\/pdf"/);
+  assert.doesNotMatch(focused, /Print window/); // one printer icon only
+});
+
+test("Infocare Analytics and Waitlist Quality PDFs: cover plus report pages, print settings", async () => {
+  const { snapshotSet, report } = pdfReportFixtures();
+  for (const buffer of [
+    await generateAnalyticsPdfBuffer(snapshotSet, "3M", "critical"),
+    await generateWaitlistPdfBuffer(report),
+  ]) {
+    const raw = buffer.toString("latin1");
+    assert.equal(buffer.subarray(0, 5).toString(), "%PDF-");
+    const pages = raw.match(/\/Type \/Page[^s]/g)?.length ?? 0;
+    assert.ok(pages >= 2, `expected a cover and report pages, got ${pages}`);
+    assert.ok(raw.includes("/Duplex /Simplex"), "single-sided print setting");
+    assert.ok(raw.includes("/NumCopies 7"), "7 copies print setting");
+  }
 });
 
 test("ai chat panel title and summary stay succinct", () => {

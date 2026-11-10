@@ -27,9 +27,23 @@ import {
 import { calculateUrgencyScore, determineUrgencyBand } from "../analytics/compute.js";
 import { renderLayout } from "./layout.js";
 import { THEME_HEAD_SCRIPT } from "./theme.js";
+import { formatAnalyticsServiceDisplayName } from "./centre-name.js";
+import {
+  renderEnrolmentQualityBody,
+  renderEnrolmentQualityHeaderActions,
+  renderEnrolmentQualityScript,
+  type EnrolmentQualityView,
+} from "./enrolment-quality-panel.js";
+import {
+  formatMonthLabel,
+  rollBand,
+  STEADY_POINTS as ROLL_STEADY_POINTS,
+  WATCH_PERCENT as ROLL_WATCH_PERCENT,
+  type EnrolmentQualityRow,
+} from "../analytics/enrolment-quality.js";
 
-type AnalyticsRow = NonNullable<LatestSnapshotSet>["snapshots"][number];
-type ServiceSort = "critical" | "asc" | "desc";
+export type AnalyticsRow = NonNullable<LatestSnapshotSet>["snapshots"][number];
+export type ServiceSort = "critical" | "asc" | "desc";
 type WaitlistSection = "threshold" | "hierarchy" | null;
 type GoogleAnalyticsSection = "pages" | null;
 type GoogleAnalyticsRangeSelection = {
@@ -42,6 +56,7 @@ type GoogleAnalyticsRangeSelection = {
 
 const PANEL_DEFINITIONS = [
   { id: "analytics", title: "Infocare Analytics", className: "panel--system" },
+  { id: "enrolment-quality", title: "Enrolment Quality", className: "panel--enrolment-quality" },
   { id: "waitlist", title: "Waitlist Quality", className: "panel--waitlist" },
   { id: "meta-ads", title: "META Ads", className: "panel--meta-ads" },
   { id: "google-analytics", title: "Google Analytics", className: "panel--google-analytics" },
@@ -86,6 +101,7 @@ const META_FOLLOW_UP_EMAIL_TEMPLATE = [
 ].join("\n");
 
 type AppShellOptions = {
+  enrolmentQuality?: EnrolmentQualityView | null;
   selectedCentreKey?: number | null;
   selectedWindowKey?: string | null;
   serviceSort?: string | null;
@@ -150,14 +166,14 @@ function serializeJsonForScript(value: unknown) {
   return JSON.stringify(value).replaceAll("<", "\\u003c");
 }
 
-function formatEnrolmentCapacity(row: AnalyticsRow) {
+export function formatEnrolmentCapacity(row: AnalyticsRow) {
   const bookedPercent =
     row.bookedUtilisationRatio > 0 ? ` ${formatPercent(row.bookedUtilisationRatio)}` : "";
 
   return `${row.enrolledCount}/${row.licensedCapacity}${bookedPercent}`;
 }
 
-function formatEstimatedPlaces(row: AnalyticsRow) {
+export function formatEstimatedPlaces(row: AnalyticsRow) {
   if (row.bookedAverageDailyCount <= 0 || row.licensedCapacity <= 0) {
     return "-";
   }
@@ -165,7 +181,7 @@ function formatEstimatedPlaces(row: AnalyticsRow) {
   return String(getEstimatedOpenPlaces(row));
 }
 
-function formatAgeBandCapacity(enrolledCount: number, licensedCapacity?: number | null) {
+export function formatAgeBandCapacity(enrolledCount: number, licensedCapacity?: number | null) {
   if ((licensedCapacity == null || licensedCapacity <= 0) && enrolledCount <= 0) {
     return "-";
   }
@@ -177,23 +193,19 @@ function formatAgeBandCapacity(enrolledCount: number, licensedCapacity?: number 
   return `${enrolledCount}/${licensedCapacity}`;
 }
 
-function formatAnalyticsServiceDisplayName(serviceName: string) {
-  return serviceName.replace(/\s*Kindergarten[\s\S]*$/i, "").trim() || serviceName;
-}
-
-function formatWaitlistCoverage(row: AnalyticsRow) {
+export function formatWaitlistCoverage(row: AnalyticsRow) {
   return `${getActionableWaitlistCount(row)}/${row.waitlistCount}`;
 }
 
-function getActionableWaitlistCount(row: AnalyticsRow) {
+export function getActionableWaitlistCount(row: AnalyticsRow) {
   return estimateActionableWaitlistCount(row);
 }
 
-function getScopedKnownLeavingCount(row: ServiceAnalyticsSnapshot, windowKey: WindowKey) {
+export function getScopedKnownLeavingCount(row: ServiceAnalyticsSnapshot, windowKey: WindowKey) {
   return row.knownLeavingCountsByWindow[windowKey];
 }
 
-function getScopedApproachingFiveCount(row: ServiceAnalyticsSnapshot, windowKey: WindowKey) {
+export function getScopedApproachingFiveCount(row: ServiceAnalyticsSnapshot, windowKey: WindowKey) {
   return row.approachingFiveCountsByWindow[windowKey];
 }
 
@@ -205,7 +217,7 @@ function getScopedReplacementPressure(row: ServiceAnalyticsSnapshot, windowKey: 
   );
 }
 
-function resolveServiceSort(input?: string | null): ServiceSort {
+export function resolveServiceSort(input?: string | null): ServiceSort {
   if (input === "asc" || input === "desc") {
     return input;
   }
@@ -338,7 +350,7 @@ function normalizePriorityValue(value: number, cap: number) {
   return Math.min(value, cap) / cap;
 }
 
-function getEstimatedOpenPlaces(row: AnalyticsRow) {
+export function getEstimatedOpenPlaces(row: AnalyticsRow) {
   if (row.bookedAverageDailyCount <= 0 || row.licensedCapacity <= 0) {
     return 0;
   }
@@ -355,6 +367,8 @@ function getUrgencyScore(row: AnalyticsRow, windowKey: WindowKey) {
     availablePlaces: Math.max(row.licensedCapacity - row.enrolledCount, 0),
     scopedLeavingCount: getScopedKnownLeavingCount(row, windowKey),
     actionableWaitlist: getActionableWaitlistCount(row),
+    rollPercent: row.rollPercent,
+    rollYearAgoPercent: row.rollYearAgoPercent,
   });
 }
 
@@ -393,7 +407,7 @@ function getPriorityListingScore(row: AnalyticsRow, windowKey: WindowKey) {
   );
 }
 
-function sortAnalyticsRows(rows: readonly AnalyticsRow[], serviceSort: ServiceSort, windowKey: WindowKey) {
+export function sortAnalyticsRows(rows: readonly AnalyticsRow[], serviceSort: ServiceSort, windowKey: WindowKey) {
   const sorted = [...rows];
 
   if (serviceSort === "asc") {
@@ -439,11 +453,26 @@ function buildRankingReasons(row: AnalyticsRow, windowKey: WindowKey) {
     reasons.push("high leaving pressure");
   }
 
+  // Enrolment Quality signals, the same ones the urgency score uses.
+  if (row.rollPercent != null && Math.round(row.rollPercent) < ROLL_WATCH_PERCENT) {
+    reasons.push("low roll");
+  }
+
+  if (
+    row.rollPercent != null &&
+    row.rollYearAgoPercent != null &&
+    Math.round(row.rollYearAgoPercent - row.rollPercent) >= ROLL_STEADY_POINTS
+  ) {
+    reasons.push("falling roll");
+  }
+
   if (under2Gap > 0) {
     reasons.push(`under-2 below capacity by ${under2Gap}`);
   }
 
-  if (over2Gap > 0) {
+  // Enrolled over-2s against the licence; the roll reasons above replace it
+  // where Enrolment Quality has data (part-week children, operating capacity).
+  if (over2Gap > 0 && row.rollPercent == null) {
     reasons.push(`over-2 below capacity by ${over2Gap}`);
   }
 
@@ -538,6 +567,14 @@ function buildOpeningNarrative(row: AnalyticsRow, windowKey: WindowKey) {
 
     if (reason === "high leaving pressure") {
       return `several enrolment changes are coming up (${scopedReplacementPressure} across Leaving, Near 5, and Age 5+)`;
+    }
+
+    if (reason === "low roll" && row.rollPercent != null && row.rollMonth) {
+      return `the roll was only ${Math.round(row.rollPercent)}% full in ${formatMonthLabel(row.rollMonth)}`;
+    }
+
+    if (reason === "falling roll" && row.rollPercent != null && row.rollYearAgoPercent != null) {
+      return `the roll is down ${Math.round(row.rollYearAgoPercent - row.rollPercent)}% on a year ago`;
     }
 
     if (reason === "strong waitlist pressure") {
@@ -719,7 +756,7 @@ function formatDaysSince(value?: string | null) {
   return elapsedDays === 1 ? "1 day" : `${elapsedDays} days`;
 }
 
-function formatAverageDays(value: number | null | undefined) {
+export function formatAverageDays(value: number | null | undefined) {
   if (value == null || !Number.isFinite(value)) {
     return "-";
   }
@@ -962,7 +999,7 @@ function buildWaitlistAgeDistributionChartConfig(rows: WaitlistChartRow[]): Wait
   };
 }
 
-function hasThresholdCounts(row: { shortWaitCount?: number; typicalWaitCount?: number; longRunningWaitCount?: number; veryLongRunningWaitCount?: number }) {
+export function hasThresholdCounts(row: { shortWaitCount?: number; typicalWaitCount?: number; longRunningWaitCount?: number; veryLongRunningWaitCount?: number }) {
   return (
     row.shortWaitCount != null ||
     row.typicalWaitCount != null ||
@@ -971,7 +1008,7 @@ function hasThresholdCounts(row: { shortWaitCount?: number; typicalWaitCount?: n
   );
 }
 
-function getLongAndVeryLongCount(row: { longRunningWaitCount?: number; veryLongRunningWaitCount?: number }) {
+export function getLongAndVeryLongCount(row: { longRunningWaitCount?: number; veryLongRunningWaitCount?: number }) {
   return (row.longRunningWaitCount ?? 0) + (row.veryLongRunningWaitCount ?? 0);
 }
 
@@ -1008,7 +1045,7 @@ function buildFallbackThresholdChartConfig(rows: readonly AnalyticsRow[], showAl
   };
 }
 
-function mergeWaitlistReportRows(report: WaitlistDiscoveryReport) {
+export function mergeWaitlistReportRows(report: WaitlistDiscoveryReport) {
   const byCentre = new Map<string, WaitlistDiscoveryReport["largestWaitlists"][number]>();
 
   for (const row of [...report.largestWaitlists, ...report.longTailWaitlists]) {
@@ -1238,7 +1275,7 @@ function renderWaitlistHierarchyTable(rows: WaitlistHierarchyRow[], showAllRows:
             <th>Centre</th>
             <th>Long-running wait</th>
             <th>Very long-running wait</th>
-            <th>Max days</th>
+            <th>Longest wait</th>
           </tr>
         </thead>
         <tbody>
@@ -1264,7 +1301,7 @@ function renderLongRunningTable(report: WaitlistDiscoveryReport, showAllRows: bo
   return renderWaitlistHierarchyTable(mergeWaitlistReportRows(report), showAllRows);
 }
 
-function formatRecentDemandCentreLabel(centre: string) {
+export function formatRecentDemandCentreLabel(centre: string) {
   const trimmed = centre.trim();
   const kindergartenIndex = trimmed.search(/\bkindergart?en\b/i);
 
@@ -1692,6 +1729,11 @@ function renderAnalyticsRefreshButton(
   return `<a class="panel-action-button${pulsateClass}" data-snapshot-refresh-button data-snapshot-refresh-status="${snapshotRefreshStatus}" href="${href}" aria-label="${label}" title="${label}"><i class="bi bi-download ui-icon" aria-hidden="true"></i></a>`;
 }
 
+// The print icon that downloads a panel's PDF report (see report-pdf.ts).
+function renderPdfPrintAction(href: string, label: string) {
+  return `<a class="panel-action-button" href="${escapeHtml(href)}" download aria-label="${label}" title="${label}"><i class="bi bi-printer ui-icon" aria-hidden="true"></i></a>`;
+}
+
 function buildPanelActions(
   panelId: string,
   selectedCentreKey: number | null | undefined,
@@ -1700,6 +1742,8 @@ function buildPanelActions(
   focusPanelId?: string | null,
   googleAnalyticsRange?: GoogleAnalyticsRangeSelection,
   snapshotRefreshStatus: "idle" | "in-progress" | "ready" | "error" = "idle",
+  // Panel-specific icon buttons rendered by the panel's own module.
+  panelOwnActions = "",
 ) {
   if (panelId === "chat") {
     return `<button class="panel-action-button" type="button" data-print-mode="chat" aria-label="Print AI Chat" title="Print AI Chat"><i class="bi bi-printer ui-icon" aria-hidden="true"></i></button>`;
@@ -1709,8 +1753,11 @@ function buildPanelActions(
     panelId === "analytics"
       ? renderAnalyticsToolbarActions(selectedCentreKey, selectedWindowKey, serviceSort)
       : "";
+  // A panel with its own PDF print button (Enrolment Quality, Infocare
+  // Analytics, Waitlist Quality) shows that instead of the browser print.
+  const hasPdfPrint = panelOwnActions.includes("bi-printer");
   const dashboardPrintAction =
-    !focusPanelId && panelId === "analytics"
+    !focusPanelId && panelId === "analytics" && !hasPdfPrint
       ? `<button class="panel-action-button" type="button" data-print-mode="dashboard" aria-label="Print console" title="Print console"><i class="bi bi-printer ui-icon" aria-hidden="true"></i></button>`
       : "";
   const analyticsRefreshAction =
@@ -1729,12 +1776,13 @@ function buildPanelActions(
   const printAction = `<button class="panel-action-button" type="button" data-print-page aria-label="Print window" title="Print window"><i class="bi bi-printer ui-icon" aria-hidden="true"></i></button>`;
 
   if (focusPanelId === panelId) {
-    return `${analyticsViewActions}${analyticsRefreshAction}${metaRefreshAction}${googleAnalyticsRefreshAction}${printAction}${fullscreenAction}<a class="panel-action-link" href="/app?${buildQueryString(selectedCentreKey, selectedWindowKey, serviceSort, null, googleAnalyticsRange)}"><i class="bi bi-arrow-left-short ui-icon" aria-hidden="true"></i><span>Return to dashboard</span></a>`;
+    const windowPrintAction = hasPdfPrint ? "" : printAction;
+    return `${analyticsViewActions}${analyticsRefreshAction}${metaRefreshAction}${googleAnalyticsRefreshAction}${panelOwnActions}${windowPrintAction}${fullscreenAction}<a class="panel-action-link" href="/app?${buildQueryString(selectedCentreKey, selectedWindowKey, serviceSort, null, googleAnalyticsRange)}"><i class="bi bi-arrow-left-short ui-icon" aria-hidden="true"></i><span>Return to dashboard</span></a>`;
   }
 
   const popupQuery = buildQueryString(selectedCentreKey, selectedWindowKey, serviceSort, panelId, googleAnalyticsRange);
 
-  return `${analyticsViewActions}${dashboardPrintAction}${analyticsRefreshAction}${metaRefreshAction}${googleAnalyticsRefreshAction}${fullscreenAction}<button class="panel-action-button" type="button" data-open-panel="${panelId}" data-panel-query="${popupQuery}" aria-label="Open window" title="Open window"><i class="bi bi-box-arrow-up-right ui-icon" aria-hidden="true"></i></button>`;
+  return `${analyticsViewActions}${dashboardPrintAction}${analyticsRefreshAction}${metaRefreshAction}${googleAnalyticsRefreshAction}${panelOwnActions}${fullscreenAction}<button class="panel-action-button" type="button" data-open-panel="${panelId}" data-panel-query="${popupQuery}" aria-label="Open window" title="Open window"><i class="bi bi-box-arrow-up-right ui-icon" aria-hidden="true"></i></button>`;
 }
 
 function formatDocumentTitleTimestamp(date = new Date()) {
@@ -2046,6 +2094,31 @@ function renderCompactStats(snapshotSet: LatestSnapshotSet | null, selectedWindo
   `;
 }
 
+// One sentence from the Enrolment Quality panel, using the same figures and
+// period as that panel: latest % full roll, its band, capacity and change.
+const ROLL_BAND_WORDS = { good: "good", watch: "watch", low: "low" } as const;
+
+export function buildRollGuidance(row: EnrolmentQualityRow | undefined, view: EnrolmentQualityView | null | undefined) {
+  if (!row || !view || row.latestPercent == null || !row.latest) {
+    return null;
+  }
+
+  const pct = (value: number) => `${Math.round(value)}%`;
+  const band = rollBand(row.latestPercent);
+  const capacity = row.currentCapacity
+    ? `, of ${Math.round(row.currentCapacity.capacity)} ${row.currentCapacity.source === "operating" ? "operating" : "licensed"} places`
+    : "";
+  const shownChange = row.change == null ? null : Math.round(row.change);
+  const change =
+    shownChange == null || row.startPercent == null
+      ? ""
+      : row.direction === "steady"
+        ? `; steady over ${view.windowKey} (${pct(row.startPercent)} at the start)`
+        : `; ${shownChange > 0 ? "up" : "down"} ${Math.abs(shownChange)}% over ${view.windowKey} from ${pct(row.startPercent)}`;
+
+  return `Roll: <strong>${pct(row.latestPercent)} full</strong> in ${formatMonthLabel(row.latest.month)}${row.latest.monthToDate ? " so far" : ""}${band ? ` (${ROLL_BAND_WORDS[band]})` : ""}${capacity}${change}.`;
+}
+
 function renderSelectedCentreNarrative(
   snapshotSet: LatestSnapshotSet | null,
   selectedCentreKey: number | null | undefined,
@@ -2054,6 +2127,7 @@ function renderSelectedCentreNarrative(
   annualHistory: CentreSnapshotHistoryEntry[],
   latestMetaRecommendationNotesForCentre: MetaNotificationHistoryRow[] = [],
   serviceSort: ServiceSort = "critical",
+  enrolmentQuality: EnrolmentQualityView | null = null,
 ) {
   const selectedRow = resolveSelectedRow(snapshotSet, selectedCentreKey, serviceSort, selectedWindowKey);
 
@@ -2068,6 +2142,10 @@ function renderSelectedCentreNarrative(
 
   const openingNarrative = normaliseGuidanceLead(buildOpeningNarrative(selectedRow, selectedWindowKey));
   const primaryGuidanceItems = [
+    buildRollGuidance(
+      enrolmentQuality?.rows.find((row) => row.centreKey === selectedRow.centreKey),
+      enrolmentQuality,
+    ),
     buildWaitlistGuidance(selectedRow, selectedWindowKey),
     buildWaitlistAgeQualityGuidance(selectedRow),
     buildWindowInsights(selectedRow, centreHistory, selectedWindowKey),
@@ -2119,6 +2197,7 @@ function renderAiChatPanel(
   annualHistory: CentreSnapshotHistoryEntry[],
   latestMetaRecommendationNotesForCentre: MetaNotificationHistoryRow[] = [],
   serviceSort: ServiceSort = "critical",
+  enrolmentQuality: EnrolmentQualityView | null = null,
 ) {
   const resolvedSelectedCentreKey =
     selectedCentreKey ??
@@ -2136,6 +2215,7 @@ function renderAiChatPanel(
           annualHistory,
           latestMetaRecommendationNotesForCentre,
           serviceSort,
+          enrolmentQuality,
         )}
       </div>
       <div class="chat-shell__composer">
@@ -5483,13 +5563,30 @@ export function renderAppShell(
     id: panel.id,
     title: panel.title,
     className: panel.className,
-    actions: buildPanelActions(panel.id, selectedCentreKey, selectedWindowKey, serviceSort, focusPanelId, googleAnalyticsRange, snapshotRefreshStatus),
+    actions: buildPanelActions(
+      panel.id,
+      selectedCentreKey,
+      selectedWindowKey,
+      serviceSort,
+      focusPanelId,
+      googleAnalyticsRange,
+      snapshotRefreshStatus,
+      panel.id === "enrolment-quality" && options.enrolmentQuality
+        ? renderEnrolmentQualityHeaderActions(options.enrolmentQuality)
+        : panel.id === "analytics" && snapshotSet?.snapshots.length
+          ? renderPdfPrintAction(`/api/analytics/pdf?${new URLSearchParams({ window: selectedWindowKey, sort: serviceSort }).toString()}`, "Download Infocare Analytics as a PDF to print")
+          : panel.id === "waitlist" && waitlistReport
+            ? renderPdfPrintAction("/api/waitlist/pdf", "Download Waitlist Quality as a PDF to print")
+            : "",
+    ),
     meta:
       panel.id === "analytics"
         ? `
             <span>source ${snapshotSet?.source ?? "none"}</span>
             <span>${snapshotSet ? formatTimestamp(snapshotSet.createdAt) : "pending"}</span>
           `
+        : panel.id === "enrolment-quality"
+          ? `<span>% full roll by month</span>`
         : panel.id === "notes"
           ? `<span>${options.metaRecommendationNotes?.length ?? 0} active notes</span>`
         : panel.id === "meta-ads"
@@ -5502,6 +5599,10 @@ export function renderAppShell(
     children:
       panel.id === "analytics"
         ? renderAnalyticsTable(snapshotSet, selectedCentreKey, selectedWindowKey, serviceSort, options.centreContacts ?? [], options.metaAdsDashboardData)
+        : panel.id === "enrolment-quality"
+          ? options.enrolmentQuality
+            ? renderEnrolmentQualityBody(options.enrolmentQuality)
+            : `<p class="text-empty">Enrolment Quality is not available.</p>`
         : panel.id === "notes"
           ? renderNotesPanel(options.metaRecommendationNotes ?? [])
         : panel.id === "waitlist"
@@ -5545,6 +5646,7 @@ export function renderAppShell(
               annualHistory,
               options.latestMetaRecommendationNotesForCentre ?? [],
               serviceSort,
+              options.enrolmentQuality ?? null,
             ),
   }));
   const layout = renderLayout({
@@ -5582,6 +5684,7 @@ export function renderAppShell(
     ${renderAiChatScript()}
     ${renderBreakoutScript()}
     ${renderSnapshotRefreshScript()}
+    ${renderEnrolmentQualityScript()}
   </body>
 </html>`;
 }

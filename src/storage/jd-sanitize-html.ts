@@ -19,10 +19,27 @@ const TAG_ALIASES: Record<string, string> = {
 
 function sanitizeHref(raw: string): string | null {
   const value = raw.trim();
+  // A Windows path typed into the link prompt (D:\Folder or \\server\share)
+  // becomes a file:/// URL. Browsers won't follow those from an http page, so
+  // the wiki page script hands them to the server to open in Explorer.
+  const localPath = decodeEntities(value);
+  if (/^[a-z]:[\\/]/i.test(localPath) || /^\\\\[^\\]/.test(localPath)) {
+    const slashed = localPath.replace(/\\/g, "/");
+    const url = slashed.startsWith("//") ? `file:${slashed}` : `file:///${slashed}`;
+    // encodeURI leaves # and ? alone, but in a folder name they are just characters.
+    return escapeAttribute(encodeURI(url).replace(/#/g, "%23").replace(/\?/g, "%3F"));
+  }
+  if (/^file:\/\//i.test(value)) {
+    return value.replace(/"/g, "&quot;");
+  }
   if (/^https?:\/\//i.test(value) || value.startsWith("/") || value.startsWith("#")) {
     return value.replace(/"/g, "&quot;");
   }
   return null;
+}
+
+function escapeAttribute(value: string): string {
+  return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
 }
 
 // Strips any tag not in ALLOWED_TAGS (keeping its text content), and on

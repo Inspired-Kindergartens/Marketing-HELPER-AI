@@ -25,6 +25,7 @@ function compactCentre(centre: AiDashboardContext["selectedCentre"]) {
     enrolled: centre.enrolled,
     licensedCapacity: centre.licensedCapacity,
     bookedUtilisationPercent: centre.bookedUtilisationPercent,
+    roll: centre.roll,
     estimatedOpenPlaces: centre.estimatedOpenPlaces,
     waitlist: centre.waitlist
       ? {

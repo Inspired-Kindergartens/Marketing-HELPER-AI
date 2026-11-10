@@ -16,6 +16,8 @@ const cases: Array<[string, any, string | RegExp]> = [
   ["What does the Needs ads label mean?", dash, "Needs ads: 5 or more"],
   ["What does Learning Limited mean on our Meta ads?", dash, /Learning Limited: (the ad set is not getting|Meta says the ad set is unlikely to exit learning, because)/],
   ["How is the urgency score worked out?", dash, "Uncovered leavers"],
+  ["Does % full roll account for lower numbers on Mondays and Fridays?", dash, "A quiet Monday and a full Wednesday go into the same average"],
+  ["A centre has fewer staff on Mondays, is its roll better than reported?", dash, /Deliberate model|Reacting to demand/],
   ["What is engagement rate in Google Analytics?", dash, /Engagement rate: engaged sessions|engagement rate is the percentage of engaged sessions|percentage of engaged sessions/i],
 ];
 for (const w of [[2, 0.5, 1, 1.5]]) {

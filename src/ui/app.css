@@ -28,6 +28,7 @@ html {
   --color-wait-very-long: #fb3640;
   --color-row-hover: #0a0f0a;
   --color-row-selected: #101810;
+  --color-row-total: #2a2a2a;
   --color-empty: #8f8f8f;
   --color-muted-control: #7e7e7e;
   --color-chat-surface: #060606;
@@ -905,6 +906,90 @@ button:focus-visible {
 
 .analytics-table__row--clickable {
   cursor: pointer;
+}
+
+/* Enrolment Quality's All kindergartens row: dark grey, open or not. */
+.enrolment-quality__table tbody tr.enrolment-quality__total-row,
+.enrolment-quality__table tbody tr.enrolment-quality__total-row:hover {
+  background: var(--color-row-total);
+}
+
+/* --- Enrolment Quality: trend lines (colours from theme tokens only) --- */
+.enrolment-quality__spark {
+  display: block;
+  width: 160px;
+  max-width: 100%;
+  height: 32px;
+}
+
+.enrolment-quality__trend {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--color-muted);
+}
+
+.enrolment-quality__trend-arrow {
+  font-size: 1.1rem;
+  width: 1.1rem;
+}
+
+.enrolment-quality__trend--rise {
+  color: var(--color-active);
+}
+
+.enrolment-quality__trend--fall {
+  color: var(--color-wait-very-long);
+}
+
+.enrolment-quality__trend--steady {
+  color: var(--color-muted);
+}
+
+.enrolment-quality__band--good {
+  color: var(--color-active);
+}
+
+.enrolment-quality__band--watch {
+  color: var(--color-muted);
+}
+
+.enrolment-quality__band--low {
+  color: var(--color-wait-very-long);
+}
+
+.enrolment-quality__spark-line {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.enrolment-quality__spark-dot {
+  fill: currentColor;
+}
+
+.enrolment-quality__spark-full {
+  stroke: var(--color-muted);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+  vector-effect: non-scaling-stroke;
+}
+
+.enrolment-quality__detail-grid {
+  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+  align-items: start;
+}
+
+.enrolment-quality__capacity {
+  padding: 10px;
+}
+
+@media (max-width: 900px) {
+  .enrolment-quality__detail-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .analytics-table__service {

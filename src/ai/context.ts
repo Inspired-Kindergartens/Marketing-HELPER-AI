@@ -138,6 +138,8 @@ function mapCentre(row: ServiceAnalyticsSnapshot, windowKey: WindowKey, coverage
     availablePlaces: Math.max(row.licensedCapacity - row.enrolledCount, 0),
     scopedLeavingCount: leaving,
     actionableWaitlist: actionableWaitlist,
+    rollPercent: row.rollPercent,
+    rollYearAgoPercent: row.rollYearAgoPercent,
   });
 
   return {
@@ -149,6 +151,15 @@ function mapCentre(row: ServiceAnalyticsSnapshot, windowKey: WindowKey, coverage
     licensedCapacity: row.licensedCapacity,
     bookedAverageDailyCount: row.bookedAverageDailyCount,
     bookedUtilisationPercent: Math.round(row.bookedUtilisationRatio * 100),
+    // % full roll (Enrolment Quality), newest complete month and a year before.
+    roll:
+      row.rollPercent != null && row.rollMonth
+        ? {
+            month: row.rollMonth,
+            percent: Math.round(row.rollPercent),
+            yearAgoPercent: row.rollYearAgoPercent == null ? null : Math.round(row.rollYearAgoPercent),
+          }
+        : null,
     estimatedOpenPlaces: openPlaces,
     under2: {
       enrolled: row.enrolledUnder2Count,

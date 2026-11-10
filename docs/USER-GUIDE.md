@@ -49,11 +49,49 @@ One row per kindergarten, from Infocare. The most urgent centres are at the top.
 
 Click a row to see that centre's summary in the chat panel.
 
-**Urgency** (Critical, High, Moderate, Stable) is a score out of 100. It goes up when children are leaving faster than the realistic waitlist can replace them, and when the centre already has empty places. Critical is 70+, High 45–69, Moderate 20–44, Stable under 20. It is not a ranking, so every centre can be Stable in a good week.
+The **print** button (top right of the panel) downloads the table as a PDF, for the window and order you have chosen, with a total row for all kindergartens. It replaces the old Print console button.
+
+**Urgency** (Critical, High, Moderate, Stable) is a score out of 100. It goes up when children are leaving faster than the realistic waitlist can replace them, when the roll has empty places, when the roll is lower than the same month last year, and when there is no realistic waitlist at all. Empty places and the yearly fall come from last month's % full roll in **Enrolment Quality**, so part-week children share a place and your operating capacity is used. Centres without roll data are judged on enrolled children against the licence. Critical is 70+, High 45–69, Moderate 20–44, Stable under 20. It is not a ranking, so every centre can be Stable in a good week.
+
+### Enrolment Quality — [open](/app?panel=enrolment-quality)
+
+How full each kindergarten has been, month by month, so you can spot a centre that was doing well and is now slipping. It replaces the printed "Roll Returns" sheet.
+
+- **% full roll** — on an average open day, how many children were booked in the busier session (morning or afternoon), against the places the centre runs at. Children who come part of the week share a place: Kimmy (Tue, Wed, Fri) and Joe (Mon, Thu) together fill **one** place. A morning-only child and an afternoon-only child also share one. Over 100% is normal for a popular centre.
+- **Trend** — a small line for the chosen period, with an arrow: green ↗ rising, red ↘ falling, grey → steady (within 3% either way). Each line is stretched to fit its own months, so a real rise or fall stands out. The dashed line is 100%. A gap means no figures for that month (for example, before the centre opened).
+- **Start / Latest / Change** — the first and latest month in the period, and the difference between them (e.g. 90% → 82% is −8%). The current month is "to date". Percentages are green at 90% and above, grey from 80% to 89%, and red under 80%.
+- **Am / pm** — the average number of children booked in the morning and the afternoon in the latest month.
+- **Capacity** — the places used for the %: the centre's operating capacity if one is set, otherwise its licence (hover to see which). Press the pencil to change it.
+
+**All kindergartens** is always the top row, shaded grey, whatever the sort. It adds every centre together: all children placed against all capacity, with the same trend, Start, Latest, Change, Am / pm and Capacity columns. Click it to see its months. It has no pencil; change a centre's capacity and the total follows. It is also first in the PDF, and Beep Beep uses it for questions about the organisation as a whole.
+
+**Quieter days of the week.** % full roll is a monthly average, so a centre that is quieter on Mondays and Fridays shows a lower % without saying which days are quiet. Ask Beep Beep about weekday patterns or reduced-day staffing: it can explain how to read the roster evidence and why fewer staff on a day does not always mean the centre is fuller than reported.
+
+**The period buttons** (`3M`, `6M`, `12M`, `2Y`, `3Y`, `5Y`) look back from this month. `12M` is the default.
+
+**The sort buttons**: *Worst change* (the default) sorts by the Change column, the biggest fall at the top. *Worst latest* sorts by the Latest column, the lowest % at the top. *A-Z* and *Z-A* sort by name.
+
+**Click a centre** (or the pencil in its Capacity cell) to see each month and to set its **operating capacity**: the number of places the centre actually runs at, which can be lower than its licence (for example, licensed for 45 but staffed for 40). Choose the month it starts from; earlier months keep the licence or the earlier figure. The app suggests a figure from the staff roster: teachers working with children at 10am on a typical day, × 10 children each (× 15 for sessions of 4 hours or less), never more than the licence. Press **Use** to copy it, then **Save**.
+
+**Under-2s.** OPEYS All Day, Maunganui All Day and Tai o Fenua are licensed for under-2s, inside their total (OPEYS: 60, of which up to 18 under-2). For these centres the editor also has an **Under-2** box: how many of the total are under-2 places you actually run (for example OPEYS 60, of which 10 under-2). % full roll still counts all children against the total. The under-2 figure is used for the staffing suggestion (under-2s need one teacher for every 5 children), and it is shown in the Capacity tooltip, the PDF (`U2 10 {18}`) and Beep Beep's figures.
+
+The **print** button (top right of the panel) downloads what is on screen as a PDF, for the period and order you have chosen: a plain cover page (just the title, the period, the date it was made and the logo, so a copy left lying around shows no figures), a summary table, a chart of each centre's change, then a chart for every centre (six to a page). Capacity is shown as the operating capacity with the licence in curly brackets, e.g. `40 {45}`. The operating capacity is kept separately and never changes the licence from Infocare.
+
+**Printing the PDFs.** The Enrolment Quality, Infocare Analytics and Waitlist Quality PDFs all start with the same plain cover page, and each file asks for A4 portrait, actual size, single-sided, 7 copies. Adobe Acrobat Reader fills these in for you; Chrome and Edge usually don't, so check them in the Print dialog. A PDF can't ask for stapling or page order, so in the printer's settings (**Printer Properties** or **More settings**) choose **Staple: top left** and make sure **Reverse order** is off.
+
+The figures come from Infocare bookings. The app fetches them by itself once a month, at the start of the month, when the month just ended is complete. **Update from Infocare** (the download button at the top of the panel) fetches them now, including this month so far. The first fetch reads up to five years and takes about an hour; the table fills in while it runs.
+
+Ask Beep Beep questions like "Which centres are slipping?" or "How has Brookfield's roll changed this year?". It reads these figures for questions about roll, enrolments, capacity or trends.
+
+When you pick a centre, Beep Beep's opening summary on the dashboard includes one line from this panel, for example *Roll: 73% full in Nov-26 so far (low), of 42 licensed places; down 6% over 12M from 79%.* It uses the same figures and period as the panel.
 
 ### Waitlist Quality
 
 Shows whether each waitlist is fresh or stale: how long families have been waiting, the oldest entry, and how many children on it are already too old for kindergarten. A big waitlist full of old entries is weaker than it looks.
+
+The **print** button (top right of the panel) downloads the whole panel as a PDF, with every centre listed (the panel shows the top eight).
+
+**Longest wait** (in the Waitlist Quality Hierarchy table) is how many days the longest-waiting single child at that centre has been on the waitlist.
 
 ### META Ads
 
@@ -143,6 +181,7 @@ Our team wiki: how we do things, rules to remember, brand and process notes.
 - **Add** a new article. When you save, Beep Beep files it under a category and writes its tags and summary for you.
 - Click an article to read it; **Edit**, **Archive**, **Delete** or **Copy to clipboard** it from there.
 - **Categories** lets you rename, re-order or remove categories.
+- **Links:** select some text, press the link button and paste a web address or a folder on this computer (for example `D:\Apps\...\Panui`). Clicking a folder link opens it in File Explorer. While editing, hold **Ctrl** and click a link to open it.
 - **Archived** articles are kept but hidden, and Beep Beep stops using them.
 - Beep Beep on this page answers from the articles and says which one it used. The Marketing and General Chat helpers read them too.
 

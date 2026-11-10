@@ -94,7 +94,7 @@ export function buildWeeklyExtractionDateRange(now: Date = new Date()): Extracti
   };
 }
 
-function parseTimeToMinutes(value?: string) {
+export function parseTimeToMinutes(value?: string) {
   if (!value) {
     return null;
   }

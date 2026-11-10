@@ -158,6 +158,11 @@ export const serviceAnalyticsSnapshotSchema = z.object({
   replacementPressureCountsByWindow: windowScopedCountsSchema.optional(),
   replacementPressure: z.number().int(),
   waitlistCoverRatio: z.number(),
+  // Attached at read time from Enrolment Quality, never stored: % full roll
+  // for the newest complete month, and the same month a year earlier.
+  rollMonth: z.string().nullable().optional(),
+  rollPercent: z.number().nullable().optional(),
+  rollYearAgoPercent: z.number().nullable().optional(),
 });
 
 export const infocareChildListCategorySchema = z.enum([
@@ -226,4 +231,68 @@ export function parseInfocareBookingListResponse(value: unknown) {
     ...parsed,
     booking_list: parsed.booking_list ?? [],
   };
+}
+
+// --- Enrolment Quality (get_attendance_list / get_roster_list / get_staff_list) ---
+// One row per child per day for a whole centre. `booked_from`/`booked_to` are
+// the booking; `actual_*` is what happened. Enrolment Quality counts bookings.
+export const infocareAttendanceSchema = z
+  .object({
+    date: isoDateSchema,
+    child_key: z.coerce.number().int(),
+    booked_from: z.string().optional(),
+    booked_to: z.string().optional(),
+    status: z.string().optional(),
+  })
+  .passthrough();
+
+export const infocareAttendanceListResponseSchema = infocareEnvelopeSchema.extend({
+  attendance_list: z.array(infocareAttendanceSchema).optional(),
+});
+
+export const infocareRosterWorkSchema = z
+  .object({
+    start: z.string().optional(),
+    end: z.string().optional(),
+    type: z.string().optional(),
+  })
+  .passthrough();
+
+export const infocareRosterSchema = z
+  .object({
+    date: isoDateSchema,
+    staff_key: z.coerce.number().int(),
+    work_list: z.array(infocareRosterWorkSchema).optional(),
+  })
+  .passthrough();
+
+export const infocareRosterListResponseSchema = infocareEnvelopeSchema.extend({
+  roster_list: z.array(infocareRosterSchema).optional(),
+});
+
+export const infocareStaffSchema = z
+  .object({
+    staff_key: z.coerce.number().int(),
+    job: z.string().optional(),
+  })
+  .passthrough();
+
+export const infocareStaffListResponseSchema = infocareEnvelopeSchema.extend({
+  staff_list: z.array(infocareStaffSchema).optional(),
+});
+
+export type InfocareAttendance = z.infer<typeof infocareAttendanceSchema>;
+export type InfocareRoster = z.infer<typeof infocareRosterSchema>;
+export type InfocareStaff = z.infer<typeof infocareStaffSchema>;
+
+export function parseInfocareAttendanceListResponse(value: unknown): InfocareAttendance[] {
+  return infocareAttendanceListResponseSchema.parse(value).attendance_list ?? [];
+}
+
+export function parseInfocareRosterListResponse(value: unknown): InfocareRoster[] {
+  return infocareRosterListResponseSchema.parse(value).roster_list ?? [];
+}
+
+export function parseInfocareStaffListResponse(value: unknown): InfocareStaff[] {
+  return infocareStaffListResponseSchema.parse(value).staff_list ?? [];
 }

@@ -292,11 +292,19 @@ const MATERIAL_SHORTFALL_CAPACITY_SHARE = 0.1;
 // the problem. At or beyond this, empty seats score full marks on their own.
 const MATERIAL_UNDER_OCCUPANCY_SHARE = 0.25;
 
+// A fall in % full roll of this many points on the same month a year earlier
+// scores the full falling-roll points.
+const MATERIAL_ROLL_FALL_POINTS = 10;
+
 type UrgencyScoreInput = {
   licensedCapacity: number;
   availablePlaces: number;
   scopedLeavingCount: number;
   actionableWaitlist: number;
+  // Enrolment Quality's % full roll for the newest complete month, and the
+  // same month a year earlier. Null or missing when there is no roll data.
+  rollPercent?: number | null;
+  rollYearAgoPercent?: number | null;
 };
 
 /**
@@ -314,20 +322,33 @@ export function calculateUrgencyScore(input: UrgencyScoreInput) {
   // are leaving inside the selected window. 5 actionable against 10 leaving is
   // not covered; the full waitlist total is deliberately ignored.
   const uncoveredLeavers = Math.max(input.scopedLeavingCount - input.actionableWaitlist, 0);
-  const uncoveredScore = Math.min(uncoveredLeavers / materialPlaces, 1) * 45;
+  const uncoveredScore = Math.min(uncoveredLeavers / materialPlaces, 1) * 40;
 
   // Empty places measured against the centre's own size. A centre sitting at
   // 60% occupancy is in trouble regardless of how few children are leaving,
   // and a small centre feels each empty place far more than a large one.
-  const emptyShare = Math.min(input.availablePlaces / capacity, 1);
-  const emptySeatScore = Math.min(emptyShare / MATERIAL_UNDER_OCCUPANCY_SHARE, 1) * 40;
+  // With Enrolment Quality data this is the empty share of the roll (part-week
+  // children share a place; operating capacity is used), otherwise enrolled
+  // children against the licence.
+  const rollPercent = input.rollPercent ?? null;
+  const emptyShare =
+    rollPercent != null
+      ? Math.min(Math.max(1 - rollPercent / 100, 0), 1)
+      : Math.min(input.availablePlaces / capacity, 1);
+  const emptySeatScore = Math.min(emptyShare / MATERIAL_UNDER_OCCUPANCY_SHARE, 1) * 35;
+
+  // A roll falling against the same month last year (so the usual seasonal
+  // pattern cancels out).
+  const rollYearAgo = input.rollYearAgoPercent ?? null;
+  const rollFall = rollPercent != null && rollYearAgo != null ? Math.max(rollYearAgo - rollPercent, 0) : 0;
+  const fallingRollScore = Math.min(rollFall / MATERIAL_ROLL_FALL_POINTS, 1) * 10;
 
   // No actionable waitlist at all means nothing absorbs the next departure,
   // however quiet the centre looks today.
   const noResilienceScore = input.actionableWaitlist === 0 ? 15 : 0;
 
   return Math.round(
-    Math.min(uncoveredScore + emptySeatScore + noResilienceScore, MAX_URGENCY_SCORE),
+    Math.min(uncoveredScore + emptySeatScore + fallingRollScore + noResilienceScore, MAX_URGENCY_SCORE),
   );
 }
 

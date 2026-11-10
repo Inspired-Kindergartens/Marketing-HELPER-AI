@@ -491,6 +491,37 @@ function renderWikiScript(): string {
           });
           content.addEventListener("blur", function() { saveArticle(true); });
 
+          // Chrome keeps the caret inside a link after it is made, so every
+          // word typed next joins the link and takes its colour. Typing at the
+          // very end of a link goes after it instead; typing inside a link
+          // still edits the link text.
+          content.addEventListener("beforeinput", function(event) {
+            if (event.inputType !== "insertText" || !event.data) return;
+            var selection = window.getSelection();
+            if (!selection || !selection.isCollapsed || !selection.rangeCount) return;
+            var node = selection.anchorNode;
+            var element = node && node.nodeType === Node.ELEMENT_NODE ? node : node && node.parentElement;
+            var link = element && element.closest("a");
+            if (!link || !content.contains(link)) return;
+            var rest = document.createRange();
+            rest.selectNodeContents(link);
+            rest.setStart(selection.anchorNode, selection.anchorOffset);
+            if (rest.toString().length > 0) return;
+            event.preventDefault();
+            var after = link.nextSibling;
+            if (!(after && after.nodeType === Node.TEXT_NODE)) {
+              after = document.createTextNode("");
+              link.parentNode.insertBefore(after, link.nextSibling);
+            }
+            after.insertData(0, event.data);
+            var caret = document.createRange();
+            caret.setStart(after, event.data.length);
+            caret.collapse(true);
+            selection.removeAllRanges();
+            selection.addRange(caret);
+            contentChanged = true;
+          });
+
           // Tab nests a bullet under the one above it, the way every other
           // editor behaves. Without this Tab moves focus out of the editor and
           // there is no way to make a sub-bullet at all.
@@ -518,6 +549,34 @@ function renderWikiScript(): string {
           }
         });
 
+        // Links in an article. Browsers won't open a file:/// link from this
+        // page, so a folder link asks the server to open it in Explorer. In
+        // the editor a plain click places the caret, so links open on
+        // Ctrl+click there.
+        document.addEventListener("click", function(event) {
+          var link = event.target instanceof Element ? event.target.closest("a[href]") : null;
+          if (!link) return;
+          var inEditor = !!link.closest("[contenteditable]");
+          if (inEditor && !(event.ctrlKey || event.metaKey)) return;
+          var href = link.getAttribute("href") || "";
+          if (/^file:/i.test(href)) {
+            event.preventDefault();
+            fetch("/api/wiki/open-local", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ url: href }),
+            })
+              .then(function(response) { return response.json(); })
+              .then(function(payload) { if (payload && payload.error) window.alert(payload.error); })
+              .catch(function() { window.alert("Couldn't open that folder. Please try again."); });
+            return;
+          }
+          if (inEditor) {
+            event.preventDefault();
+            window.open(link.href, "_blank", "noopener");
+          }
+        });
+
         document.addEventListener("click", function(event) {
           var el = event.target instanceof Element
             ? event.target.closest("[data-wiki-action], [data-wiki-cmd], [data-wiki-save], [data-wiki-copy], [data-wiki-add], [data-wiki-create-cancel], [data-wiki-regenerate], [data-wiki-categories], [data-wiki-categories-close], [data-wiki-category-delete], [data-wiki-done-editing]")
@@ -532,7 +591,13 @@ function renderWikiScript(): string {
             if (content && document.activeElement !== content) content.focus();
             if (cmd === "createLink") {
               var url = window.prompt("Link URL");
-              if (url) document.execCommand("createLink", false, url);
+              if (url) {
+                document.execCommand("createLink", false, url);
+                // Chrome leaves the new link selected, so the next key typed
+                // would overwrite it. Put the caret after it instead.
+                var linkSelection = window.getSelection();
+                if (linkSelection && linkSelection.rangeCount) linkSelection.collapseToEnd();
+              }
             } else {
               document.execCommand(cmd, false, el.getAttribute("data-wiki-value") || undefined);
             }

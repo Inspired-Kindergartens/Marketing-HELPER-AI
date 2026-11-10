@@ -36,6 +36,7 @@ html[data-theme="light"] {
   --color-border-accent: #d3f3dd;
   --color-row-hover: #f6f8fa;
   --color-row-selected: #effaf2;
+  --color-row-total: #d0d5dd;
   --color-wait-short: #16a34a;
   --color-wait-typical: #0e9384;
   --color-wait-long: #b54708;
@@ -84,6 +85,7 @@ html[data-theme="dark"] {
   --color-border-accent: #1d3a28;
   --color-row-hover: #1b222c;
   --color-row-selected: #17291f;
+  --color-row-total: #373e47;
   --color-wait-short: #3fb950;
   --color-wait-typical: #39c5cf;
   --color-wait-long: #d29922;

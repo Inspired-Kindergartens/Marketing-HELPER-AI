@@ -56,6 +56,7 @@ The dashboard is local-only. `src/server.ts` refuses to start on a non-local hos
 
 - **Infocare** supplies open centres, enrolled children, waiting list children, licence capacities, bookings, starting dates, leaving dates, birth dates, and waitlist application dates where available.
 - **Manual capacity overrides** fill missing Infocare licence capacity values, including optional under-2 and over-2 capacity splits.
+- **Infocare attendance, roster and staff lists** supply Enrolment Quality's monthly bookings and staffing (read-only).
 - **Meta Ads** supplies campaign/ad/ad set status, spend, results, impressions, budgets, and end dates.
 - **Google Analytics** supplies site totals and page-level traffic for the selected range.
 - **Ministry of Education ECE directory** (data.govt.nz) and **competitor websites** supply Sector Insight's centre list, promotions, meals and transport.
@@ -533,6 +534,7 @@ If the source-IP allowlist is the problem (a 403 in the logs for genuine Postmar
 The app is split into five panels:
 
 - **Infocare Analytics** - the main centre-by-centre operational table.
+- **Enrolment Quality** - % full roll by month per centre, with trend lines, flags and operating capacities.
 - **Waitlist Quality** - waitlist age, staleness, and age-profile checks.
 - **META Ads** - active and recent advertising coverage, delivery state, spend, and recommendations.
 - **Google Analytics** - website traffic totals and page-level interest.
@@ -707,11 +709,14 @@ The default table order is not alphabetical. The Infocare Analytics priority lis
 
 The selected window (`1W` through `12M`) changes the Leaving count used in this priority listing.
 
-Separately, each centre has an **urgency score** from 0 to 100 (`calculateUrgencyScore` in `src/analytics/compute.ts`). It is recomputed for the selected window whenever it is read, never stored, so the table, the AI chat and the band always agree. It adds three parts:
+Separately, each centre has an **urgency score** from 0 to 100 (`calculateUrgencyScore` in `src/analytics/compute.ts`). It is recomputed for the selected window whenever it is read, never stored, so the table, the AI chat and the band always agree. It adds four parts:
 
-- **Uncovered leavers** (up to 45) - children leaving in the window minus the actionable waitlist, measured against 10% of licensed capacity.
-- **Empty places** (up to 40) - available places as a share of licensed capacity; a quarter empty scores the full 40.
+- **Uncovered leavers** (up to 40) - children leaving in the window minus the actionable waitlist, measured against 10% of licensed capacity.
+- **Empty places** (up to 35) - the empty share of the newest complete month's % full roll (Enrolment Quality: placements against operating capacity); a quarter empty scores the full 35. Centres without roll data use available places (licence minus enrolled children) as a share of licensed capacity.
+- **Falling roll** (up to 10) - the newest complete month's % full roll against the same month a year earlier (so seasonality cancels out); a fall of 10% or more scores the full 10. A rise scores nothing.
 - **No resilience** (15) - added when the actionable waitlist is zero.
+
+The roll figures (`rollMonth`, `rollPercent`, `rollYearAgoPercent`) are attached to each snapshot at read time by `withRollSignals` in `src/server.ts` (via `rollSignalForRow`), for the dashboard and both dashboard chat endpoints; they are never stored, and a failure falls back to the licence-based score. The opening summary names *low roll* (under 80%) and *falling roll* (3% or more down on a year ago) as reasons, and drops the licence-based over-2 gap reason when roll data exists. Beep Beep's centre context carries `roll {month, percent, yearAgoPercent}`.
 
 Bands are:
 
@@ -745,6 +750,64 @@ Example:
 - Two children booked 25 hours each count as `1.0` FTE.
 
 Use FTE to understand booked-hours load. Use `ENROL/MAX` to understand headcount and daily booked utilisation.
+
+## Enrolment Quality
+
+An accordion panel below Infocare Analytics (`/app`, or on its own at `/app?panel=enrolment-quality`). It shows each centre's **% full roll** month by month for the selected period, and replaces the hand-highlighted "Roll Returns" spreadsheet (`docs/20261110090648858.pdf`).
+
+### Definitions
+
+- **Open day**: a day whose Infocare licence `max_children` is above 0 and that has at least one booked child.
+- **Placements**: for each open day, the larger of the morning and afternoon counts (the day's busier session; the day's children if no booking falls in either), averaged over the month's open days. Part-week children share a place (Kimmy Tue/Wed/Fri + Joe Mon/Thu = 1), and so do a morning-only and an afternoon-only child. Counting distinct children per day instead over-counted centres with afternoon-only children (Wairakei: 39.5 vs the PDF's 37.2). The PDF's percentages divide this figure by a steady capacity in every centre.
+- **Am / pm**: children whose booking starts before 12:00 / ends after 13:00, averaged per open day (a full-day child is both). Matches the PDF's "Avg enrolments for month (am/pm)": all 7 months of Arataki (Jan-Jul 2026) are within ±1 child.
+- **% full roll** = placements / capacity for that month. Over 100% is expected.
+- **Capacity**: the newest **operating capacity** whose `effectiveFrom` month is on or before the month; otherwise the month's average licence `max_children`. Operating capacity is the number of places a centre actually runs at (Arataki: licence 45, runs at 40). % full roll is worked out when displayed, so editing a capacity changes the history straight away without refetching.
+- **Panel header buttons**: **Update from Infocare** (download icon, `bi-download`, like every other button that pulls new data; `bi-arrow-repeat` spins while it runs) and the PDF (print icon, `bi-printer`, no text) sit in the panel header like the other panels' actions, not in the filter row. `renderEnrolmentQualityHeaderActions` renders them and `buildPanelActions` takes them as `panelOwnActions`. They are outside the swappable fragment, so the panel script's `syncHeader()` updates the PDF link's `rollWindow`/`rollSort` and the fetch button's disabled/spinner state (from `data-roll-fetching="done/total"`) after every swap. A panel with its own print icon drops the generic Print window / Print console button.
+- **All kindergartens row**: `buildOrganisationRollRow` (in `src/analytics/enrolment-quality.ts`) adds up each month's placements, am, pm and capacity across the centres with a % that month, so % full roll = total placements / total capacity, and a centre that has not opened yet adds to neither side. Start, Latest, Change and direction are worked out as for a centre; Capacity is the sum of current capacities (`operating` if any centre has one) and the tooltip shows the summed licences. `centreKey` 0 (`ORGANISATION_ROW_KEY`), so `rollOpen=0` keeps it open after a fragment swap. It is `EnrolmentQualityView.organisation`, rendered first whatever the sort (class `enrolment-quality__total-row`, background token `--color-row-total`: dark grey in Default and Dark, mid grey in Light so dark text stays readable), with the month table but no capacity editor; first in the PDF summary and charts (not in the change chart); the first line of the AI grounding.
+- **Under-2 places**: licence `max_u2` sits inside `max_children` (OPEYS 60 of which up to 18; Maunganui All Day 30/8; Tai o Fenua 30/5), stored per month as `avgLicenceU2`. `CentreOperatingCapacity.under2Capacity` is the optional under-2 part of an operating capacity (0 to `capacity`); the editor shows the field only where the licence has under-2 places. % full roll stays combined (all placements / total); the under-2 figure drives the staffing suggestion and is shown in the tooltip, the PDF (`total {licence}, U2 n {licence u2}`) and the AI grounding. Migration `20261110020000_add_enrolment_quality_under2`.
+- **Staffing suggestion**: the most common daily count (ties go to the higher count) of staff on a roster `Contact` entry covering 10:00 on open days, excluding staff whose job is `Other`, with the centre's under-2 places covered at 1:5 and the rest of the team at 1:10 (all-day) or 1:15 (licence `sessional`): `u2 + (staff - u2/5) x ratio`, where `u2` is the current under-2 capacity (operating if set, else licence `max_u2`, and never more than 5 per teacher); capped at the licence. Taken from the newest complete month with a roster. Arataki and Matua: 4 staff = 40, the same capacity the PDF used.
+- **Change**: latest month minus the first month in the period, shown as `%` (percentage points). The current month is shown "to date".
+- **Direction** (`trendDirection`): rise when Change ≥ +3, fall when ≤ −3, otherwise steady. It colours the trend line, its arrow (`bi-arrow-up-right` / `-down-right` / `-right`) and the Change cell with the `--color-active` / `--color-wait-very-long` / `--color-muted` tokens.
+- **Trend line**: scaled to the centre's own months, at least 20 points tall (so a 1-2 point wobble stays flat); a dashed 100% line when 100% is in range.
+- **Worst change** sort (default, `rollSort=interest`): Change ascending (biggest fall first), then the lowest latest %; centres with no Change go last. **Worst latest** (`rollSort=latest`): Latest ascending, then Change. A-Z and Z-A sort by name. There is no flag column.
+- **Bands** (`rollBand`, on the rounded %): `good` at 90%+ (`--color-active`), `watch` 80-89% (`--color-muted`), `low` under 80% (`--color-wait-very-long`). They colour Start, Latest and the monthly % in the panel and the PDF.
+- **Capacity cell**: the number only (its tooltip says operating capacity or licence); the pencil (`data-roll-edit-capacity`) opens the row's operating capacity editor. Operating capacities live in `CentreOperatingCapacity` and never change Infocare's licence data or `ManualCentreCapacity`. The PDF shows `operating {licence}`, with a note under the summary table.
+
+Periods are `3M`, `6M`, `12M` (default), `2Y`, `3Y` and `5Y`, counted back from the current month. They are separate from the Infocare Analytics `1W`-`12M` buttons, which look forward.
+
+### Data
+
+- Infocare read-only modes `get_attendance_list` (a whole centre's daily bookings for a date range; `booked_from`/`booked_to` are used, not actual attendance), `get_license_list` (per-day licence, fetched per calendar year), `get_roster_list` and `get_staff_list`. Infocare keeps these back to at least November 2021.
+- `src/infocare/roll-history.ts` fetches every month in the last 60 that is not yet stored as complete, newest month first, at the extraction pace (650 ms between requests). That is about 2 requests per centre-month: the first run reads 1,560 centre-months, and later runs read the current month plus the month just finished. A month that fails is not stored, so the next run tries it again. As with every Infocare call, the raw replies are appended to `ExternalApiCapture`.
+- `CentreMonthlyRoll` holds one summary per centre-month (`openDays`, `avgPlacements`, `avgAm`, `avgPm`, `avgLicence`, `contactStaff`, `sessional`, `complete`). It is upserted, because the current month is recalculated until it ends.
+- `CentreOperatingCapacity` holds the user's capacities (`centreKey`, `effectiveFrom` `YYYY-MM`, `capacity`, `note`). Both tables are in the database backup.
+
+### Schedule and routes
+
+- **Monthly, automatic**: `startRollHistorySyncLoop` checks 3 minutes after startup and then daily (only when Infocare credentials are configured), calling `runRollHistorySync` with `includeCurrentMonth: false`. It fetches only finished months not yet stored as complete, so on any day but the first after a month ends it makes no Infocare calls and shows no progress; after a month ends it fetches that month for each centre (26 centre-months). Failed months are retried at the next check.
+- **Update from Infocare** in the panel runs it at once with the current month included (month to date).
+- `GET /fragments/enrolment-quality?rollWindow=&rollSort=&rollOpen=` returns the panel body. The panel's script swaps it in place for the period and sort buttons, capacity edits, and every 20 s while a fetch is running. The URL keeps `rollWindow`/`rollSort`, so a reload shows the same view.
+- `POST /api/enrolment-quality/sync`, `GET /api/enrolment-quality/sync/status`.
+- `GET /api/enrolment-quality/pdf?rollWindow=&rollSort=` (`src/ui/enrolment-quality-pdf.ts`): A4 PDF built with the shared report layout (see **Printable PDF reports**). Cover label "12 MONTHS INFOCARE SNAPSHOT" (the chosen period). Then the summary table in the panel's order, a diverging bar chart of Change, then one SVG line chart per centre (six to a page: round-10 y-axis, dashed 100%, shaded area, coloured by direction, first and latest values labelled up to 24 months). The panel has no explanatory text: column meanings are in the header tooltips and this README.
+- `POST /api/enrolment-quality/capacity` `{ centreKey, capacity (1-500), effectiveFrom "YYYY-MM", note }` and `POST /api/enrolment-quality/capacity/delete` `{ centreKey, effectiveFrom }`.
+
+### AI chat
+
+When a dashboard chat question mentions roll, enrolment, occupancy, capacity, placements, attendance or a trend, `findEnrolmentQualityGrounding` adds the 12-month figures to the shared `extraGrounding` seam. Because the chat model's window is 4,096 tokens, only the 10 most concerning centres (plus the selected centre) and their last 6 months are sent, about 60 tokens a line. It fails soft, and it uses `AI_CHAT_MODEL` like everything else.
+
+`knowledge/infocare/enrolment-quality-weekdays.md` is an in-house help guide (indexed into the `infocare` source) that explains why % full roll does not separate quieter weekdays (one monthly average against one capacity), what roster evidence can and cannot show about a centre running fewer places on some days, and the proposed weekday profile and per-weekday operating capacity (not built).
+
+The chat panel's opening summary (`renderSelectedCentreNarrative`) adds one sentence from `buildRollGuidance` in `src/ui/app-shell.ts`: the selected centre's latest % full roll ("so far" for the current month), its band (good / watch / low), the current capacity and its source (operating or licensed), and the change over the panel's period. It is built from the same `EnrolmentQualityView` as the panel on that page load (`rollWindow`, default 12M), so the two always agree. No AI call is involved.
+
+## Printable PDF reports
+
+Enrolment Quality, Infocare Analytics and Waitlist Quality each have a print icon (`bi-printer`, no text) in the panel header that downloads an A4 PDF. They share `src/ui/report-pdf.ts` (`renderReportPdf`), built with pdfmake and the JD PDF's Arial fonts and logo (`ensureFontsConfigured`, `getLogoDataUri`):
+
+- **Cover** (page 1, no header or footer; page numbering starts after it): deliberately bare so a printed copy left lying around shows no internal figures. The title, a short label (`coverLabel`, e.g. "INFOCARE SNAPSHOT"), "document created Tuesday November 10 2026" in small text, and the logo.
+- **Pages**: a header with the title, a subtitle line and the logo; a footer with the generated date, a short note and "Page n of m". Print colours are the Light theme's tokens (`INK`, `MUTED`, `GRID`, `ZEBRA`, `WAIT_COLOUR`; long-running wait is a lighter orange so it stands apart from very long in print). Shared pieces: `dataTable` (zebra table, dark header, optional grey total row), `renderStackedBarSvg` + `chartLegend`, `sectionTitle`, `noteText`.
+- **Print settings** are stored in the PDF's `ViewerPreferences` (`PRINT_PREFERENCES`): A4 portrait, actual size (`PrintScaling /None`), single-sided (`Duplex /Simplex`), 7 copies. pdfmake has no option for these, so `displayTitle: true` makes pdfkit create the dictionary and the keys are added before the document ends. Adobe Acrobat/Reader applies them; browser viewers mostly ignore them. Stapling and page order are not PDF settings and must be chosen in the printer dialog.
+- `GET /api/analytics/pdf?window=&sort=` (`src/ui/analytics-pdf.ts`): the Infocare Analytics table for the chosen window and order, with the panel's columns except Note and Email, an All kindergartens total row, and a column note. Figures use the panel's own exported helpers in `app-shell.ts` (`sortAnalyticsRows`, `formatEnrolmentCapacity`, `formatEstimatedPlaces`, ...). Cover label "INFOCARE SNAPSHOT" (the window only sets the Near 5 / Leaving look-ahead, shown in the header). 404 when there is no snapshot. Replaces the dashboard's Print console button.
+- `GET /api/waitlist/pdf` (`src/ui/waitlist-pdf.ts`): the latest waitlist report: the five headline figures, waitlist by distribution days (stacked bars), the quality hierarchy table (with Waitlist added, and a note under it explaining Longest wait), the age distribution (counts and shares), the DOB profile, and recent demand for the last one, two and three months. Every centre is listed (the panel shows the top eight). Same sorting as the panel (`mergeWaitlistReportRows`, `getLongAndVeryLongCount`). 404 and no print icon when there is no report.
 
 ## Waitlist Quality
 
@@ -801,7 +864,7 @@ Columns:
 - **Centre** - centre name.
 - **Long-running wait** - older waitlist entries.
 - **Very long-running wait** - the oldest/stalest waitlist category where report data is available.
-- **Max days** - age of the oldest waitlist entry for that centre.
+- **Longest wait** (was Max days) - days the longest-waiting single child at that centre has been on the waitlist (the oldest entry). The PDF repeats this as a note under the table.
 
 ### DOB Profile By Wait Category
 
@@ -1042,6 +1105,8 @@ Leave `AI_PROVIDER` unset, or set it to `builtin`, when you want Beep Beep to ru
 
 `/wiki` is the team's marketing wiki. Each article has a title and rich-text body; on save the local model assigns one category from the managed list (never free text), writes 3-8 tags and a one-sentence summary. Categories are managed (renamed, re-ordered, deleted) from the Categories modal; deleting one moves its articles to General. Archived articles are hidden and excluded from AI grounding. Pinned articles are always included in grounding.
 
+Links to local folders: the shared sanitiser (`src/storage/jd-sanitize-html.ts`) turns a Windows or UNC path typed into the link prompt into a `file:///` href. Browsers won't follow `file:` links from an http page, so the wiki page script posts the href to `POST /api/wiki/open-local`, which opens a folder in Explorer, or for a file only selects it in its folder (it never runs anything). In the editor, Ctrl+click opens any link. A `beforeinput` handler moves text typed at the very end of a link to just after it, because Chrome otherwise extends the link (and its colour) over everything typed next.
+
 The dashboard and General Chat are grounded on the wiki: `selectWikiGrounding` in `src/storage/wiki-store.ts` sends an index of every article plus the full text of the best keyword matches within a character budget.
 
 ## Code Snippets and Links
@@ -1099,6 +1164,8 @@ The launcher (`scripts/open-marketing-helper.ps1`) pulls the embedding model in 
 - `src/analytics/compute.ts` - Infocare analytics calculations.
 - `src/analytics/waitlist-profile.ts` - actionable waitlist estimate constants.
 - `src/analytics/windows.ts` - selectable time windows.
+- `src/analytics/enrolment-quality.ts` - Enrolment Quality calculations; `src/infocare/roll-history.ts` - its Infocare fetch; `src/storage/enrolment-quality-store.ts` - its storage; `src/ui/enrolment-quality-panel.ts` - its panel.
+- `src/ui/report-pdf.ts` - the shared PDF report layout (cover, header, footer, print settings); `src/ui/enrolment-quality-pdf.ts`, `src/ui/analytics-pdf.ts`, `src/ui/waitlist-pdf.ts` - the three panel PDFs.
 - `src/ui/app-shell.ts` - dashboard HTML rendering and panel logic.
 - `src/storage/*` - Prisma-backed persistence and view models.
 - `src/infocare/*` - Infocare client, extraction, sync, and waitlist reports.

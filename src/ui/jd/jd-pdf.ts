@@ -45,7 +45,7 @@ const BODY_LEFT_OFFSET = 4;
 
 let cachedLogoDataUri: string | null = null;
 
-async function getLogoDataUri(): Promise<string | null> {
+export async function getLogoDataUri(): Promise<string | null> {
   if (cachedLogoDataUri) return cachedLogoDataUri;
   try {
     const buffer = await readFile(join(process.cwd(), "src", "assets", "ik-logo.jpg"));
@@ -270,7 +270,7 @@ export function jdPdfAssetUrl(jd: JobDescriptionView): string {
 
 let fontsConfigured = false;
 
-function ensureFontsConfigured() {
+export function ensureFontsConfigured() {
   if (fontsConfigured) return;
   PdfPrinter.setLocalAccessPolicy((path: string) => path.toLowerCase().startsWith(FONT_DIR.toLowerCase()));
   PdfPrinter.setUrlAccessPolicy(() => false);

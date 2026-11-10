@@ -48,10 +48,11 @@ The time filter (1W, 2W, 3W, 1M, 2M, 3M, 6M, 12M = 7, 14, 21, 30, 60, 90, 180, 3
 
 ## Urgency score and band
 
-The urgency score is an absolute 0-100 measure of a centre's enrolment pressure. It is not a ranking: every centre can be Stable in a good week or Critical in a bad one. It adds three parts:
+The urgency score is an absolute 0-100 measure of a centre's enrolment pressure. It is not a ranking: every centre can be Stable in a good week or Critical in a bad one. It adds four parts:
 
-- Uncovered leavers (up to 45 points): children leaving in the window minus the actionable waitlist, measured against 10% of the centre's licensed capacity. Reaching that 10% gives the full 45.
-- Empty places (up to 40 points): available places as a share of licensed capacity. A quarter of places empty gives the full 40.
+- Uncovered leavers (up to 40 points): children leaving in the window minus the actionable waitlist, measured against 10% of the centre's licensed capacity. Reaching that 10% gives the full 40.
+- Empty places (up to 35 points): the empty share of last month's % full roll from the Enrolment Quality panel (children booked in the busier session against the operating capacity, so part-week children share a place). A quarter of places empty gives the full 35. A centre without roll data uses licensed capacity minus enrolled children instead.
+- Falling roll (up to 10 points): last month's % full roll against the same month a year earlier, so the usual seasonal pattern cancels out. A fall of 10% or more gives the full 10; a rise gives nothing.
 - No resilience (15 points): added when the actionable waitlist is zero, because nothing would absorb the next departure.
 
 Bands: Critical is 70 or more, High is 45-69, Moderate is 20-44, Stable is under 20.
