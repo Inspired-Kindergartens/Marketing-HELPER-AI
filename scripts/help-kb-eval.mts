@@ -6,7 +6,7 @@ import "dotenv/config";
 import { buildHelpGrounding } from "../src/storage/help-kb-store.js";
 import { prisma } from "../src/db.js";
 const cfg = { ai: { AI_PROVIDER: "ollama" as const, AI_BASE_URL: "http://127.0.0.1:11434" }, embedModel: "nomic-embed-text", rootDir: process.cwd() };
-const dash = { sources: ["infocare", "meta", "google-analytics"] as const, maxChunks: Number(process.env.DASH_N ?? 2), charBudget: Number(process.env.DASH_C ?? 2000) };
+const dash = { sources: ["infocare", "meta", "google-analytics", "wiki"] as const, maxChunks: Number(process.env.DASH_N ?? 3), charBudget: Number(process.env.DASH_C ?? 3000) };
 const mailchimp = { sources: ["mailchimp"] as const, maxChunks: 5, charBudget: 7000 };
 const cases: Array<[string, any, string | RegExp]> = [
   ["how do i add a merge tag for first name", mailchimp, "FNAME"],

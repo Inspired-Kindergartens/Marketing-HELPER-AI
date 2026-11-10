@@ -799,6 +799,51 @@ When a dashboard chat question mentions roll, enrolment, occupancy, capacity, pl
 
 The chat panel's opening summary (`renderSelectedCentreNarrative`) adds one sentence from `buildRollGuidance` in `src/ui/app-shell.ts`: the selected centre's latest % full roll ("so far" for the current month), its band (good / watch / low), the current capacity and its source (operating or licensed), and the change over the panel's period. It is built from the same `EnrolmentQualityView` as the panel on that page load (`rollWindow`, default 12M), so the two always agree. No AI call is involved.
 
+## Meta advert reviews
+
+After a centre's Meta advert run has ended and settled, the app records how the centre responded, and over time it declares whether the centre responds well to Meta adverts.
+
+### Runs (`buildAdvertRuns`, `src/analytics/meta-advert-review.ts`)
+
+- The unit is the **ad set**, because the "Enrolment" campaign runs one ad set per centre. A centre's ad sets that overlap or are less than 14 days apart merge into one run (they can't be measured apart). Only ad sets with a `centreKey` are used. An ad set whose own name matches a *different* centre (it was matched through its campaign name) is skipped as uncertain.
+- Skipped: names (ad set or campaign) matching `NON_ENROLMENT_ADVERT_PATTERN` (recruitment, teacher, educator, job, survey, home based), runs under 7 days (event posts) and over 183 days.
+- Dates: where `MetaInsightSnapshot` (`level = 'adset'`, newest pull per day) covers the ad set, the run is its first to last day with spend, and spend and link clicks are summed. An ad set already spending when delivery data begins keeps its own `startTime`. If the data covers the ad set and it never spent, it never ran and is dropped. Before the data begins (2026-04-05), the ad set's `startTime`/`endTime` are used.
+- **Ongoing**: the run is still spending at the latest insight date and its `endTime` is unset or in the future. Ongoing runs are not reviewed.
+
+### Review (`assessAdvertRun`)
+
+- Due at the latest of: end + 28 days; end + 42 days (the waitlist window closes); the 8th of the month after the "after" month.
+- **Roll**: % full roll (Enrolment Quality's calculation, operating capacity if set) for the complete month before the start month vs the complete month after the end month. **Network change** is the same two months for every other centre with both, added up like the "All kindergartens" row. Roll lift = centre change minus network change.
+- **Waitlist**: `ServiceAnalyticsSnapshot.waitlistCount`, the latest snapshot within 21 days before the start vs the snapshot 14-42 days after the end that is closest to end + 28. Snapshots begin 2026-04-29.
+- **Verdict** (`advertVerdict`):
+  - `well`: lift is +3 points or more (`STEADY_POINTS`); or the waitlist grew by 2 or more and the roll held.
+  - `mixed`: the waitlist grew but the roll fell 3 or more against the network.
+  - `held-full`: the roll held, and both months were at `GOOD_PERCENT` (90%) or more.
+  - `not-well`: anything else.
+  - A falling waitlist alone is not held against the advert, because children who enrol leave the waitlist.
+- If neither the roll nor the waitlist can be compared, nothing is stored and the run is tried again later. For example, Thames Coast's pre-opening advert has no "before" roll.
+
+### Storage (`src/storage/meta-advert-review-store.ts`)
+
+- `MetaAdvertReview` (migration `20261110030000_add_meta_advert_review`) holds one row per run, keyed by `reviewId` = `meta-advert-review:{centreKey}:{start YYYY-MM-DD}`.
+- In the same transaction the note goes into the existing Meta notes, so it shows in Notes, the notification history and the chat's latest notes:
+  - a `MetaRecommendationNotification` under the review id (`recommendation` "Advert review", `windowKey` "review", `priority` 0);
+  - a `MetaRecommendationNote` with the text from `formatAdvertReviewNote`.
+- Both are dated `measuredAt` (capped at now), so backfilled old runs sort into history. Editing the note text does not change the stored verdict.
+
+### Schedule (`src/meta/advert-review.ts`)
+
+`tickMetaAdvertReviews` runs at startup, after every Meta refresh (forced), and on `/app` loads at most every 6 hours, in the background. Reviewed runs are skipped.
+
+### Centre verdict, intro and chat
+
+- `summariseMetaResponse` ignores `held-full` runs. Fewer than 2 runs is `early`. Otherwise it is `well` when 2/3 or more of the runs responded well, `not-well` at 1/3 or less, and `mixed` in between. It also reports the average roll lift.
+- `describeMetaResponse` gives one sentence, which the chat panel's opening summary (`renderSelectedCentreNarrative`) adds for the selected centre (`metaResponseSummary` render option). No AI call is involved.
+- `findMetaResponseGrounding` adds to the shared `extraGrounding` seam of both dashboard chat endpoints:
+  - the selected centre's verdict and its last 5 review notes whenever it has reviews;
+  - every centre's verdict when the prompt is about Meta, ads, campaigns or spend.
+- It fails soft and uses `AI_CHAT_MODEL`.
+
 ## Printable PDF reports
 
 Enrolment Quality, Infocare Analytics and Waitlist Quality each have a print icon (`bi-printer`, no text) in the panel header that downloads an A4 PDF. They share `src/ui/report-pdf.ts` (`renderReportPdf`), built with pdfmake and the JD PDF's Arial fonts and logo (`ensureFontsConfigured`, `getLogoDataUri`):
@@ -1016,7 +1061,7 @@ Ollama starts with the server, but the chat model (`AI_CHAT_MODEL`) does not loa
 | JD intro paragraphs and blurbs | The user asks | Chat model, with `think: false` so hidden reasoning can't time out a long draft |
 | Things To Know category, tags and summary | An article is saved | Chat model |
 | Sector Insight extraction | Daily check; runs when the last complete run is over 30 days old, or on **Update now** | Chat model |
-| Help knowledge base embeddings | Daily check for changed documents, plus each chat question | `AI_EMBED_MODEL`, CPU only |
+| Help knowledge base embeddings | Daily check for changed documents, each Things To Know change, plus each chat question | `AI_EMBED_MODEL`, CPU only |
 
 The landing feed uses no AI.
 
@@ -1034,7 +1079,7 @@ The panel shows a generated summary for the selected centre and includes an inte
 - manual capacity notes,
 - latest stored Meta Ads notes for the selected centre.
 
-The composer streams from `/api/ai/chat/stream`, sends the selected centre and selected window, and keeps a short in-browser history so follow-up questions have conversational context. Answers are grounded in a fresh dashboard context built on each request from Infocare analytics, Meta Ads, Google Analytics, and centre-level recommendation data, plus the Things To Know wiki and excerpts from the [help knowledge base](#help-knowledge-base-rag) (Infocare, Meta and Google Analytics sources). A **Sources** line under each answer names the help pages used.
+The composer streams from `/api/ai/chat/stream`, sends the selected centre and selected window, and keeps a short in-browser history so follow-up questions have conversational context. Answers are grounded in a fresh dashboard context built on each request from Infocare analytics, Meta Ads, Google Analytics, and centre-level recommendation data, plus excerpts from the [help knowledge base](#help-knowledge-base-rag) (Infocare, Meta, Google Analytics and Things To Know sources). A **Sources** line under each answer names the help pages used.
 
 ### Member email lists (live Infocare)
 
@@ -1113,11 +1158,11 @@ Leave `AI_PROVIDER` unset, or set it to `builtin`, when you want Beep Beep to ru
 
 ## Things To Know
 
-`/wiki` is the team's marketing wiki. Each article has a title and rich-text body; on save the local model assigns one category from the managed list (never free text), writes 3-8 tags and a one-sentence summary. Categories are managed (renamed, re-ordered, deleted) from the Categories modal; deleting one moves its articles to General. Archived articles are hidden and excluded from AI grounding. Pinned articles are always included in grounding.
+`/wiki` is the team's marketing wiki. Each article has a title and rich-text body; on save the local model assigns one category from the managed list (never free text), writes 3-8 tags and a one-sentence summary. Categories are managed (renamed, re-ordered, deleted) from the Categories modal; deleting one moves its articles to General. Archived articles are hidden and excluded from AI grounding. No article is pinned into every chat: each one is found by search, like any other document.
 
 Links to local folders: the shared sanitiser (`src/storage/jd-sanitize-html.ts`) turns a Windows or UNC path typed into the link prompt into a `file:///` href. Browsers won't follow `file:` links from an http page, so the wiki page script posts the href to `POST /api/wiki/open-local`, which opens a folder in Explorer, or for a file only selects it in its folder (it never runs anything). In the editor, Ctrl+click opens any link. A `beforeinput` handler moves text typed at the very end of a link to just after it, because Chrome otherwise extends the link (and its colour) over everything typed next.
 
-The dashboard and General Chat are grounded on the wiki: `selectWikiGrounding` in `src/storage/wiki-store.ts` sends an index of every article plus the full text of the best keyword matches within a character budget.
+Every live article with a body is indexed in the [help knowledge base](#help-knowledge-base-rag) as source `wiki` (URL `wiki:<id>`, built by `src/help-kb/wiki-source.ts`; summary and tags open the first chunk). Any successful `POST /api/wiki*`, and every AI tagging pass, schedules `indexWikiArticles` 3 seconds later (debounced, so a burst of autosaves embeds once); unchanged articles are skipped by content hash, and archived or deleted ones are removed. The daily sync also re-indexes the wiki.
 
 ## Code Snippets and Links
 
@@ -1130,7 +1175,7 @@ Each has a protected **General** category. Categories are stored by name on the 
 
 ## Help Knowledge Base (RAG)
 
-The dashboard and Communications chats are grounded on a shared help knowledge base (tables `HelpArticle` / `HelpChunk`):
+The dashboard, Communications and General chats are grounded on a shared help knowledge base (tables `HelpArticle` / `HelpChunk`):
 
 | Source | Content | Refresh |
 | --- | --- | --- |
@@ -1138,6 +1183,7 @@ The dashboard and Communications chats are grounded on a shared help knowledge b
 | `google-analytics` | GA4 articles from `support.google.com/analytics`, found by following links (no sitemap; `[UA]` articles skipped) | monthly |
 | `infocare` | In-house guide `knowledge/infocare/`, `docs/metric-contracts.md`, `INFOCARE/INFOCARE-LICENSE.md` | daily check |
 | `meta` | In-house guide `knowledge/meta/` | daily check |
+| `wiki` | Every live Things To Know article, read from `WikiArticle` | on every wiki change, plus daily check |
 
 Meta's help centre and developer docs refuse automated requests, and Infocare has no public help centre, so those two are built from local documents. Any `.md`, `.txt`, `.html` or `.pdf` dropped into `knowledge/<source>/` is indexed (see `knowledge/README.md`).
 
@@ -1145,8 +1191,8 @@ How it works:
 
 - **Chunking** - documents are split at their headings (`src/help-kb/parse.ts`); short sections are merged, long ones split, so each chunk is one topic.
 - **Embeddings** - Ollama `nomic-embed-text`, always with `num_gpu: 0` so it runs on the CPU and never evicts the 8B chat model from the 4 GB GPU. If the embedder is down, chunks are stored for full-text search and embedded on the next sync.
-- **Retrieval** - `buildHelpGrounding` in `src/storage/help-kb-store.ts` merges four ranked lists by weighted reciprocal rank fusion: vector similarity (2), Postgres full-text (0.5), an in-house-guide hybrid list (1), and exact-phrase matches such as "Review spend" (1.5). Help is only added when the best match reaches 0.68 cosine similarity or the question matches the source's topic pattern.
-- **Budgets** - the chat model runs with Ollama's default 4,096-token window, so the dashboard and Communications chats get two short excerpts (~2,000 characters), or four when the Communications prompt carries no Postmark data.
+- **Retrieval** - `buildHelpGrounding` in `src/storage/help-kb-store.ts` merges four ranked lists by weighted reciprocal rank fusion: vector similarity (2), Postgres full-text (0.5), an in-house-guide hybrid list (1), and exact-phrase matches such as "Review spend" (1.5). Help is only added when the best match reaches 0.68 cosine similarity or the question matches the source's topic pattern. Wiki articles are in-house, so they get the in-house vote and no link. Short wiki notes score 0.59-0.65 even when they are the right article, about the same as unrelated questions, so the wiki also has its own small keyword search: below the gate, a wiki keyword hit still lets wiki excerpts (only) through.
+- **Budgets** - the chat model runs with Ollama's default 4,096-token window. The dashboard chat (also used on the Things To Know page) gets three excerpts (~3,000 characters) from Infocare, Meta, Google Analytics and the wiki. Communications gets two (~2,000 characters), or four when its prompt carries no Postmark data. General Chat gets up to four wiki excerpts (~6,000 characters).
 - **Sync** - `startHelpKbSyncLoop` runs 60 seconds after startup and then daily: local documents are re-read every time, and a help centre is re-crawled when its last *complete* crawl (`SyncCursor` key `help-kb:<source>:completed-at`) is older than its refresh period, so a crawl cut short by a restart resumes. Crawls fetch one page at a time with a pause between.
 - **Tuning** - `scripts/help-kb-eval.mts` runs questions with known answers through retrieval. Re-run it after changing the fusion weights, the chunking, or a guide (`npx tsx scripts/help-kb-eval.mts`).
 
@@ -1181,7 +1227,7 @@ The launcher (`scripts/open-marketing-helper.ps1`) pulls the embedding model in 
 - `src/infocare/*` - Infocare client, extraction, sync, and waitlist reports.
 - `src/meta/*` - Meta API config, refresh, and centre matching.
 - `src/google-analytics/*` - GA config, refresh, and client.
-- `src/ui/wiki-app-shell.ts`, `src/ui/wiki/*` - Things To Know pages; `src/storage/wiki-store.ts` - wiki storage and grounding.
+- `src/ui/wiki-app-shell.ts`, `src/ui/wiki/*` - Things To Know pages; `src/storage/wiki-store.ts` - wiki storage; `src/help-kb/wiki-source.ts` - wiki articles as knowledge base documents.
 - `src/ui/snippets-app-shell.ts`, `src/ui/subscriptions-app-shell.ts` - the list pages; matching stores in `src/storage/`.
 - `src/help-kb/*` - help knowledge base sources and parsers; `src/storage/help-kb-store.ts` - its sync and retrieval.
 - `src/ai/embeddings.ts` - Ollama embedding client.

@@ -34,7 +34,6 @@ function renderArticleRow(article: WikiArticleListItem): string {
     <article class="wiki-list__row list-row" data-wiki-id="${article.id}">
       <a class="wiki-list__main flex items-center text-body min-w-0" href="${href}">
         <span class="wiki-list__title flex items-center gap-6 text-strong min-w-0">
-          ${article.isPinned ? `<i class="bi bi-pin-angle-fill ui-icon wiki-list__pin-icon text-accent" aria-label="Pinned" title="Always sent to AI chat"></i>` : ""}
           ${escapeHtml(article.title)}
         </span>
         ${tip}
@@ -43,8 +42,7 @@ function renderArticleRow(article: WikiArticleListItem): string {
         ${
           article.isArchived
             ? `<button type="button" class="wiki-list__button button-icon" data-wiki-action="restore" data-wiki-id="${article.id}" title="Restore to the wiki"><i class="bi bi-arrow-counterclockwise ui-icon" aria-hidden="true"></i></button>`
-            : `<button type="button" class="wiki-list__button button-icon" data-wiki-action="pin" data-wiki-id="${article.id}" title="${article.isPinned ? "Unpin from AI chat" : "Pin to AI chat"}" aria-pressed="${article.isPinned ? "true" : "false"}"><i class="bi ${article.isPinned ? "bi-pin-angle-fill" : "bi-pin-angle"} ui-icon" aria-hidden="true"></i></button>
-        <button type="button" class="wiki-list__button button-icon" data-wiki-action="duplicate" data-wiki-id="${article.id}" title="Duplicate"><i class="bi bi-copy ui-icon" aria-hidden="true"></i></button>
+            : `<button type="button" class="wiki-list__button button-icon" data-wiki-action="duplicate" data-wiki-id="${article.id}" title="Duplicate"><i class="bi bi-copy ui-icon" aria-hidden="true"></i></button>
         <button type="button" class="wiki-list__button button-icon" data-wiki-action="archive" data-wiki-id="${article.id}" title="Archive"><i class="bi bi-archive ui-icon" aria-hidden="true"></i></button>`
         }
         <button type="button" class="wiki-list__button button-icon wiki-list__button--danger button-danger" data-wiki-action="delete" data-wiki-id="${article.id}" title="Delete"><i class="bi bi-trash3 ui-icon" aria-hidden="true"></i></button>

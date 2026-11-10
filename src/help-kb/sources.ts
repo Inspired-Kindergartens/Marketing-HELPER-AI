@@ -12,11 +12,12 @@ import {
 // publish crawlable help centres. Meta's help centre and developer docs block
 // automated requests, and Infocare has no public help centre, so those two are
 // built from local documents: in-house guides in knowledge/<source>/, where
-// help pages saved by hand can also be dropped.
+// help pages saved by hand can also be dropped. The Things To Know wiki is
+// indexed from its database rows (help-kb/wiki-source.ts).
 
-export type HelpSourceId = "mailchimp" | "google-analytics" | "infocare" | "meta";
+export type HelpSourceId = "mailchimp" | "google-analytics" | "infocare" | "meta" | "wiki";
 
-export const HELP_SOURCE_IDS: readonly HelpSourceId[] = ["mailchimp", "google-analytics", "infocare", "meta"];
+export const HELP_SOURCE_IDS: readonly HelpSourceId[] = ["mailchimp", "google-analytics", "infocare", "meta", "wiki"];
 
 export type FetchText = (url: string) => Promise<{ status: number; body: string }>;
 
@@ -116,5 +117,10 @@ export const HELP_SOURCES: Record<HelpSourceId, HelpSourceDefinition> = {
     label: "Meta Ads guide",
     topic: /\b(meta|facebook|instagram|ads? manager|ad ?sets?|adverts?|ads|cpm|cpc|ctr|cpr|cost per (click|result|lead)|reach|frequency|impressions|learning( limited)?|pixel|leads?|boost(ed)?|creative|objective|needs ads|ads active|review spend|prepare campaign|covered by ads)\b/i,
     localPaths: ["knowledge/meta"],
+  },
+  wiki: {
+    label: "Things To Know",
+    topic: /\b(things to know|wiki|our (policy|policies|process(es)?|procedures?|guidelines?|rules?|brand|style|tone|voice))\b/i,
+    localPaths: [],
   },
 };

@@ -16,6 +16,7 @@ import "./help-kb.test.js";
 import "./subscriptions.test.js";
 import "./sector.test.js";
 import "./meta-centre-match.test.js";
+import "./meta-advert-review.test.js";
 import "./postmark-centre-match.test.js";
 import "./task-store.test.js";
 import "./tasks-app-shell.test.js";

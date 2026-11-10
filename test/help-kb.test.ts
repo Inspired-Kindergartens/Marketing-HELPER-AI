@@ -115,6 +115,8 @@ test("source topics route dashboard questions to the right help", () => {
 
 test("every source indexes its own knowledge/ drop folder", () => {
   for (const [id, source] of Object.entries(HELP_SOURCES)) {
+    // The wiki is indexed from its database rows, not from files.
+    if (id === "wiki") continue;
     assert.ok(source.localPaths.includes(`knowledge/${id}`), id);
   }
 });

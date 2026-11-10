@@ -58,7 +58,7 @@ export function renderWikiEditorPanel(options: WikiEditorPanelOptions): string {
           <input class="form-control" type="text" name="title" maxlength="200" value="${escapeHtml(article.title)}" required />
         </label>
         <label class="wiki-editor__field field-label">
-          <span>Summary <small>written by AI when you finish editing — always sent to the AI</small></span>
+          <span>Summary <small>written by AI when you finish editing</small></span>
           <input class="form-control" type="text" name="summary" maxlength="400" value="${escapeHtml(article.summary)}" placeholder="Generated when you finish editing" />
         </label>
         <div class="wiki-editor__field-row grid gap-10">
@@ -71,10 +71,6 @@ export function renderWikiEditorPanel(options: WikiEditorPanelOptions): string {
             <input class="form-control" type="text" name="tags" maxlength="400" value="${escapeHtml(article.tags.join(", "))}" data-wiki-tags-field placeholder="Generated once the article has content" />
           </label>
         </div>
-        <label class="wiki-editor__pin flex items-center gap-8 text-muted text-small">
-          <input type="checkbox" name="isPinned" value="true"${article.isPinned ? " checked" : ""} />
-          <span>Pin to AI chat — always include this article, whatever the question</span>
-        </label>
       </form>
 
       ${renderWikiRichText({

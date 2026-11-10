@@ -62,6 +62,7 @@ import { getMailchimpConfig, readMailchimpConfigStatus } from "./mailchimp/confi
 import { ensureDailyMailchimpSnapshot, refreshMailchimpSnapshot } from "./mailchimp/refresh.js";
 import { getMetaConfig, readMetaConfigStatus } from "./meta/config.js";
 import { refreshMetaAds } from "./meta/refresh.js";
+import { findMetaResponseGrounding, readMetaResponseSummaries, tickMetaAdvertReviews } from "./meta/advert-review.js";
 import {
   readCentreReferences,
   readCentreSnapshotHistory,
@@ -247,7 +248,6 @@ import { buildImmovableBoilerplateHtml, buildJdBlurbChatMessages, buildJdIntroCh
 import { generateJdPdfBuffer, jdPdfFilename } from "./ui/jd/jd-pdf.js";
 import {
   applyWikiTagging,
-  buildWikiChatGrounding,
   reorderWikiCategories,
   createWikiArticle,
   createWikiCategory,
@@ -300,6 +300,7 @@ import { buildRetrievalQuery } from "./ai/chat.js";
 import {
   buildHelpGrounding,
   getHelpKbStatus,
+  indexWikiArticles,
   syncHelpKbIfStale,
   type HelpGrounding,
   type HelpGroundingOptions,
@@ -727,6 +728,8 @@ async function refreshMetaAdsIfConfigured() {
     const result = await refreshMetaAds(metaConfig);
 
     app.log.info(result, "Meta Ads auto-refresh completed");
+    // New delivery data can end an advert run, so review straight away.
+    void tickMetaAdvertReviews(app.log, { force: true });
   } catch (error) {
     app.log.error({ error }, "Meta Ads auto-refresh failed");
   }
@@ -1630,10 +1633,8 @@ app.post<{ Params: { id: string }; Body: { prompt?: string } }>(
       }
 
       await announceModelLoad(writeEvent);
-      const groundingWithWiki = streamInput.hasDocument
-        ? liveGrounding
-        : await withWikiGrounding(prompt, liveGrounding);
-      const messages = await buildGeneralChatMessages(conversationId, centreReferences, groundingWithWiki);
+      const wiki = streamInput.hasDocument ? null : await findHelpGrounding(prompt, undefined, GENERAL_CHAT_HELP_OPTIONS);
+      const messages = await buildGeneralChatMessages(conversationId, centreReferences, joinGrounding(liveGrounding, wiki?.text));
 
       for await (const chunk of streamLocalChat(aiConfig, messages)) {
         answer += chunk;
@@ -1667,6 +1668,7 @@ app.post<{ Params: { id: string }; Body: { prompt?: string } }>(
 
 app.get<{ Querystring: { centre?: string; window?: string; panel?: string; sort?: string; rollWindow?: string; rollSort?: string; rollOpen?: string; waitlistSection?: string; googleAnalyticsSection?: string; gaRange?: string; gaFrom?: string; gaTo?: string; gaFromMonth?: string; gaFromYear?: string; gaToMonth?: string; gaToYear?: string; metaRefreshed?: string; integrationError?: string } }>("/app", async (request, reply) => {
   void tickWeeklySnapshotRefresh(app.log);
+  void tickMetaAdvertReviews(app.log);
   // Most visits here don't use Beep Beep, so leave the model unloaded.
   void ensureAiRunning(aiConfig, app.log, { loadModel: false });
 
@@ -1799,6 +1801,15 @@ app.get<{ Querystring: { centre?: string; window?: string; panel?: string; sort?
     resolvedSelectedCentreKey == null
       ? []
       : await readLatestMetaRecommendationNotesForCentre(resolvedSelectedCentreKey, 3);
+  const metaResponseSummary =
+    resolvedSelectedCentreKey == null
+      ? null
+      : await readMetaResponseSummaries()
+          .then(({ summaries }) => summaries.get(resolvedSelectedCentreKey) ?? null)
+          .catch((error: unknown) => {
+            app.log.warn({ error }, "Meta advert reviews unavailable");
+            return null;
+          });
   const centreContacts = await readCentreContactList();
   const snapshotRefreshState = getSnapshotRefreshState();
   const enrolmentQuality = await loadEnrolmentQualityView(
@@ -1838,6 +1849,7 @@ app.get<{ Querystring: { centre?: string; window?: string; panel?: string; sort?
         metaRecommendationNotificationCount,
         metaRecommendationNotes,
         latestMetaRecommendationNotesForCentre,
+        metaResponseSummary,
         centreContacts,
         snapshotRefreshStatus: snapshotRefreshState.status,
         snapshotRefreshOutcome:
@@ -2573,20 +2585,30 @@ app.post("/api/jd/settings/ktca-import", async (request, reply) => {
   };
 });
 
-// Both AI chats ground on the wiki. The retrieval picks the articles matching
-// the prompt and appends them to whatever grounding the caller already had
-// (e.g. a live Infocare read), so the two sources travel as one extra message.
-async function withWikiGrounding(prompt: string, existingGrounding: string | null): Promise<string | null> {
-  try {
-    const wiki = await buildWikiChatGrounding(prompt);
-    if (!wiki) return existingGrounding;
-    return existingGrounding?.trim() ? [existingGrounding.trim(), "", wiki.text].join("\n") : wiki.text;
-  } catch (error) {
-    // The wiki is an enhancement: if the lookup fails the chat still answers.
-    app.log.warn({ error }, "Wiki grounding unavailable");
-    return existingGrounding;
-  }
+// The AI chats find Things To Know articles through the help knowledge base,
+// so every change to the wiki re-indexes it. Debounced: the editor autosaves
+// as the user types, and only the settled text needs embedding.
+const WIKI_INDEX_DELAY_MS = 3_000;
+let wikiIndexTimer: NodeJS.Timeout | null = null;
+
+function scheduleWikiIndex() {
+  if (wikiIndexTimer) clearTimeout(wikiIndexTimer);
+  wikiIndexTimer = setTimeout(() => {
+    wikiIndexTimer = null;
+    void indexWikiArticles(helpKbConfig, app.log).catch((error) =>
+      app.log.warn({ error }, "Wiki knowledge base indexing failed"),
+    );
+  }, WIKI_INDEX_DELAY_MS);
+  wikiIndexTimer.unref();
 }
+
+// Every wiki mutation (save, archive, delete, duplicate, category rename) is a
+// POST under /api/wiki, so one hook covers them all.
+app.addHook("onResponse", async (request, reply) => {
+  if (request.method === "POST" && request.url.startsWith("/api/wiki") && reply.statusCode < 400) {
+    scheduleWikiIndex();
+  }
+});
 
 // --- Code Snippets -------------------------------------------------------------
 // Same shape as the wiki: one page route that renders the shell, plus JSON POST
@@ -2781,15 +2803,26 @@ async function findHelpGrounding(
 // get two short excerpts (~500 tokens). Measured on 2026-10-16: dashboard
 // prompts ran ~2,600-2,750 tokens without help and ~3,300 with 2,400 chars of
 // it; the Communications prompt reached ~3,800.
+// Things To Know articles compete in the same ranking, so a third excerpt
+// leaves room for one alongside the help guides. Still far below the up to
+// 9,000 characters of wiki text these chats carried before the wiki joined
+// the knowledge base.
 const DATA_CHAT_HELP_OPTIONS = {
-  sources: ["infocare", "meta", "google-analytics"],
-  maxChunks: 2,
-  charBudget: 2000,
+  sources: ["infocare", "meta", "google-analytics", "wiki"],
+  maxChunks: 3,
+  charBudget: 3000,
+} as const satisfies Omit<HelpGroundingOptions, "log">;
+// General Chat answers anything, so it draws only on the user's own wiki, with
+// room for a full article.
+const GENERAL_CHAT_HELP_OPTIONS = {
+  sources: ["wiki"],
+  maxChunks: 4,
+  charBudget: 6000,
 } as const satisfies Omit<HelpGroundingOptions, "log">;
 // The Communications prompt is only large when it carries local Postmark data
 // (~3,800 tokens measured); otherwise it is under 1,000, so a how-to question
 // can have the room a full help answer needs.
-const COMMS_HELP_SOURCES = ["mailchimp", "google-analytics", "meta", "infocare"] as const;
+const COMMS_HELP_SOURCES = ["mailchimp", "google-analytics", "meta", "infocare", "wiki"] as const;
 function commsChatHelpOptions(hasLocalData: boolean): Omit<HelpGroundingOptions, "log"> {
   return hasLocalData
     ? { sources: COMMS_HELP_SOURCES, maxChunks: 2, charBudget: 2000 }
@@ -3145,6 +3178,15 @@ async function withRollSignals(set: LatestSnapshotSet | null): Promise<LatestSna
 const ENROLMENT_QUALITY_PROMPT_PATTERN =
   /\b(roll|enrolment|enrollment|enrolled|occupancy|utili[sz]ation|capacity|placements?|slipp|declin|dropp|falling|trend|diminish|attendance|how full|doing well)/i;
 
+async function findMetaResponseGroundingSafely(prompt: string, selectedCentreKey: number | null): Promise<string | null> {
+  try {
+    return await findMetaResponseGrounding(prompt, selectedCentreKey);
+  } catch (error) {
+    app.log.warn({ error }, "Meta advert review grounding unavailable");
+    return null;
+  }
+}
+
 async function findEnrolmentQualityGrounding(prompt: string, selectedCentreKey: number | null): Promise<string | null> {
   if (!ENROLMENT_QUALITY_PROMPT_PATTERN.test(prompt)) return null;
   try {
@@ -3365,6 +3407,8 @@ async function runWikiTagging(id: number): Promise<{ category: string; tags: str
   );
   const result = parseWikiTaggingResponse(raw, categories);
   await applyWikiTagging(id, result);
+  // Tags and summary are part of what the knowledge base indexes.
+  scheduleWikiIndex();
   // applyWikiTagging refuses to move a hand-filed article, so report the
   // category that is actually stored rather than the one the model suggested.
   return article.isCategoryLocked ? { ...result, category: article.category } : result;
@@ -3527,16 +3571,6 @@ app.post<{ Params: { id: string }; Body: Record<string, unknown> }>("/api/wiki/:
     void runWikiTaggingWithRetry(id);
   }
 
-  return { ok: true };
-});
-
-app.post<{ Params: { id: string }; Body: { isPinned?: unknown } }>("/api/wiki/:id/pin", async (request, reply) => {
-  const id = parsePositiveInt(request.params.id);
-  if (id == null) {
-    reply.code(400);
-    return { error: "Valid article id is required." };
-  }
-  await updateWikiArticle(id, { isPinned: request.body?.isPinned === true });
   return { ok: true };
 });
 
@@ -4756,7 +4790,7 @@ app.post<{
         prompt,
         request.body?.messages,
         memory,
-        await withWikiGrounding(prompt, joinGrounding(liveGrounding, await findEnrolmentQualityGrounding(prompt, memorySelectedCentreKey), help?.text)),
+        joinGrounding(liveGrounding, await findEnrolmentQualityGrounding(prompt, memorySelectedCentreKey), await findMetaResponseGroundingSafely(prompt, memorySelectedCentreKey), help?.text),
       ),
     );
 
@@ -4921,7 +4955,7 @@ app.post<{
       prompt,
       request.body?.messages,
       memory,
-      await withWikiGrounding(prompt, joinGrounding(liveGrounding, await findEnrolmentQualityGrounding(prompt, memorySelectedCentreKey), help?.text)),
+      joinGrounding(liveGrounding, await findEnrolmentQualityGrounding(prompt, memorySelectedCentreKey), await findMetaResponseGroundingSafely(prompt, memorySelectedCentreKey), help?.text),
     );
 
     return { help, context, messages, deterministicAnswer: buildDeterministicChatAnswer(context, prompt) };
@@ -5637,6 +5671,7 @@ async function start() {
   startHelpKbSyncLoop();
   startSectorSyncLoop();
   startRollHistorySyncLoop();
+  void tickMetaAdvertReviews(app.log, { force: true });
   void logJdAgreementStatusOnStartup();
 
   if (mailchimpConfigStatus.isConfigured) {

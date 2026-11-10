@@ -107,6 +107,15 @@ Our Facebook and Instagram ads, matched to each kindergarten.
 
 Put the kindergarten's name in the campaign name in Meta, so the app can match the ad to the centre.
 
+**Advert reviews.** After a kindergarten's advert ends, the app waits until the results can show (about 4 to 6 weeks, and until the month after the advert has finished). It then adds an **Advert review** note to that kindergarten, which you'll find in [Notes](/app?panel=notes). The note compares:
+
+- **% full roll** for the month before the advert and the month after it. The change is set against the other kindergartens over the same months, so a change that happened everywhere doesn't count for or against the advert.
+- **The waitlist** just before the advert and a few weeks after it ended.
+
+Each note ends with a verdict: *responded well*, *did not respond well*, *mixed response*, or *already full, no room to respond*. A kindergarten that was full before and after doesn't count either way.
+
+Once a kindergarten has two or more reviewed adverts, Beep Beep's opening summary for it says whether it **responds well**, **does not respond well** or **has a mixed response** to Meta adverts. With only one review, it gives that advert's result and says it's too early to call a pattern. Beep Beep uses the reviews when you ask about adverts. Adverts for staff, surveys and home-based care are not reviewed. Past adverts were reviewed when this feature was added, so history is there already. Waitlist figures only go back to late April 2026, so older reviews judge on the roll alone.
+
 ### Google Analytics
 
 Website visits for the chosen months: people, visits, how engaged they were, and the most visited pages. It also matches each centre's ads to that centre's web page, so you can see whether ad clicks turn into visits.
@@ -185,7 +194,7 @@ Our team wiki: how we do things, rules to remember, brand and process notes.
 - **Categories** lets you rename, re-order or remove categories.
 - **Links:** select some text, press the link button and paste a web address or a folder on this computer (for example `D:\Apps\...\Panui`). Clicking a folder link opens it in File Explorer. While editing, hold **Ctrl** and click a link to open it.
 - **Archived** articles are kept but hidden, and Beep Beep stops using them.
-- Beep Beep on this page answers from the articles and says which one it used. The Marketing and General Chat helpers read them too.
+- Beep Beep on this page answers from the articles and says which one it used. The Marketing, Communications and General Chat helpers read them too. Every article counts: for each question Beep Beep looks up the articles that match it, so there's nothing to pin. A new or edited article is picked up a few seconds after you save it.
 
 ---
 

@@ -153,15 +153,15 @@ model CentreMonthlyRoll {
 // The number of places a centre actually runs at (can be below its licence),
 // from a month onwards. The newest entry on or before a month applies.
 model CentreOperatingCapacity {
-  id            Int             @id @default(autoincrement())
-  centreKey     Int
-  effectiveFrom String
+  id             Int             @id @default(autoincrement())
+  centreKey      Int
+  effectiveFrom  String
   capacity       Int
   under2Capacity Int?
-  note          String?
-  createdAt     DateTime        @default(now())
-  updatedAt     DateTime        @updatedAt
-  centre        CentreReference @relation(fields: [centreKey], references: [centreKey], onDelete: Cascade, onUpdate: Cascade)
+  note           String?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  centre         CentreReference @relation(fields: [centreKey], references: [centreKey], onDelete: Cascade, onUpdate: Cascade)
 
   @@unique([centreKey, effectiveFrom])
 }
@@ -374,6 +374,34 @@ model MetaRecommendationNote {
 
   @@index([notificationId, submittedAt(sort: Desc)])
   @@index([deletedAt])
+}
+
+// Meta advert reviews: one row per centre advert run, written once the run
+// has ended and settled. The matching note is stored in MetaRecommendationNote
+// under the same id, so it shows wherever Meta notes show.
+model MetaAdvertReview {
+  id               Int       @id @default(autoincrement())
+  reviewId         String    @unique
+  centreKey        Int
+  adSetNames       String[]
+  startDate        DateTime
+  endDate          DateTime
+  measuredAt       DateTime
+  spend            Decimal?  @db.Decimal(18, 6)
+  clicks           Int?
+  rollBeforeMonth  String?
+  rollBefore       Float?
+  rollAfterMonth   String?
+  rollAfter        Float?
+  networkChange    Float?
+  waitlistBeforeAt DateTime?
+  waitlistBefore   Int?
+  waitlistAfterAt  DateTime?
+  waitlistAfter    Int?
+  verdict          String
+  createdAt        DateTime  @default(now())
+
+  @@index([centreKey, endDate])
 }
 
 model MetaRecommendationNotification {
@@ -700,35 +728,35 @@ model TaskGroup {
 }
 
 model Task {
-  id               Int                  @id @default(autoincrement())
-  title            String
-  description      String?
-  status           String               @default("todo")
-  dueDate          DateTime?
-  projectId        Int?
-  taskGroupId      Int?
-  centreKey        Int?
-  assigneeId       Int?
-  position         Int                  @default(0)
-  completedAt      DateTime?
+  id              Int                  @id @default(autoincrement())
+  title           String
+  description     String?
+  status          String               @default("todo")
+  dueDate         DateTime?
+  projectId       Int?
+  taskGroupId     Int?
+  centreKey       Int?
+  assigneeId      Int?
+  position        Int                  @default(0)
+  completedAt     DateTime?
   // Last composed email draft for this task (reused as the editor's starting
   // point next time; the actual send happens via a mailto: link to Outlook).
-  emailSubject     String?
-  emailBody        String?
+  emailSubject    String?
+  emailBody       String?
   // An unposted note still being typed. Saved as the user types so it survives
   // the page reload that every other field's autosave triggers; cleared when
   // the note is actually added.
-  noteDraft        String?
-  createdAt        DateTime             @default(now())
-  updatedAt        DateTime             @updatedAt
-  project          Project?             @relation(fields: [projectId], references: [id], onDelete: SetNull, onUpdate: Cascade)
-  group            TaskGroup?           @relation(fields: [taskGroupId], references: [id], onDelete: SetNull, onUpdate: Cascade)
-  centre           CentreReference?     @relation(fields: [centreKey], references: [centreKey], onDelete: SetNull, onUpdate: Cascade)
-  assignee         Member?              @relation(fields: [assigneeId], references: [id], onDelete: SetNull, onUpdate: Cascade)
-  checklistItems   ChecklistItem[]
-  emailRecipients  TaskEmailRecipient[]
-  attachments      TaskAttachment[]
-  notes            TaskNote[]
+  noteDraft       String?
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+  project         Project?             @relation(fields: [projectId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  group           TaskGroup?           @relation(fields: [taskGroupId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  centre          CentreReference?     @relation(fields: [centreKey], references: [centreKey], onDelete: SetNull, onUpdate: Cascade)
+  assignee        Member?              @relation(fields: [assigneeId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  checklistItems  ChecklistItem[]
+  emailRecipients TaskEmailRecipient[]
+  attachments     TaskAttachment[]
+  notes           TaskNote[]
 
   @@index([status, dueDate])
   @@index([projectId, position])
@@ -797,7 +825,6 @@ model TaskNote {
   @@index([taskId, createdAt(sort: Desc)])
 }
 
-
 // --- Job Descriptions ------------------------------------------------------
 // KTCA pay-scale rates by effective date. Selectable-by-date so the salary
 // range shown on a JD rolls over automatically as new rate steps take effect
@@ -838,10 +865,10 @@ model JdAgreement {
 // footer's Last Updated By row, and the Job Positions folder the list panel's
 // folder button opens (blank = the built-in default path).
 model JdGlobalSetting {
-  id                   Int      @id @default(1)
-  lastReviewedByAcronym String  @default("")
-  jobPositionsFolder   String   @default("")
-  updatedAt            DateTime @updatedAt
+  id                    Int      @id @default(1)
+  lastReviewedByAcronym String   @default("")
+  jobPositionsFolder    String   @default("")
+  updatedAt             DateTime @updatedAt
 }
 
 model JdTitleProfile {
@@ -951,23 +978,23 @@ model JdKnowledgeDoc {
 }
 
 // "Things To Know": a hand-maintained marketing wiki. Each article is one
-// topic, grouped into a category and tagged for retrieval. The AI chats pull
-// the highest-scoring articles in as grounding rather than sending the whole
-// wiki, so this can grow well past the model's context window.
+// topic, grouped into a category and tagged for retrieval. Every live article
+// is indexed in the help knowledge base (HelpArticle, source "wiki"), and the
+// AI chats pull in only the excerpts relevant to a question, so this can grow
+// well past the model's context window.
 model WikiArticle {
-  id          Int      @id @default(autoincrement())
-  title       String
-  category    String   @default("General")
-  tags        String   @default("") // comma-separated, lower-cased on write
-  summary     String   @default("") // one-line gist, always sent in the AI index
-  contentHtml String   @default("")
-  isPinned    Boolean  @default(false) // pinned articles are always sent to the AI
-  isArchived  Boolean  @default(false) // hidden from the list and never sent to the AI
+  id               Int      @id @default(autoincrement())
+  title            String
+  category         String   @default("General")
+  tags             String   @default("") // comma-separated, lower-cased on write
+  summary          String   @default("") // one-line gist, indexed with the article
+  contentHtml      String   @default("")
+  isArchived       Boolean  @default(false) // hidden from the list and never sent to the AI
   // Set once the user picks a category by hand. The AI tagging pass then leaves
   // the category alone forever, so a filing decision is never overwritten.
-  isCategoryLocked Boolean @default(false)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  isCategoryLocked Boolean  @default(false)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 
   @@index([category, title])
   @@index([updatedAt(sort: Desc)])
@@ -1021,14 +1048,14 @@ model CodeSnippetCategory {
 // A titled link kept on the Subscriptions page (the services and accounts the
 // team subscribes to), including the Panui Tools links. Mirrors CodeSnippet.
 model Subscription {
-  id          Int      @id @default(autoincrement())
+  id          Int       @id @default(autoincrement())
   title       String
-  category    String   @default("General") // user-chosen; the list groups by it
-  url         String   @default("")
-  description String   @default("")
+  category    String    @default("General") // user-chosen; the list groups by it
+  url         String    @default("")
+  description String    @default("")
   lastUsedAt  DateTime? // last opened, copied, added or edited; its category starts expanded
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
   @@index([category, title])
 }
@@ -1051,8 +1078,8 @@ model SubscriptionCategory {
 // contentHash lets a refresh skip re-embedding unchanged documents.
 model HelpArticle {
   id          Int         @id @default(autoincrement())
-  source      String // mailchimp | google-analytics | infocare | meta
-  url         String      @unique // page URL, or "local:<path>" for a local document
+  source      String // mailchimp | google-analytics | infocare | meta | wiki
+  url         String      @unique // page URL, "local:<path>" for a local document, or "wiki:<id>" for a Things To Know article
   title       String
   section     String      @default("")
   summary     String      @default("")

@@ -72,3 +72,17 @@ not explain them (e.g. a new head teacher).
 - [x] 13. "All kindergartens" row pinned at the top of the Enrolment Quality table (all columns, month table, no editor); first in the PDF and the AI grounding; shaded with `--color-row-total` (2026-11-10)
 - [x] 14. "Update from Infocare" keeps the download icon, the same as every other data-pull button (refresh icon tried and reverted at the user's request, 2026-11-10)
 - [x] 15. Automatic Enrolment Quality fetch once a month: finished months only, no Infocare calls mid-month; the button still fetches the month to date (2026-11-10)
+
+# PLAN — Meta advert reviews (2026-11-10)
+
+Goal: after a Meta advert, add a note to the kindergarten gauging its effect on % full roll and the waitlist; over time the Beep Beep intro says whether the kindergarten responds well to Meta adverts.
+
+- [x] 1. Review logic (`src/analytics/meta-advert-review.ts`): ad sets → per-centre runs, roll lift against the other kindergartens, waitlist before/after, verdict (incl. held-full), centre summary and sentence
+- [x] 2. Storage: `MetaAdvertReview` + migration; note and notification written into the existing Meta notes
+- [x] 3. Runner and schedule (`src/meta/advert-review.ts`): startup, after Meta refresh, `/app` every 6 h
+- [x] 4. Intro: sentence in `renderSelectedCentreNarrative`
+- [x] 5. AI grounding through `extraGrounding` (both dashboard chat endpoints)
+- [x] 6. Tests (`test/meta-advert-review.test.ts`)
+- [x] 7. Readmes
+- [x] 8. Backfill checked on live data: 10 runs reviewed (Brookfield 2025 +19 pts against the network; Otamarakau and Pāpāmoa Coast held full)
+- [ ] 9. Revisit once Maunganui, OPEYS and Whakamārama (ended Oct 2026) are reviewed, around 8 Dec 2026

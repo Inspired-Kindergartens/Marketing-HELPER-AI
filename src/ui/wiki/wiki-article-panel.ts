@@ -43,7 +43,6 @@ export function renderWikiArticlePanel(options: WikiArticlePanelOptions): string
       <header class="wiki-article__header flex items-start justify-between gap-16">
         <div class="wiki-article__heading flex flex-col gap-4 min-w-0">
           <h2 class="wiki-article__title flex items-center gap-8 text-strong">
-            ${article.isPinned ? `<i class="bi bi-pin-angle-fill ui-icon wiki-article__pin text-accent" aria-label="Pinned to AI chat" title="Always sent to AI chat"></i>` : ""}
             ${escapeHtml(article.title)}
           </h2>
           ${article.summary ? `<p class="wiki-article__summary text-body">${escapeHtml(article.summary)}</p>` : ""}

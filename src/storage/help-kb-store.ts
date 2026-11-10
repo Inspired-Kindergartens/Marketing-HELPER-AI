@@ -18,6 +18,7 @@ import {
   type ParsedHelpArticle,
 } from "../help-kb/parse.js";
 import { HELP_SOURCES, HELP_SOURCE_IDS, type HelpSourceId } from "../help-kb/sources.js";
+import { WIKI_URL_PREFIX, wikiArticleToHelpArticle } from "../help-kb/wiki-source.js";
 
 // The help knowledge base behind the AI chats (RAG). Each source's help pages
 // and local documents are split into heading-sized chunks and embedded; a chat
@@ -40,6 +41,13 @@ const FETCH_TIMEOUT_MS = 20_000;
 const LOCAL_PREFIX = "local:";
 const LOCAL_EXTENSIONS = new Set([".md", ".markdown", ".txt", ".html", ".htm", ".pdf"]);
 const LOCAL_MAX_BYTES = 15 * 1024 * 1024;
+
+// In-house documents (local guides and Things To Know articles) have no web
+// link and get their own vote in the ranking.
+function isInHouseUrl(url: string): boolean {
+  return url.startsWith(LOCAL_PREFIX) || url.startsWith(WIKI_URL_PREFIX);
+}
+const IN_HOUSE_URL_FILTER = { OR: [{ url: { startsWith: LOCAL_PREFIX } }, { url: { startsWith: WIKI_URL_PREFIX } }] };
 
 const syncing = new Set<HelpSourceId>();
 
@@ -296,13 +304,74 @@ export async function indexLocalHelpDocuments(source: HelpSourceId, config: Help
 }
 
 /**
- * The scheduled check: re-reads every source's local documents, and crawls a
+ * Brings the wiki's index up to date with its live (non-archived) articles:
+ * new and edited ones are embedded, unchanged ones skipped by content hash,
+ * archived and deleted ones removed. Runs after every wiki change and on the
+ * scheduled check. Calls that arrive while a pass is running are folded into
+ * one more pass, so a burst of autosaves embeds once.
+ */
+let wikiIndexRun: Promise<void> | null = null;
+let wikiIndexAgain = false;
+
+export function indexWikiArticles(config: HelpKbConfig, log: Logger): Promise<void> {
+  if (wikiIndexRun) {
+    wikiIndexAgain = true;
+    return wikiIndexRun;
+  }
+  wikiIndexRun = (async () => {
+    try {
+      do {
+        wikiIndexAgain = false;
+        await indexWikiArticlesOnce(config, log);
+      } while (wikiIndexAgain);
+    } finally {
+      wikiIndexRun = null;
+    }
+  })();
+  return wikiIndexRun;
+}
+
+async function indexWikiArticlesOnce(config: HelpKbConfig, log: Logger): Promise<HelpSyncResult> {
+  const result: HelpSyncResult = { source: "wiki", kind: "local", seen: 0, updated: 0, unchanged: 0, skipped: 0, failed: 0, removed: 0 };
+  const writer = new ArticleWriter("wiki", config, log);
+  await writer.load({ local: false });
+  const rows = await prisma.wikiArticle.findMany({
+    where: { isArchived: false },
+    select: { id: true, title: true, category: true, tags: true, summary: true, contentHtml: true },
+  });
+  const seen = new Set<string>();
+  for (const row of rows) {
+    result.seen++;
+    const article = wikiArticleToHelpArticle(row);
+    if (!article) {
+      result.skipped++;
+      continue;
+    }
+    seen.add(article.url);
+    try {
+      result[await writer.write(article)]++;
+    } catch (error) {
+      result.failed++;
+      log.warn({ error: String(error), url: article.url }, "Help sync: wiki article failed");
+    }
+  }
+  result.removed = await writer.prune(seen);
+  if (result.updated > 0 || result.removed > 0) log.info(result, "Help sync: wiki articles indexed");
+  return result;
+}
+
+/**
+ * The scheduled check: re-indexes the wiki, re-reads every source's local documents, and crawls a
  * source's help centre when its last complete crawl is older than the
  * source's refresh period (or never finished, e.g. cut short by a restart).
  * Sources run one after another so only one crawl is ever in flight.
  */
 export async function syncHelpKbIfStale(config: HelpKbConfig, log: Logger): Promise<void> {
+  await indexWikiArticles(config, log).catch((error) => {
+    log.warn({ error: String(error) }, "Help sync: wiki articles failed");
+  });
   for (const source of HELP_SOURCE_IDS) {
+    if (HELP_SOURCES[source].localPaths.length === 0) continue;
     await indexLocalHelpDocuments(source, config, log).catch((error) => {
       log.warn({ error: String(error), source }, "Help sync: local documents failed");
     });
@@ -336,7 +405,7 @@ async function loadVectorIndex(): Promise<IndexedChunk[]> {
   vectorIndex = rows.map((row) => ({
     id: row.id,
     source: row.article.source,
-    local: row.article.url.startsWith(LOCAL_PREFIX),
+    local: isInHouseUrl(row.article.url),
     vector: normalizeVector(row.embedding),
   }));
   return vectorIndex;
@@ -396,6 +465,7 @@ export async function buildHelpGrounding(
 
   let vectorIds: number[] = [];
   let localVectorIds: number[] = [];
+  let wikiVectorIds: number[] = [];
   let bestSimilarity = 0;
   if (config.ai.AI_PROVIDER === "ollama") {
     try {
@@ -403,61 +473,70 @@ export async function buildHelpGrounding(
       if (index.length > 0) {
         const [queryVector] = await embedTexts(config.ai, config.embedModel, [question], "query", 15_000);
         const scored = index
-          .map((chunk) => ({ id: chunk.id, local: chunk.local, score: dot(queryVector, chunk.vector) }))
+          .map((chunk) => ({ id: chunk.id, source: chunk.source, local: chunk.local, score: dot(queryVector, chunk.vector) }))
           .filter((entry) => entry.score >= CANDIDATE_MIN_SIMILARITY)
           .sort((left, right) => right.score - left.score);
         bestSimilarity = scored[0]?.score ?? 0;
         vectorIds = scored.slice(0, CANDIDATES_PER_METHOD).map((entry) => entry.id);
         localVectorIds = scored.filter((entry) => entry.local).map((entry) => entry.id);
+        wikiVectorIds = scored.filter((entry) => entry.source === "wiki").map((entry) => entry.id);
       }
     } catch (error) {
       options.log?.warn({ error: String(error) }, "Help vector search unavailable; using full-text only");
     }
   }
 
-  const onTopic =
+  const helpOnTopic =
     bestSimilarity >= HELP_MIN_SIMILARITY || options.sources.some((source) => HELP_SOURCES[source].topic.test(question));
-  if (!onTopic) return null;
+  const wantsWiki = wanted.has("wiki");
+  if (!helpOnTopic && !wantsWiki) return null;
 
-  let textIds: number[] = [];
-  const tsQuery = buildFullTextQuery(question);
-  if (tsQuery) {
+  const searchText = async (tsQuery: string, sources: readonly string[], limit: number, label: string): Promise<number[]> => {
+    if (!tsQuery) return [];
     try {
       const rows = await prisma.$queryRaw<Array<{ id: number }>>`
         SELECT chunk."id"
         FROM "HelpChunk" AS chunk
         JOIN "HelpArticle" AS article ON article."id" = chunk."articleId",
              to_tsquery('english', ${tsQuery}) AS query
-        WHERE chunk."searchVector" @@ query AND article."source" = ANY(${[...options.sources]})
+        WHERE chunk."searchVector" @@ query AND article."source" = ANY(${[...sources]})
         -- ts_rank normalised by log length (flag 1): plain cover density let
         -- long glossary chunks that repeat a common word ("ads") outrank the
         -- short section that actually answers the question.
         ORDER BY ts_rank(chunk."searchVector", query, 1) DESC
-        LIMIT ${CANDIDATES_PER_METHOD}
+        LIMIT ${limit}
       `;
-      textIds = rows.map((row) => row.id);
+      return rows.map((row) => row.id);
     } catch (error) {
-      options.log?.warn({ error: String(error) }, "Help full-text search failed");
+      options.log?.warn({ error: String(error) }, `Help ${label} search failed`);
+      return [];
     }
-  }
-
-  let phraseIds: number[] = [];
+  };
+  const tsQuery = buildFullTextQuery(question);
   const phraseQuery = buildPhraseQuery(question);
-  if (phraseQuery) {
-    try {
-      const rows = await prisma.$queryRaw<Array<{ id: number }>>`
-        SELECT chunk."id"
-        FROM "HelpChunk" AS chunk
-        JOIN "HelpArticle" AS article ON article."id" = chunk."articleId",
-             to_tsquery('english', ${phraseQuery}) AS query
-        WHERE chunk."searchVector" @@ query AND article."source" = ANY(${[...options.sources]})
-        ORDER BY ts_rank(chunk."searchVector", query, 1) DESC
-        LIMIT ${PHRASE_CANDIDATES}
-      `;
-      phraseIds = rows.map((row) => row.id);
-    } catch (error) {
-      options.log?.warn({ error: String(error) }, "Help phrase search failed");
-    }
+
+  // Things To Know articles are short in-house notes: their best vector match
+  // scores well under the help-centre gate even when it is the right article
+  // (0.59-0.65 measured), while unrelated questions score about the same, so
+  // the vector score cannot tell them apart. A keyword hit on the wiki is the
+  // deciding signal instead. The wiki is searched on its own, so its few
+  // chunks are not crowded out of the cross-source top 20.
+  const wikiTextIds = wantsWiki ? await searchText(tsQuery, ["wiki"], LOCAL_CANDIDATES, "wiki full-text") : [];
+  const wikiPhraseIds = wantsWiki ? await searchText(phraseQuery, ["wiki"], LOCAL_CANDIDATES, "wiki phrase") : [];
+
+  let textIds: number[];
+  let phraseIds: number[];
+  if (helpOnTopic) {
+    textIds = await searchText(tsQuery, options.sources, CANDIDATES_PER_METHOD, "full-text");
+    phraseIds = await searchText(phraseQuery, options.sources, PHRASE_CANDIDATES, "phrase");
+  } else {
+    // Off-topic for the help guides: only a wiki keyword match may answer, and
+    // only with wiki excerpts.
+    if (wikiTextIds.length === 0 && wikiPhraseIds.length === 0) return null;
+    vectorIds = wikiVectorIds;
+    localVectorIds = wikiVectorIds;
+    textIds = wikiTextIds;
+    phraseIds = wikiPhraseIds;
   }
 
   // In-house guides are the authority on how this app works out its numbers,
@@ -472,14 +551,16 @@ export async function buildHelpGrounding(
     keywordIds.length
       ? (
           await prisma.helpChunk.findMany({
-            where: { id: { in: keywordIds }, article: { url: { startsWith: LOCAL_PREFIX } } },
+            where: { id: { in: keywordIds }, article: IN_HOUSE_URL_FILTER },
             select: { id: true },
           })
         ).map((row) => row.id)
       : [],
   );
   const isLocal = (id: number) => localKeywordIds.has(id);
-  const localIds = reciprocalRankFusion([localVectorIds, textIds.filter(isLocal), phraseIds.filter(isLocal)])
+  const localTextIds = [...new Set([...textIds.filter(isLocal), ...wikiTextIds])];
+  const localPhraseIds = [...new Set([...phraseIds.filter(isLocal), ...wikiPhraseIds])];
+  const localIds = reciprocalRankFusion([localVectorIds, localTextIds, localPhraseIds])
     .slice(0, LOCAL_CANDIDATES)
     .map((entry) => entry.id);
 
@@ -518,20 +599,25 @@ export async function buildHelpGrounding(
   const sources: HelpSource[] = [];
   const seen = new Set<string>();
   const lines = [
-    "Help knowledge base excerpts retrieved for this question: official help centres and in-house guides to this app.",
+    "Knowledge base excerpts retrieved for this question: the user's Things To Know articles, in-house guides to this app, and official help centres.",
+    "Things To Know articles are the authoritative in-house source for how this organisation does things: when one covers the question, prefer it over general knowledge.",
     "When the question is about how a tool works, what a metric means, or how the dashboard works it out, answer from these excerpts: use their exact menu names, definitions and thresholds, and say which source you used.",
-    "Only give a web link that appears in a Source line below. In-house guides have no link; name them instead.",
+    "Only give a web link that appears in a Source line below. In-house guides and Things To Know articles have no link; name them instead.",
     "If the excerpts do not cover the question, say so rather than guessing. If the question is not about these tools, ignore the excerpts.",
   ];
   for (const chunk of selected) {
     const sourceId = chunk.article.source as HelpSourceId;
     const label = HELP_SOURCES[sourceId]?.label ?? sourceId;
-    const isLocal = chunk.article.url.startsWith(LOCAL_PREFIX);
-    const link = isLocal ? null : chunk.anchor ? `${chunk.article.url}#${chunk.anchor}` : chunk.article.url;
+    const isWiki = chunk.article.url.startsWith(WIKI_URL_PREFIX);
+    const link = isInHouseUrl(chunk.article.url) ? null : chunk.anchor ? `${chunk.article.url}#${chunk.anchor}` : chunk.article.url;
     lines.push(
       "",
       `### [${label}] ${chunk.article.title}${chunk.heading ? ` - ${chunk.heading}` : ""}`,
-      link ? `Source: ${link}` : `Source: in-house guide "${chunk.article.title}"`,
+      link
+        ? `Source: ${link}`
+        : isWiki
+          ? `Source: Things To Know article "${chunk.article.title}"`
+          : `Source: in-house guide "${chunk.article.title}"`,
       chunk.text,
     );
     if (!seen.has(chunk.article.url)) {

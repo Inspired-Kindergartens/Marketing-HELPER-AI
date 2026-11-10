@@ -754,11 +754,6 @@ function renderWikiScript(): string {
             post("/api/wiki/" + articleId + "/duplicate", {});
             return;
           }
-          if (action === "pin") {
-            event.preventDefault();
-            post("/api/wiki/" + articleId + "/pin", { isPinned: el.getAttribute("aria-pressed") !== "true" });
-            return;
-          }
         });
 
         document.addEventListener("submit", function(event) {

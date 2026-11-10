@@ -6,6 +6,7 @@ import { getWindowOption, resolveWindowKey, type WindowKey, WINDOW_OPTIONS } fro
 import type { WaitlistDiscoveryReport } from "../infocare/waitlist-report.js";
 import type { ServiceAnalyticsSnapshot } from "../infocare/models.js";
 import type { MetaConfigStatus } from "../meta/config.js";
+import { describeMetaResponse, type MetaResponseSummary } from "../analytics/meta-advert-review.js";
 import type { GoogleAnalyticsConfigStatus } from "../google-analytics/config.js";
 import type {
   GoogleAnalyticsDailySnapshotView,
@@ -125,6 +126,7 @@ type AppShellOptions = {
   metaRecommendationNotificationCount?: number;
   metaRecommendationNotes?: MetaRecommendationNoteView[];
   latestMetaRecommendationNotesForCentre?: MetaNotificationHistoryRow[];
+  metaResponseSummary?: MetaResponseSummary | null;
   centreContacts?: CentreContact[];
   snapshotRefreshStatus?: "idle" | "in-progress" | "ready" | "error";
   snapshotRefreshOutcome?: {
@@ -2128,6 +2130,7 @@ function renderSelectedCentreNarrative(
   latestMetaRecommendationNotesForCentre: MetaNotificationHistoryRow[] = [],
   serviceSort: ServiceSort = "critical",
   enrolmentQuality: EnrolmentQualityView | null = null,
+  metaResponseSummary: MetaResponseSummary | null = null,
 ) {
   const selectedRow = resolveSelectedRow(snapshotSet, selectedCentreKey, serviceSort, selectedWindowKey);
 
@@ -2150,6 +2153,11 @@ function renderSelectedCentreNarrative(
     buildWaitlistAgeQualityGuidance(selectedRow),
     buildWindowInsights(selectedRow, centreHistory, selectedWindowKey),
     buildSeasonalityNarrative(annualHistory),
+    metaResponseSummary && metaResponseSummary.centreKey === selectedRow.centreKey
+      ? escapeHtml(describeMetaResponse(metaResponseSummary, (text) => ` ${text}`))
+          .replace(" ", "<strong>")
+          .replace("", "</strong>")
+      : null,
   ]
     .filter((item): item is string => Boolean(item))
     .filter((item) => !isGuidanceCoveredByLead(item, openingNarrative));
@@ -2198,6 +2206,7 @@ function renderAiChatPanel(
   latestMetaRecommendationNotesForCentre: MetaNotificationHistoryRow[] = [],
   serviceSort: ServiceSort = "critical",
   enrolmentQuality: EnrolmentQualityView | null = null,
+  metaResponseSummary: MetaResponseSummary | null = null,
 ) {
   const resolvedSelectedCentreKey =
     selectedCentreKey ??
@@ -2216,6 +2225,7 @@ function renderAiChatPanel(
           latestMetaRecommendationNotesForCentre,
           serviceSort,
           enrolmentQuality,
+          metaResponseSummary,
         )}
       </div>
       <div class="chat-shell__composer">
@@ -5647,6 +5657,7 @@ export function renderAppShell(
               options.latestMetaRecommendationNotesForCentre ?? [],
               serviceSort,
               options.enrolmentQuality ?? null,
+              options.metaResponseSummary ?? null,
             ),
   }));
   const layout = renderLayout({

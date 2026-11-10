@@ -3,10 +3,11 @@ import test from "node:test";
 
 import {
   normalizeWikiTags,
-  selectWikiGrounding,
   wikiHtmlToPlainText,
   type WikiArticleRow,
 } from "../src/storage/wiki-store.js";
+import { wikiArticleToHelpArticle } from "../src/help-kb/wiki-source.js";
+import { HELP_SOURCES, HELP_SOURCE_IDS } from "../src/help-kb/sources.js";
 import { renderWikiListPanel } from "../src/ui/wiki/wiki-list-panel.js";
 import { renderWikiEditorPanel } from "../src/ui/wiki/wiki-editor-panel.js";
 import { renderWikiArticlePanel } from "../src/ui/wiki/wiki-article-panel.js";
@@ -32,7 +33,6 @@ function buildRow(overrides: Partial<WikiArticleRow> = {}): WikiArticleRow {
     tags: "meta,budget",
     summary: "How we set daily spend on Meta campaigns.",
     contentHtml: "<p>Daily spend starts at twenty dollars per centre.</p>",
-    isPinned: false,
     isArchived: false,
     isCategoryLocked: false,
     updatedAt: new Date("2026-08-01T00:00:00.000Z"),
@@ -52,75 +52,39 @@ test("article HTML is flattened to readable plain text for the model", () => {
   assert.equal(text, "Budget\nTwenty a day\nReview weekly");
 });
 
-test("grounding returns null when the wiki is empty so no message is sent", () => {
-  assert.equal(selectWikiGrounding([], "how much do we spend on meta ads"), null);
+test("every wiki article with a body becomes a knowledge base document", () => {
+  const article = wikiArticleToHelpArticle(buildRow());
+
+  assert.ok(article);
+  assert.equal(article.url, "wiki:1");
+  assert.equal(article.title, "Meta ads budget rules");
+  assert.equal(article.section, "Advertising");
+  // Summary and tags open the article so a question can match on them too.
+  assert.match(article.sections[0].text, /How we set daily spend on Meta campaigns\./);
+  assert.match(article.sections[0].text, /Tags: meta, budget/);
+  assert.ok(article.sections.some((section) => /Daily spend starts at twenty dollars/.test(section.text)));
 });
 
-test("grounding pulls in the article matching the prompt and leaves the rest out", () => {
-  const grounding = selectWikiGrounding(
-    [
-      buildRow(),
-      buildRow({ id: 2, title: "Newsletter schedule", tags: "mailchimp", summary: "", contentHtml: "<p>Monthly.</p>" }),
-    ],
-    "what is our meta budget",
+test("a wiki article is split at its headings like any help page", () => {
+  const article = wikiArticleToHelpArticle(
+    buildRow({ summary: "", tags: "", contentHtml: "<p>Intro.</p><h2>Budget</h2><p>Twenty a day.</p><h3>Review</h3><p>Weekly.</p>" }),
   );
 
-  assert.ok(grounding);
+  assert.ok(article);
   assert.deepEqual(
-    grounding.articles.map((article) => article.id),
-    [1],
+    article.sections.map((section) => section.heading),
+    ["", "Budget", "Review"],
   );
-  // The index still lists every article, so the model knows the other exists.
-  assert.match(grounding.text, /Newsletter schedule/);
-  assert.match(grounding.text, /Daily spend starts at twenty dollars/);
 });
 
-test("pinned articles are included even when nothing in the prompt matches", () => {
-  const grounding = selectWikiGrounding(
-    [buildRow({ id: 3, title: "Brand voice", tags: "voice", isPinned: true, contentHtml: "<p>Warm and plain.</p>" })],
-    "unrelated question about parking",
-  );
-
-  assert.ok(grounding);
-  assert.deepEqual(
-    grounding.articles.map((article) => article.id),
-    [3],
-  );
-  assert.match(grounding.text, /Warm and plain/);
+test("a wiki article with no body yet is not indexed", () => {
+  assert.equal(wikiArticleToHelpArticle(buildRow({ contentHtml: "" })), null);
 });
 
-test("a prompt of only stop words pulls in no unpinned article", () => {
-  const grounding = selectWikiGrounding([buildRow()], "what should we do about this");
-
-  assert.ok(grounding);
-  assert.deepEqual(grounding.articles, []);
-  assert.match(grounding.text, /No article closely matches this question/);
-});
-
-test("title and tag matches outrank a body-only mention", () => {
-  const grounding = selectWikiGrounding(
-    [
-      buildRow({ id: 1, title: "Enrolment enquiries", tags: "enrolment", summary: "", contentHtml: "<p>Reply same day.</p>" }),
-      buildRow({
-        id: 2,
-        title: "Office admin",
-        tags: "admin",
-        summary: "",
-        contentHtml: "<p>Filing, supplies, and the odd enrolment note.</p>",
-      }),
-    ],
-    "how fast do we answer an enrolment enquiry",
-  );
-
-  assert.ok(grounding);
-  assert.equal(grounding.articles[0].id, 1);
-});
-
-test("grounding tells the model to treat the wiki as authoritative", () => {
-  const grounding = selectWikiGrounding([buildRow()], "meta budget");
-
-  assert.ok(grounding);
-  assert.match(grounding.text, /authoritative in-house source/);
+test("the wiki is a knowledge base source the chats can search", () => {
+  assert.ok(HELP_SOURCE_IDS.includes("wiki"));
+  assert.equal(HELP_SOURCES.wiki.label, "Things To Know");
+  assert.equal(HELP_SOURCES.wiki.crawl, undefined);
 });
 
 test("landing page offers Things To Know next to Job Descriptions", () => {
@@ -130,7 +94,7 @@ test("landing page offers Things To Know next to Job Descriptions", () => {
   assert.match(html, /Things To Know/);
 });
 
-test("list panel groups articles by category and marks pinned ones", () => {
+test("list panel groups articles by category with no pin control", () => {
   const html = renderWikiListPanel({
     articles: [
       {
@@ -139,7 +103,6 @@ test("list panel groups articles by category and marks pinned ones", () => {
         category: "Brand",
         tags: ["voice"],
         summary: "Warm and plain.",
-        isPinned: true,
         updatedAt: "2026-08-01T00:00:00.000Z",
       },
     ],
@@ -148,8 +111,8 @@ test("list panel groups articles by category and marks pinned ones", () => {
   });
 
   assert.match(html, /wiki-list__group-heading/);
-  assert.match(html, /bi-pin-angle-fill/);
-  assert.match(html, /aria-pressed="true"/);
+  assert.doesNotMatch(html, /bi-pin-angle/);
+  assert.doesNotMatch(html, /data-wiki-action="pin"/);
   assert.match(html, /href="\/wiki\?panel=wiki-article&article=1"/);
 });
 
@@ -168,7 +131,6 @@ test("editor panel renders the article body and its retrieval fields", () => {
       tags: ["meta", "budget"],
       summary: "How we set daily spend.",
       contentHtml: "<p>Twenty a day.</p>",
-      isPinned: false,
       updatedAt: "2026-08-01T00:00:00.000Z",
     },
     categories: ["Advertising", "Brand & Voice"],
@@ -282,7 +244,6 @@ test("an untagged article shows that tagging is still running", () => {
         category: "General",
         tags: [],
         summary: "",
-        isPinned: false,
         updatedAt: "2026-08-28T00:00:00.000Z",
       },
     ],
@@ -305,7 +266,6 @@ test("the editor offers the rich text toolbar and a regenerate control", () => {
       tags: ["voice"],
       summary: "",
       contentHtml: "<p>Warm and plain.</p>",
-      isPinned: false,
       updatedAt: "2026-08-28T00:00:00.000Z",
     },
     categories: ["Advertising", "Brand & Voice"],
@@ -395,7 +355,6 @@ test("opening an article shows it for reading with an edit button", () => {
       tags: ["meta", "budget"],
       summary: "Twenty a day per centre.",
       contentHtml: "<h2>Daily budget</h2><p>Twenty dollars per day.</p>",
-      isPinned: false,
       updatedAt: "2026-08-28T00:00:00.000Z",
     },
   });
@@ -416,7 +375,6 @@ test("an article with no content yet says so instead of looking broken", () => {
       tags: [],
       summary: "",
       contentHtml: "",
-      isPinned: false,
       updatedAt: "2026-08-28T00:00:00.000Z",
     },
   });
@@ -442,7 +400,6 @@ test("the reader and the editor are never both shown at once", () => {
         tags: [],
         summary: "",
         contentHtml: "<p>Body.</p>",
-        isPinned: false,
         updatedAt: "2026-08-28T00:00:00.000Z",
       },
     },
@@ -469,7 +426,6 @@ test("the editor returns to the article rather than all the way to the list", ()
         tags: [],
         summary: "",
         contentHtml: "<p>Body.</p>",
-        isPinned: false,
         updatedAt: "2026-08-28T00:00:00.000Z",
       },
       categories: [],
@@ -535,7 +491,6 @@ test("the editor offers the managed categories, with the current one selected", 
       tags: [],
       summary: "",
       contentHtml: "<p>Body.</p>",
-      isPinned: false,
       updatedAt: "2026-08-28T00:00:00.000Z",
     },
     categories: ["Advertising", "Enrolment"],
@@ -554,7 +509,6 @@ test("an article keeps showing a category that has since been removed", () => {
       tags: [],
       summary: "",
       contentHtml: "<p>Body.</p>",
-      isPinned: false,
       updatedAt: "2026-08-28T00:00:00.000Z",
     },
     categories: ["Advertising"],
@@ -754,7 +708,6 @@ test("the reader offers copy alongside edit", () => {
       tags: [],
       summary: "",
       contentHtml: "<p><strong>Bold</strong></p>",
-      isPinned: false,
       updatedAt: "2026-08-28T00:00:00.000Z",
     },
   });
@@ -866,7 +819,6 @@ test("finishing editing returns to the article without waiting on the summary", 
         tags: [],
         summary: "",
         contentHtml: "<p>Body.</p>",
-        isPinned: false,
         updatedAt: "2026-08-28T00:00:00.000Z",
       },
       categories: ["General"],
@@ -898,7 +850,6 @@ test("the summary field says the AI writes it", () => {
       tags: [],
       summary: "",
       contentHtml: "<p>x</p>",
-      isPinned: false,
       updatedAt: "2026-08-28T00:00:00.000Z",
     },
     categories: ["General"],
@@ -978,7 +929,6 @@ test("the editor says who owns the category", () => {
     tags: ["meta"],
     summary: "How we set daily spend.",
     contentHtml: "<p>Twenty a day.</p>",
-    isPinned: false,
     updatedAt: "2026-08-01T00:00:00.000Z",
   };
   const categories = ["Advertising", "General"];
@@ -1009,7 +959,6 @@ test("the editor title bar carries a Save alongside the footer one", () => {
         tags: ["meta"],
         summary: "How we set daily spend.",
         contentHtml: "<p>Twenty a day.</p>",
-        isPinned: false,
         isCategoryLocked: false,
         updatedAt: "2026-08-01T00:00:00.000Z",
       },
