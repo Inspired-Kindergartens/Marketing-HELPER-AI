@@ -150,20 +150,27 @@ model CentreMonthlyRoll {
   @@index([month])
 }
 
-// The number of places a centre actually runs at (can be below its licence),
-// from a month onwards. The newest entry on or before a month applies.
+// The places a centre actually runs at (can be below its licence), entered by
+// the user only. Each save is a history row (createdAt = when it was changed,
+// note = why). A figure applies from its effectiveFrom month (YYYY-MM) until a
+// later month's figure; months before the first figure use the first figure;
+// for the same month the latest save applies. The user enters morning and
+// afternoon places; capacity is the busier of the two (older rows have no
+// am/pm and use capacity for both).
 model CentreOperatingCapacity {
   id             Int             @id @default(autoincrement())
   centreKey      Int
   effectiveFrom  String
   capacity       Int
+  amCapacity     Int?
+  pmCapacity     Int?
   under2Capacity Int?
   note           String?
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt
   centre         CentreReference @relation(fields: [centreKey], references: [centreKey], onDelete: Cascade, onUpdate: Cascade)
 
-  @@unique([centreKey, effectiveFrom])
+  @@index([centreKey, effectiveFrom])
 }
 
 model AnalyticsSnapshotRun {
@@ -378,28 +385,25 @@ model MetaRecommendationNote {
 
 // Meta advert reviews: one row per centre advert run, written once the run
 // has ended and settled. The matching note is stored in MetaRecommendationNote
-// under the same id, so it shows wherever Meta notes show.
+// under the same id, so it shows wherever Meta notes show. enrolments and
+// waitlisted count the families who applied while the advert ran, by where
+// the child is now; usualApplications is the centre's usual number for that
+// many days.
 model MetaAdvertReview {
-  id               Int       @id @default(autoincrement())
-  reviewId         String    @unique
-  centreKey        Int
-  adSetNames       String[]
-  startDate        DateTime
-  endDate          DateTime
-  measuredAt       DateTime
-  spend            Decimal?  @db.Decimal(18, 6)
-  clicks           Int?
-  rollBeforeMonth  String?
-  rollBefore       Float?
-  rollAfterMonth   String?
-  rollAfter        Float?
-  networkChange    Float?
-  waitlistBeforeAt DateTime?
-  waitlistBefore   Int?
-  waitlistAfterAt  DateTime?
-  waitlistAfter    Int?
-  verdict          String
-  createdAt        DateTime  @default(now())
+  id                Int      @id @default(autoincrement())
+  reviewId          String   @unique
+  centreKey         Int
+  adSetNames        String[]
+  startDate         DateTime
+  endDate           DateTime
+  measuredAt        DateTime
+  spend             Decimal? @db.Decimal(18, 6)
+  clicks            Int?
+  enrolments        Int
+  waitlisted        Int
+  usualApplications Float?
+  verdict           String
+  createdAt         DateTime @default(now())
 
   @@index([centreKey, endDate])
 }
@@ -1146,6 +1150,13 @@ model SectorCentre {
   inDirectory       Boolean           @default(false) // in the latest MoE directory pull
   notes             String            @default("")
   lastCrawledAt     DateTime?
+  // When it opened, as near as ERO's pages tell (src/sector/ero.ts). Basis:
+  // stated | first-review | earliest-review | no-review | "" (not known).
+  openedYear        Int?
+  openedMonth       Int?
+  openedBasis       String            @default("")
+  openedEvidence    String            @default("")
+  eroCheckedAt      DateTime?
   createdAt         DateTime          @default(now())
   updatedAt         DateTime          @updatedAt
   promotions        SectorPromotion[]

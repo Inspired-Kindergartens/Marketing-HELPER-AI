@@ -75,6 +75,7 @@ import {
   buildEnrolmentQualityGrounding,
   buildEnrolmentQualityRows,
   buildOrganisationRollRow,
+  capacityFromAmPm,
   monthKey,
   ORGANISATION_ROW_KEY,
   resolveRollSort,
@@ -86,11 +87,11 @@ import {
   type RollWindowKey,
 } from "./analytics/enrolment-quality.js";
 import {
-  deleteOperatingCapacity,
+  applyOperatingCapacityChanges,
   isValidMonth,
   readCentreMonthlyRolls,
   readOperatingCapacities,
-  saveOperatingCapacity,
+  type OperatingCapacityInput,
 } from "./storage/enrolment-quality-store.js";
 import { getRollHistoryProgress, runRollHistorySync } from "./infocare/roll-history.js";
 import { renderEnrolmentQualityBody, type EnrolmentQualityView } from "./ui/enrolment-quality-panel.js";
@@ -146,6 +147,7 @@ import {
   upsertMetaEmailContent,
 } from "./storage/meta-email-content-store.js";
 import {
+  renderAiChatMessages,
   renderAppShell,
   renderMetaRecommendationNotePopup,
   renderMetaNotificationHistoryPagination,
@@ -3200,6 +3202,48 @@ async function findEnrolmentQualityGrounding(prompt: string, selectedCentreKey: 
   }
 }
 
+// Beep Beep's opening messages for one centre, swapped into the chat when a
+// centre is opened in another panel (Enrolment Quality) without reloading /app.
+app.get<{ Querystring: { centre?: string; window?: string; sort?: string } }>("/fragments/ai-chat", async (request, reply) => {
+  const centreKey = Number.parseInt(String(request.query?.centre ?? ""), 10);
+  if (Number.isNaN(centreKey)) {
+    return reply.code(400).send({ error: "Choose a centre." });
+  }
+  const snapshotSet = await withRollSignals(await readLatestAnalyticsSnapshotSet());
+  const windowKey = resolveWindowKey(request.query?.window);
+  const latestRunDate = snapshotSet ? new Date(snapshotSet.runDate) : new Date();
+  const [centreHistory, annualHistory, notes, metaResponseSummary, enrolmentQuality] = await Promise.all([
+    readCentreSnapshotHistory(centreKey, { fromDate: resolveWindowStartDate(latestRunDate, windowKey), toDate: latestRunDate }),
+    readCentreSnapshotHistory(centreKey, { fromDate: resolveWindowStartDate(latestRunDate, "12M"), toDate: latestRunDate }),
+    readLatestMetaRecommendationNotesForCentre(centreKey, 3),
+    readMetaResponseSummaries()
+      .then(({ summaries }) => summaries.get(centreKey) ?? null)
+      .catch((error: unknown) => {
+        app.log.warn({ error }, "Meta advert reviews unavailable");
+        return null;
+      }),
+    loadEnrolmentQualityView("12M", "interest").catch((error: unknown) => {
+      app.log.warn({ error }, "Enrolment Quality unavailable");
+      return null;
+    }),
+  ]);
+  return reply
+    .type("text/html; charset=utf-8")
+    .send(
+      renderAiChatMessages(
+        snapshotSet,
+        centreKey,
+        windowKey,
+        centreHistory,
+        annualHistory,
+        notes,
+        resolveServiceSort(request.query?.sort),
+        enrolmentQuality,
+        metaResponseSummary,
+      ),
+    );
+});
+
 app.get<{ Querystring: { rollWindow?: string; rollSort?: string; rollOpen?: string } }>(
   "/fragments/enrolment-quality",
   async (request, reply) => {
@@ -3263,39 +3307,50 @@ app.get("/api/waitlist/pdf", async (_request, reply) => {
     .send(buffer);
 });
 
-app.post<{ Body: { centreKey?: unknown; capacity?: unknown; under2Capacity?: unknown; effectiveFrom?: unknown; note?: unknown } }>(
+// The editor's Save: removals and the new figure arrive together and are
+// applied in one transaction. Nothing is written before Save.
+app.post<{ Body: { centreKey?: unknown; removeIds?: unknown; add?: { amCapacity?: unknown; pmCapacity?: unknown; under2Capacity?: unknown; effectiveFrom?: unknown; note?: unknown } | null } }>(
   "/api/enrolment-quality/capacity",
   async (request, reply) => {
     const centreKey = parsePositiveInt(request.body?.centreKey);
-    const capacity = parsePositiveInt(request.body?.capacity);
-    const effectiveFrom = request.body?.effectiveFrom;
-    if (centreKey == null || capacity == null || capacity > 500 || !isValidMonth(effectiveFrom)) {
+    const rawRemove = request.body?.removeIds ?? [];
+    const removeIds = Array.isArray(rawRemove) ? rawRemove.map((id) => parsePositiveInt(id)) : [null];
+    if (centreKey == null || removeIds.some((id) => id == null)) {
       reply.code(400);
-      return { error: "A centre, a capacity between 1 and 500 and a month are required." };
+      return { error: "A centre and valid history entries are required." };
     }
-    // Optional: the under-2 part of the total (0 is allowed: no under-2s run).
-    const rawUnder2 = request.body?.under2Capacity;
-    const under2Capacity = rawUnder2 == null || rawUnder2 === "" ? null : Number(rawUnder2);
-    if (under2Capacity != null && (!Number.isInteger(under2Capacity) || under2Capacity < 0 || under2Capacity > capacity)) {
+    const raw = request.body?.add ?? null;
+    let add: OperatingCapacityInput | null = null;
+    if (raw) {
+      // Morning and afternoon places; 0 is allowed for a session not run, as
+      // long as the other one has places. Capacity is the busier session.
+      const amCapacity = raw.amCapacity == null || raw.amCapacity === "" ? null : Number(raw.amCapacity);
+      const pmCapacity = raw.pmCapacity == null || raw.pmCapacity === "" ? null : Number(raw.pmCapacity);
+      const validPlaces = (value: number | null): value is number => value != null && Number.isInteger(value) && value >= 0 && value <= 500;
+      const effectiveFrom = raw.effectiveFrom;
+      if (!validPlaces(amCapacity) || !validPlaces(pmCapacity) || !isValidMonth(effectiveFrom)) {
+        reply.code(400);
+        return { error: "Am and pm places between 0 and 500, and a From month, are required." };
+      }
+      const capacity = capacityFromAmPm(amCapacity, pmCapacity);
+      if (capacity < 1) {
+        reply.code(400);
+        return { error: "The am or pm places must be at least 1." };
+      }
+      // Optional: the under-2 part of the total (0 is allowed: no under-2s run).
+      const under2Capacity = raw.under2Capacity == null || raw.under2Capacity === "" ? null : Number(raw.under2Capacity);
+      if (under2Capacity != null && (!Number.isInteger(under2Capacity) || under2Capacity < 0 || under2Capacity > capacity)) {
+        reply.code(400);
+        return { error: "Under-2 places must be a whole number from 0 up to the total capacity." };
+      }
+      const note = typeof raw.note === "string" ? raw.note.slice(0, 200) : null;
+      add = { centreKey, effectiveFrom, capacity, amCapacity, pmCapacity, under2Capacity, note };
+    }
+    if (!add && removeIds.length === 0) {
       reply.code(400);
-      return { error: "Under-2 places must be a whole number from 0 up to the total capacity." };
+      return { error: "Nothing to save." };
     }
-    const note = typeof request.body?.note === "string" ? request.body.note.slice(0, 200) : null;
-    await saveOperatingCapacity({ centreKey, capacity, under2Capacity, effectiveFrom, note });
-    return { ok: true };
-  },
-);
-
-app.post<{ Body: { centreKey?: unknown; effectiveFrom?: unknown } }>(
-  "/api/enrolment-quality/capacity/delete",
-  async (request, reply) => {
-    const centreKey = parsePositiveInt(request.body?.centreKey);
-    const effectiveFrom = request.body?.effectiveFrom;
-    if (centreKey == null || !isValidMonth(effectiveFrom)) {
-      reply.code(400);
-      return { error: "A centre and a month are required." };
-    }
-    await deleteOperatingCapacity(centreKey, effectiveFrom);
+    await applyOperatingCapacityChanges(centreKey, removeIds as number[], add);
     return { ok: true };
   },
 );

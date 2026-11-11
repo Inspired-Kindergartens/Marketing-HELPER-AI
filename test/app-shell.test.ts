@@ -287,7 +287,7 @@ test("analytics row clicks update selected row class before navigation", () => {
   assert.match(html, /function selectAnalyticsRow\(row\)/);
   assert.match(html, /selectedRow\.classList\.remove\("analytics-table__row--selected"\)/);
   assert.match(html, /row\.classList\.add\("analytics-table__row--selected"\)/);
-  assert.match(html, /selectAnalyticsRow\(row\);\s*let openerNavigated = false;/);
+  assert.match(html, /selectAnalyticsRow\(row\);\s*rememberAnalyticsScrollTop\(\);\s*let openerNavigated = false;/);
 });
 
 test("email buttons use shared yes no confirmation flow", () => {
@@ -316,12 +316,12 @@ test("email buttons use shared yes no confirmation flow", () => {
     ],
   });
 
-  assert.match(html, /analytics-table__email-action" data-email-confirm/);
-  assert.match(html, /meta-ads-notification__email" data-email-confirm/);
+  assert.match(html, /analytics-table__email-action[^"]*" data-email-confirm/);
+  assert.match(html, /meta-ads-notification__email[^"]*" data-email-confirm/);
   assert.match(html, /function askMetaEmailType\(centreName\)/);
   assert.match(html, /function askMetaEmailText\(centreName, initialContent\)/);
   assert.match(html, /function mountBlockingDialog\(dialog\)/);
-  assert.match(html, /blocker\.className = "modal-page-blocker"/);
+  assert.match(html, /blocker\.className = "modal-page-blocker[^"]*"/);
   assert.match(html, /const blocker = mountBlockingDialog\(dialog\)/);
   assert.match(html, /blocker\.remove\(\)/);
   assert.match(html, /event\.key !== "Tab"/);
@@ -330,8 +330,10 @@ test("email buttons use shared yes no confirmation flow", () => {
   assert.match(html, /data-kindergarten-name="Te Puke"/);
   assert.match(html, /The next step is to approve your advert campaign before going live and I have designed an advert that I think would work well for \\u003ckindergarten_name> - 3 images for different placements but one advert campaign/);
   assert.match(html, /function firstNameOnly\(name\)/);
-  assert.match(html, /"<head_teacher>": firstNameOnly\(context\.headTeacher\) \|\| "there"/);
-  assert.match(html, /"<administrator>": firstNameOnly\(context\.administrator\)/);
+  // One greeting for both contacts: "Paula and Colleen", or "there" with none.
+  assert.match(html, /function joinGreetingNames\(names\)/);
+  assert.match(html, /"<greeting_names>": joinGreetingNames\(\[context\.headTeacher, context\.administrator\]\)/);
+  assert.match(html, /return "there";/);
   assert.match(html, /function askEmailSentConfirmation\(centreName\)/);
   assert.match(html, /yesButton\.textContent = "Yes"/);
   assert.match(html, /noButton\.textContent = "No"/);
@@ -758,12 +760,17 @@ test("google analytics panel renders month range filter and preserves selection"
 
 test("google analytics panel defaults filters to current month", () => {
   const html = renderAppShell(null, { focusPanelId: "google-analytics" });
+  const now = new Date();
+  const month = now.getUTCMonth() + 1;
+  const year = now.getUTCFullYear();
+  const selected = (name: string, value: number) =>
+    new RegExp(`name="${name}"[^>]*>(?:(?!</select>)[\\s\\S])*value="${value}" selected`);
 
-  assert.match(html, /name="gaFromMonth"[^>]*>[\s\S]*value="5" selected/);
-  assert.match(html, /name="gaFromYear"[^>]*>[\s\S]*value="2026" selected/);
-  assert.match(html, /name="gaToMonth"[^>]*>[\s\S]*value="5" selected/);
-  assert.match(html, /name="gaToYear"[^>]*>[\s\S]*value="2026" selected/);
-  assert.doesNotMatch(html, /gaFromMonth=5&amp;gaFromYear=2025/);
+  assert.match(html, selected("gaFromMonth", month));
+  assert.match(html, selected("gaFromYear", year));
+  assert.match(html, selected("gaToMonth", month));
+  assert.match(html, selected("gaToYear", year));
+  assert.doesNotMatch(html, new RegExp(`gaFromMonth=${month}&amp;gaFromYear=${year - 1}`));
 });
 
 test("focused breakout panels include a print action", () => {
@@ -783,7 +790,8 @@ test("dashboard and chat panels expose scoped print actions", () => {
   assert.match(html, /document\.documentElement\.dataset\.printMode = mode/);
   assert.match(html, /delete document\.documentElement\.dataset\.printMode/);
   assert.match(html, /const chatHistory = \[\]/);
-  assert.match(html, /messages: chatHistory/);
+  assert.match(html, /messages: buildSubmittedHistory\(\)/);
+  assert.match(html, /function buildSubmittedHistory\(\)[\s\S]*?\.\.\.chatHistory/);
 });
 
 function pdfReportFixtures() {
@@ -929,7 +937,7 @@ test("ai chat lead treats low waitlist and high replacement pressure as priority
     selectedWindowKey: "3M",
   });
 
-  assert.match(html, /Whakamarama Kindergarten needs priority attention because/);
+  assert.match(html, /Whakamarama Kindergarten needs priority attention mainly because/);
   assert.match(html, /only two children in the actionable waitlist/);
   assert.match(html, /11 across Leaving, Near 5, and Age 5\+/);
   assert.doesNotMatch(html, /moderate watch range/);

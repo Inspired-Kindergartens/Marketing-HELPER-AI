@@ -1127,6 +1127,7 @@ function renderWaitlistAgeProfileTable(report: WaitlistDiscoveryReport) {
           <tr>
             <th>Wait category</th>
             <th>Under 5</th>
+            <th>of which Aged 2</th>
             <th>Turning 5</th>
             <th>Aged 5+</th>
             <th>Unknown DOB</th>
@@ -1140,6 +1141,7 @@ function renderWaitlistAgeProfileTable(report: WaitlistDiscoveryReport) {
                 <tr>
                   <td>${escapeHtml(row.category)}</td>
                   <td>${row.under5}</td>
+                  <td>${row.aged2 ?? "-"}</td>
                   <td>${row.turning5}</td>
                   <td>${row.aged5Plus}</td>
                   <td>${row.unknownDob}</td>
@@ -2121,6 +2123,12 @@ export function buildRollGuidance(row: EnrolmentQualityRow | undefined, view: En
   return `Roll: <strong>${pct(row.latestPercent)} full</strong> in ${formatMonthLabel(row.latest.month)}${row.latest.monthToDate ? " so far" : ""}${band ? ` (${ROLL_BAND_WORDS[band]})` : ""}${capacity}${change}.`;
 }
 
+// The chat's opening messages for one centre: the same as on /app, swapped in
+// by /fragments/ai-chat when a centre is opened in another panel.
+export function renderAiChatMessages(...args: Parameters<typeof renderSelectedCentreNarrative>) {
+  return renderSelectedCentreNarrative(...args);
+}
+
 function renderSelectedCentreNarrative(
   snapshotSet: LatestSnapshotSet | null,
   selectedCentreKey: number | null | undefined,
@@ -2154,9 +2162,9 @@ function renderSelectedCentreNarrative(
     buildWindowInsights(selectedRow, centreHistory, selectedWindowKey),
     buildSeasonalityNarrative(annualHistory),
     metaResponseSummary && metaResponseSummary.centreKey === selectedRow.centreKey
-      ? escapeHtml(describeMetaResponse(metaResponseSummary, (text) => ` ${text}`))
-          .replace(" ", "<strong>")
-          .replace("", "</strong>")
+      ? escapeHtml(describeMetaResponse(metaResponseSummary, (text) => `\u0000${text}\u0001`))
+          .replace("\u0000", "<strong>")
+          .replace("\u0001", "</strong>")
       : null,
   ]
     .filter((item): item is string => Boolean(item))
@@ -2449,6 +2457,48 @@ function renderAiChatScript() {
           if (event.key === "Enter" && !event.shiftKey) {
             event.preventDefault();
             void sendPrompt();
+          }
+        });
+
+        // Opening a centre in another panel (Enrolment Quality) switches the
+        // chat to that kindergarten: its summary and notes, and a fresh chat.
+        document.addEventListener("centre-selected", async (event) => {
+          const centreKey = String(event.detail?.centreKey ?? "");
+
+          if (!centreKey || centreKey === shell.dataset.centreKey) {
+            return;
+          }
+
+          const params = new URLSearchParams({ centre: centreKey, window: shell.dataset.windowKey || "" });
+          const sort = new URL(window.location.href).searchParams.get("sort");
+
+          if (sort) {
+            params.set("sort", sort);
+          }
+
+          try {
+            const response = await fetch("/fragments/ai-chat?" + params.toString(), { headers: { accept: "text/html" } });
+
+            if (!response.ok) {
+              throw new Error("Could not load the chat for this centre.");
+            }
+
+            messages.innerHTML = await response.text();
+            shell.dataset.centreKey = centreKey;
+            chatHistory.length = 0;
+            compactedHistory.length = 0;
+            messages.scrollTop = 0;
+
+            const url = new URL(window.location.href);
+            url.searchParams.set("centre", centreKey);
+            window.history.replaceState(null, "", url.toString());
+
+            for (const row of document.querySelectorAll("tr[data-row-href]")) {
+              const rowCentre = new URL(row.getAttribute("data-row-href") || "", window.location.origin).searchParams.get("centre");
+              row.classList.toggle("analytics-table__row--selected", rowCentre === centreKey);
+            }
+          } catch (error) {
+            appendMessage("Beep Beep", error instanceof Error ? error.message : "Could not load the chat for this centre.", "error");
           }
         });
       })();

@@ -47,8 +47,8 @@ function colourOf(row: EnrolmentQualityRow) {
   return COLOUR[row.direction ?? "none"];
 }
 
-// Preferred (operating) capacity, then the licence in curly brackets. With
-// no operating capacity set, the licence is used, so both numbers match.
+// Capacity (the busier of the am / pm places), then the licence in curly
+// brackets. With no am / pm places set, the licence is used, so both match.
 // The All kindergartens row keeps its full name (the shortener would drop
 // "kindergartens").
 function displayName(row: EnrolmentQualityRow) {
@@ -61,8 +61,14 @@ function capacityText(row: EnrolmentQualityRow) {
   return row.licenceU2 != null ? `${total}, U2 ${row.currentCapacity.under2 ?? "-"} {${row.licenceU2}}` : total;
 }
 
+// The user's am / pm places in force now, "-" when none are set.
+function placesText(row: EnrolmentQualityRow) {
+  const current = row.currentCapacity;
+  return current?.source === "operating" && current.am != null && current.pm != null ? `${current.am} / ${current.pm}` : "-";
+}
+
 const CAPACITY_NOTE =
-  "Capacity: the preferred operating capacity the % is measured against, with the licensed capacity in {curly brackets}. Where no operating capacity has been set, the licence is used and both match. U2 = of which under-2 places (centres licensed for under-2s only); % full roll counts under-2s and over-2s together. % colours: 90% and above green, 80-89% grey, under 80% red.";
+  "Capacity: the busier of the morning and afternoon places the centre runs, which the % is measured against, with the licensed capacity in {curly brackets}. Where no am / pm places have been set, the licence is used and both match. U2 = of which under-2 places (centres licensed for under-2s only); % full roll counts under-2s and over-2s together. % colours: 90% and above green, 80-89% grey, under 80% red.";
 
 // --- Charts --------------------------------------------------------------------
 
@@ -213,7 +219,7 @@ function coverLabel(view: EnrolmentQualityView) {
 }
 
 function summaryTable(rows: readonly EnrolmentQualityRow[]): PdfContent {
-  const head = ["Centre", "Trend", "Start", "Latest", "Change", "Am / pm", "Capacity {licence}"].map((text, index) => ({
+  const head = ["Centre", "Trend", "Start", "Latest", "Change", "Booked am / pm", "Places am / pm", "Capacity {licence}"].map((text, index) => ({
     text,
     bold: true,
     color: "#ffffff",
@@ -231,11 +237,12 @@ function summaryTable(rows: readonly EnrolmentQualityRow[]): PdfContent {
       cell(pct(row.latestPercent), { bold: true, color: bandColour(row.latestPercent) }),
       cell(formatChange(row.change), { color: colour, bold: row.direction === "fall" }),
       cell(row.latest && row.latest.openDays > 0 ? `${Math.round(row.latest.avgAm)} / ${Math.round(row.latest.avgPm)}` : "-"),
+      cell(placesText(row)),
       cell(capacityText(row)),
     ];
   });
   return {
-    table: { headerRows: 1, widths: ["*", 50, 38, 40, 44, 48, 105], body: [head, ...body] },
+    table: { headerRows: 1, widths: ["*", 46, 34, 36, 38, 44, 44, 92], body: [head, ...body] },
     layout: {
       hLineWidth: (i: number) => (i === 1 ? 0 : 0.3),
       vLineWidth: () => 0,
@@ -268,7 +275,7 @@ function centreCard(row: EnrolmentQualityRow): PdfContent {
       },
       { svg: renderCentreChartSvg(row.points, colour), width: 250, font: "Arial", margin: [0, 4, 0, 2] },
       {
-        text: `Capacity ${capacityText(row)}  ·  Latest am / pm ${row.latest && row.latest.openDays > 0 ? `${Math.round(row.latest.avgAm)} / ${Math.round(row.latest.avgPm)}` : "-"}`,
+        text: `Capacity ${capacityText(row)}  ·  Places am / pm ${placesText(row)}  ·  Booked am / pm ${row.latest && row.latest.openDays > 0 ? `${Math.round(row.latest.avgAm)} / ${Math.round(row.latest.avgPm)}` : "-"}`,
         fontSize: 7.5,
         color: MUTED,
       },

@@ -80,6 +80,47 @@ Generated: 2026-05-01T00:00:00.000Z
   );
 });
 
+test("waitlist report parser reads the aged 2 column of the DOB profile", async () => {
+  await withReport(
+    `# INFOCARE WAITLIST
+
+Generated: 2026-05-01T00:00:00.000Z
+
+## Scope
+
+- Open centres checked: 1
+- Waitlist entries returned across all centres: 3
+- Entries with usable wait-age data from \`application_date\`: 3
+- Entries missing usable \`application_date\`: 0
+
+## Waitlist Age Profile By Threshold
+
+| Wait category | Under 5 | Of which aged 2 | Turning 5 this year | Aged 5+ | Unknown DOB | Total |
+|---|---:|---:|---:|---:|---:|---:|
+| Short wait | 3 | 2 | 0 | 0 | 0 | 3 |
+
+## Centres With Largest Waitlists
+
+| Centre | Waitlist | Short wait | Typical wait | Long-running wait | Very long-running wait |
+|---|---:|---:|---:|---:|---:|
+| Contract Centre | 3 | 3 | 0 | 0 | 0 |
+`,
+    async () => {
+      const report = await readWaitlistDiscoveryReport();
+
+      assert.deepEqual(report?.ageProfileByThreshold[0], {
+        category: "Short wait",
+        under5: 3,
+        aged2: 2,
+        turning5: 0,
+        aged5Plus: 0,
+        unknownDob: 0,
+        total: 3,
+      });
+    },
+  );
+});
+
 test("waitlist report parser rejects partial reports with skipped centres", async () => {
   await withReport(
     `# INFOCARE WAITLIST

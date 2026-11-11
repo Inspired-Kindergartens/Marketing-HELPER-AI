@@ -211,10 +211,12 @@ export class MetaAdsClient {
     });
   }
 
-  async listInsights(adAccountId: string, level: MetaInsightLevel) {
+  // Daily results for the given days (YYYY-MM-DD, inclusive, in the ad
+  // account's time zone).
+  async listInsights(adAccountId: string, level: MetaInsightLevel, range: { since: string; until: string }) {
     return this.getList<MetaInsight>(`/act_${normalizeAdAccountId(adAccountId)}/insights`, {
       fields: buildFieldsParam(INSIGHT_FIELDS),
-      date_preset: "last_30d",
+      time_range: JSON.stringify(range),
       time_increment: 1,
       level,
     });

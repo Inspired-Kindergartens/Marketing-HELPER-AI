@@ -75,25 +75,43 @@ export async function readLatestRollFetch(): Promise<Date | null> {
 }
 
 export async function readOperatingCapacities(): Promise<OperatingCapacity[]> {
-  const records = await db.centreOperatingCapacity.findMany({ orderBy: [{ centreKey: "asc" }, { effectiveFrom: "asc" }] });
+  const records = await db.centreOperatingCapacity.findMany({ orderBy: [{ centreKey: "asc" }, { effectiveFrom: "asc" }, { createdAt: "asc" }, { id: "asc" }] });
   return records.map((record) => ({
+    id: record.id,
     centreKey: record.centreKey,
     effectiveFrom: record.effectiveFrom,
+    changedAt: record.createdAt.toISOString(),
     capacity: record.capacity,
+    amCapacity: record.amCapacity,
+    pmCapacity: record.pmCapacity,
     under2Capacity: record.under2Capacity,
     note: record.note,
   }));
 }
 
-export async function saveOperatingCapacity(input: OperatingCapacity) {
-  const note = input.note?.trim() || null;
-  await db.centreOperatingCapacity.upsert({
-    where: { centreKey_effectiveFrom: { centreKey: input.centreKey, effectiveFrom: input.effectiveFrom } },
-    create: { centreKey: input.centreKey, effectiveFrom: input.effectiveFrom, capacity: input.capacity, under2Capacity: input.under2Capacity, note },
-    update: { capacity: input.capacity, under2Capacity: input.under2Capacity, note },
-  });
-}
+export type OperatingCapacityInput = Omit<OperatingCapacity, "id" | "changedAt">;
 
-export async function deleteOperatingCapacity(centreKey: number, effectiveFrom: string) {
-  await db.centreOperatingCapacity.deleteMany({ where: { centreKey, effectiveFrom } });
+// One Save in the editor: the entries the user marked for removal and the new
+// figure (if any), together or not at all. Nothing is written before Save.
+// A new figure is a new history entry; earlier ones are kept, and for the
+// same From month the latest save applies.
+export async function applyOperatingCapacityChanges(centreKey: number, removeIds: readonly number[], add: OperatingCapacityInput | null) {
+  await db.$transaction([
+    ...(removeIds.length ? [db.centreOperatingCapacity.deleteMany({ where: { centreKey, id: { in: [...removeIds] } } })] : []),
+    ...(add
+      ? [
+          db.centreOperatingCapacity.create({
+            data: {
+              centreKey,
+              effectiveFrom: add.effectiveFrom,
+              capacity: add.capacity,
+              amCapacity: add.amCapacity ?? null,
+              pmCapacity: add.pmCapacity ?? null,
+              under2Capacity: add.under2Capacity,
+              note: add.note?.trim() || null,
+            },
+          }),
+        ]
+      : []),
+  ]);
 }

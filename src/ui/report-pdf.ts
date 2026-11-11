@@ -12,9 +12,12 @@ export const INK = "#1f2937";
 export const MUTED = "#6b7280";
 export const GRID = "#e5e7eb";
 export const ZEBRA = "#f6f7f9";
+// Typical is the app's teal (#4bc2c3) adjusted for ink: yellow pulled out and a
+// little density added, so on paper it reads cyan-teal and stays clear of the
+// yellow-heavy short-wait green instead of muddying towards it.
 export const WAIT_COLOUR = {
   short: "#16a34a",
-  typical: "#0e9384",
+  typical: "#2fa9c4",
   longRunning: "#f79009", // lighter than the Light theme token so it stands apart from very long in print
   veryLongRunning: "#d92d20",
 } as const;
@@ -142,12 +145,19 @@ export function renderStackedBarSvg(labels: readonly string[], series: readonly 
     const y = top + index * rowH;
     out.push(`<text x="${labelW - 6}" y="${y + rowH / 2 + 3}" font-size="8" fill="${INK}" text-anchor="end">${escapeXml(label)}</text>`);
     let x = labelW;
+    const dividers: number[] = [];
     for (const item of series) {
       const value = item.values[index] ?? 0;
       if (value <= 0) continue;
       const w = scale(value);
+      if (x > labelW) dividers.push(x);
       out.push(`<rect x="${x.toFixed(1)}" y="${(y + 3).toFixed(1)}" width="${w.toFixed(1)}" height="${rowH - 6}" fill="${item.colour}"/>`);
       x += w;
+    }
+    // A white line where one segment meets the next, so neighbouring colours
+    // stay distinct in print.
+    for (const at of dividers) {
+      out.push(`<line x1="${at.toFixed(1)}" x2="${at.toFixed(1)}" y1="${(y + 3).toFixed(1)}" y2="${(y + rowH - 3).toFixed(1)}" stroke="#ffffff" stroke-width="1.2"/>`);
     }
     out.push(`<text x="${(x + 3).toFixed(1)}" y="${y + rowH / 2 + 3}" font-size="7.5" font-weight="bold" fill="${INK}">${totals[index]}</text>`);
   });

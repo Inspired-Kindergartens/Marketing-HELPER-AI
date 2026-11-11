@@ -63,8 +63,8 @@ test("dashboard live Infocare chat reads API data without write endpoints", () =
   assert.match(infocareLive, /client\.request\("get_license_list"/);
   assert.match(infocareLive, /client\.request\("get_centre_list"/);
   assert.doesNotMatch(infocareLive, /client\.request\("(create|update|delete|set)_/);
-  assert.match(server, /\/api\/general-chat\/conversations\/:id\/stream[\s\S]*?isLiveInfocarePrompt\(prompt\)[\s\S]*?runLiveInfocareRequest/);
-  assert.match(server, /isLiveInfocarePrompt\(prompt\)[\s\S]*?return;[\s\S]*?const messages = await buildGeneralChatMessages/);
+  assert.match(server, /\/api\/general-chat\/conversations\/:id\/stream[\s\S]*?isLiveInfocarePrompt\(livePrompt\)[\s\S]*?runLiveInfocareRequest/);
+  assert.match(server, /isLiveInfocarePrompt\(livePrompt\)[\s\S]*?return;[\s\S]*?const messages = await buildGeneralChatMessages/);
 });
 
 test("capture failures are not acknowledged or suppressed", () => {

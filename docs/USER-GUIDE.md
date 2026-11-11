@@ -60,8 +60,9 @@ How full each kindergarten has been, month by month, so you can spot a centre th
 - **% full roll** — on an average open day, how many children were booked in the busier session (morning or afternoon), against the places the centre runs at. Children who come part of the week share a place: Kimmy (Tue, Wed, Fri) and Joe (Mon, Thu) together fill **one** place. A morning-only child and an afternoon-only child also share one. Over 100% is normal for a popular centre.
 - **Trend** — a small line for the chosen period, with an arrow: green ↗ rising, red ↘ falling, grey → steady (within 3% either way). Each line is stretched to fit its own months, so a real rise or fall stands out. The dashed line is 100%. A gap means no figures for that month (for example, before the centre opened).
 - **Start / Latest / Change** — the first and latest month in the period, and the difference between them (e.g. 90% → 82% is −8%). The current month is "to date". Percentages are green at 90% and above, grey from 80% to 89%, and red under 80%.
-- **Am / pm** — the average number of children booked in the morning and the afternoon in the latest month.
-- **Capacity** — the places used for the %: the centre's operating capacity if one is set, otherwise its licence (hover to see which). Press the pencil to change it.
+- **Booked am / pm** — the average number of children booked in the morning and the afternoon in the latest month, from Infocare.
+- **Places am / pm** — the morning and afternoon places you have set for the centre, e.g. `30 / 20` (`-` if you haven't set any). Press the pencil to change them.
+- **Capacity** — the places used for the %, with the licence in curly brackets, e.g. `30 {35}`. It is the busier of your am / pm places (30 / 20 gives 30), or the licence if you haven't set any. Waihi at 30 / 20 with 25 children booked in the morning shows 25 ÷ 30 = 83%.
 
 **All kindergartens** is always the top row, shaded grey, whatever the sort. It adds every centre together: all children placed against all capacity, with the same trend, Start, Latest, Change, Am / pm and Capacity columns. Click it to see its months. It has no pencil; change a centre's capacity and the total follows. It is also first in the PDF, and Beep Beep uses it for questions about the organisation as a whole.
 
@@ -71,11 +72,11 @@ How full each kindergarten has been, month by month, so you can spot a centre th
 
 **The sort buttons**: *Worst change* (the default) sorts by the Change column, the biggest fall at the top. *Worst latest* sorts by the Latest column, the lowest % at the top. *A-Z* and *Z-A* sort by name.
 
-**Click a centre** (or the pencil in its Capacity cell) to see each month and to set its **operating capacity**: the number of places the centre actually runs at, which can be lower than its licence (for example, licensed for 45 but staffed for 40). Choose the month it starts from; earlier months keep the licence or the earlier figure. The app suggests a figure from the staff roster: teachers working with children at 10am on a typical day, × 10 children each (× 15 for sessions of 4 hours or less), never more than the licence. Press **Use** to copy it, then **Save**.
+**Click a centre** to see each month. Beep Beep's chat switches to that kindergarten too: its summary and Meta notes, and a fresh conversation about it. Press the **pencil** in its Places am / pm cell to open the editor and set its **am / pm places** (the editor only shows after you press the pencil, and **Cancel** closes it): how many places the centre actually runs in the morning and in the afternoon, which can be lower than its licence (for example, licensed for 45 but staffed for 40 in the morning and 30 in the afternoon). Capacity is the busier of the two, because % full roll counts each day's busier session. A centre's **first** figure has no From month: it covers the whole 5-year history (shown as "from the start"), so setting the right number once corrects the past too. After that, the editor has a **From month** box, filled in with this month; change it to an earlier or later month if the change happened (or will happen) then. A later figure counts from its From month onwards: if a centre goes from 40 to 44 places in March, months up to February keep 40 and March onwards use 44. Each month in the centre's month table shows the places used for it. Each save is kept in a list under the heading, with its From month, the date it was changed (recorded automatically) and your note (for example "4 teachers"). Saving again for the same From month replaces it in the calculation, but the earlier save stays in the list. **Nothing changes until you press Save.** Pressing × on an entry only strikes it through (press it again to keep it); new numbers in the boxes are not used yet either. **Save** applies everything together, removals and the new figure, and keeps the centre open and in view even if the table re-sorts. **Cancel** puts the boxes back and un-strikes every entry. Removing an entry puts the figures around it back. The boxes stay empty until you save a figure, and only you can change it: nothing from Infocare, Update from Infocare or Beep Beep ever changes it. The app suggests a figure from the staff roster: teachers working with children at 10am on a typical day, × 10 children each (× 15 for sessions of 4 hours or less), never more than the licence. Press **Use** to copy it into both boxes, then **Save**. The Am / pm column (children booked) comes from Infocare and is never changed.
 
 **Under-2s.** OPEYS All Day, Maunganui All Day and Tai o Fenua are licensed for under-2s, inside their total (OPEYS: 60, of which up to 18 under-2). For these centres the editor also has an **Under-2** box: how many of the total are under-2 places you actually run (for example OPEYS 60, of which 10 under-2). % full roll still counts all children against the total. The under-2 figure is used for the staffing suggestion (under-2s need one teacher for every 5 children), and it is shown in the Capacity tooltip, the PDF (`U2 10 {18}`) and Beep Beep's figures.
 
-The **print** button (top right of the panel) downloads what is on screen as a PDF, for the period and order you have chosen: a plain cover page (just the title, the period, the date it was made and the logo, so a copy left lying around shows no figures), a summary table, a chart of each centre's change, then a chart for every centre (six to a page). Capacity is shown as the operating capacity with the licence in curly brackets, e.g. `40 {45}`. The operating capacity is kept separately and never changes the licence from Infocare.
+The **print** button (top right of the panel) downloads what is on screen as a PDF, for the period and order you have chosen: a plain cover page (just the title, the period, the date it was made and the logo, so a copy left lying around shows no figures), a summary table, a chart of each centre's change, then a chart for every centre (six to a page). Capacity is shown as the busier of the am / pm places with the licence in curly brackets, e.g. `40 {45}`. The am / pm places are kept separately and never change anything in Infocare.
 
 **Printing the PDFs.** The Enrolment Quality, Infocare Analytics and Waitlist Quality PDFs all start with the same plain cover page, and each file asks for A4 portrait, actual size, single-sided, 7 copies. Adobe Acrobat Reader fills these in for you; Chrome and Edge usually don't, so check them in the Print dialog. A PDF can't ask for stapling or page order, so in the printer's settings (**Printer Properties** or **More settings**) choose **Staple: top left** and make sure **Reverse order** is off.
 
@@ -93,6 +94,8 @@ The **print** button (top right of the panel) downloads the whole panel as a PDF
 
 **Longest wait** (in the Waitlist Quality Hierarchy table) is how many days the longest-waiting single child at that centre has been on the waitlist.
 
+**of which Aged 2** (in the DOB profile table) is how many of the Under 5 children are 2 years old. They're already counted in Under 5, so this column doesn't add to the Total. It shows `-` until the waitlist is next refreshed.
+
 ### META Ads
 
 Our Facebook and Instagram ads, matched to each kindergarten.
@@ -107,14 +110,21 @@ Our Facebook and Instagram ads, matched to each kindergarten.
 
 Put the kindergarten's name in the campaign name in Meta, so the app can match the ad to the centre.
 
-**Advert reviews.** After a kindergarten's advert ends, the app waits until the results can show (about 4 to 6 weeks, and until the month after the advert has finished). It then adds an **Advert review** note to that kindergarten, which you'll find in [Notes](/app?panel=notes). The note compares:
+**Results are kept.** Each day's results for every campaign, ad set and ad are saved in the app, from October 2023 onwards. Changing or reusing a campaign in Meta afterwards doesn't remove them. The app fetches results when you open [META Ads](/app?panel=meta-ads), at most once a day. If it hasn't been opened for a while, it catches up on the days it missed, however long ago.
 
-- **% full roll** for the month before the advert and the month after it. The change is set against the other kindergartens over the same months, so a change that happened everywhere doesn't count for or against the advert.
-- **The waitlist** just before the advert and a few weeks after it ended.
+**Start a new ad set for each new advert period**, rather than changing the dates on an old one. Meta then keeps each period's dates and results separate too. If an ad set is reused, the app still treats each stretch of spending as a separate advert, as long as there was a break of more than two weeks.
 
-Each note ends with a verdict: *responded well*, *did not respond well*, *mixed response*, or *already full, no room to respond*. A kindergarten that was full before and after doesn't count either way.
+**Advert reviews.** Two weeks after a kindergarten's advert ends, the app adds an **Advert review** note to that kindergarten, which you'll find in [Notes](/app?panel=notes). It looks in Infocare for the families who applied while the advert was running, using each child's application date. It counts how many of those children are now **enrolled** and how many are **on the waitlist**. It then compares the total with how many applications that kindergarten usually gets in the same number of days. For example:
 
-Once a kindergarten has two or more reviewed adverts, Beep Beep's opening summary for it says whether it **responds well**, **does not respond well** or **has a mixed response** to Meta adverts. With only one review, it gives that advert's result and says it's too early to call a pattern. Beep Beep uses the reviews when you ask about adverts. Adverts for staff, surveys and home-based care are not reviewed. Past adverts were reviewed when this feature was added, so history is there already. Waitlist figures only go back to late April 2026, so older reviews judge on the roll alone.
+> Meta advert that ran from 13 May to 11 Jun 2026 did well with 3 enrolments and 1 on the waitlist during that period, against a usual 2. ($221 spent, 813 clicks)
+
+- **Did well** means a spike: at least half as many applications again as usual, and at least two more families.
+- **Brought no spike** means about the usual number, or fewer.
+- **Usual** comes from the six months before the advert, leaving out the days when other adverts for that kindergarten were running. If there aren't at least eight weeks without adverts to go on, the note gives the counts and says there's not enough history to tell.
+
+Once a kindergarten has two or more reviewed adverts, Beep Beep's opening summary for it says whether it **responds well**, **does not respond well** or **has a mixed response** to Meta adverts, for example "1 of 4 adverts brought a spike". With only one review, it gives that advert's result and says it's too early to call a pattern. Beep Beep uses the reviews when you ask about adverts. Adverts for staff, surveys and home-based care are not reviewed. Past adverts, back to late 2023, have been reviewed, so history is there already. If newer results change an advert's dates or spend, its review is redone; a note you added yourself is kept.
+
+Two things to know when reading older reviews: a family who joined the waitlist and later withdrew is no longer in Infocare, so it can't be counted; and families from older adverts have mostly enrolled by now, so those notes show few on the waitlist.
 
 ### Google Analytics
 
@@ -233,6 +243,14 @@ Every other early childhood service around our kindergartens (childcare centres,
 - **Export** downloads the list as a spreadsheet with the same columns as the original competitor sheet.
 - **Ask Beep Beep** anything, for example *"Show me the list of centres that provide meals"*, *"Which BestStart centres are running a promotion?"*, *"How many home-based services are in Rotorua?"* or *"Which of those are in Pāpāmoa?"*. The app works out exactly which centres match, and lists them under the answer with links, so the list is always complete and correct. Beep Beep then sums it up. While a centre is open, questions like *"does it provide meals?"* are about that centre.
 - **"Not known"** for meals or transport means the website doesn't say, not that the centre doesn't offer it.
+- **Opened** is roughly when each centre opened. Nobody publishes an official opening date, so the app works it out from the centre's Education Review Office (ERO) reports. Hover over a date to see what it's based on.
+  - **A month or year** (e.g. *Aug 2018*): the ERO report says when it opened.
+  - **c. 2022**: its first ERO review was in 2022. First reviews usually happen within a year or two of opening.
+  - **2015 or earlier**: the oldest ERO report we can find is from 2015, so it was open by then. It may be much older.
+  - **Recent**: ERO hasn't reviewed it yet, so it opened recently. This also shows for a centre that was re-licensed after a change of owner.
+  - **Blank**: ERO doesn't say. This happens when ERO reviews a whole group rather than each centre, as it does for BestStart, Evolve's brands (Learning Adventures, Lollipops, Little Lights), Central Kids and our own kindergartens. It also happens with some reports written in te reo Māori.
+
+  The monthly update checks ERO again, so dates fill in as new reports come out. The export has the same column.
 
 ---
 

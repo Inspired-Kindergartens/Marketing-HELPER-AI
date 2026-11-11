@@ -986,6 +986,14 @@ button:focus-visible {
   padding: 10px;
 }
 
+.enrolment-quality__capacity[hidden] {
+  display: none;
+}
+
+.enrolment-quality__detail-grid:has(> .enrolment-quality__capacity[hidden]) {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 @media (max-width: 900px) {
   .enrolment-quality__detail-grid {
     grid-template-columns: 1fr;
@@ -4236,6 +4244,7 @@ body.readme-body {
 /* Description and note fields grow to fit their content, so a long
    description is fully visible without an inner scrollbar. */
 .task-field--block textarea {
+  box-sizing: border-box;
   width: 100%;
   min-height: 8rem;
   field-sizing: content;
@@ -4256,6 +4265,7 @@ body.readme-body {
 
 .task-notes__add textarea,
 .task-notes__edit textarea {
+  box-sizing: border-box;
   width: 100%;
   field-sizing: content;
   min-height: 3lh;

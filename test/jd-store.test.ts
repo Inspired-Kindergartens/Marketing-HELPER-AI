@@ -149,8 +149,11 @@ test("createJobDescription composes defaults from the title profile, centre prof
   const store = source("../src/storage/jd-store.ts");
 
   assert.match(store, /titleProfile\.jobTitle/);
-  assert.match(store, /centreProfile\.locationDisplay/);
-  assert.match(store, /seniorTeacherName: centreProfile\.seniorTeacherName/);
+  // The centre is optional ("Other", not centre based) and the senior teacher
+  // comes from the centre's SLT contact initials.
+  assert.match(store, /centreProfile\?\.locationDisplay \?\? emptyToNull\(input\.locationDisplay \?\? null\) \?\? JD_OTHER_LOCATION_DISPLAY/);
+  assert.match(store, /const sltInitials = await resolveSltInitials\(/);
+  assert.match(store, /seniorTeacherName: sltInitials/);
   assert.match(store, /formatSalaryRange\(titleProfile\.payScaleKey, dateAdvertised, fte\)/);
   assert.match(store, /closingAt: parseDate\(input\.closingAt\) \?\? defaultClosingDate\(dateAdvertised\)/);
 });

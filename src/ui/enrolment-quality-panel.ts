@@ -3,7 +3,10 @@
 // sort, capacity editor and fetch progress all replace it in place from
 // /fragments/enrolment-quality instead of reloading the dashboard.
 import {
+  FIRST_FIGURE_MONTH,
   formatMonthLabel,
+  isFirstFigure,
+  ORGANISATION_ROW_KEY,
   ROLL_WINDOW_OPTIONS,
   STEADY_POINTS,
   type EnrolmentQualityRow,
@@ -50,8 +53,27 @@ function formatAmPm(point: Pick<RollPoint, "avgAm" | "avgPm" | "openDays"> | nul
   return point && point.openDays > 0 ? `${Math.round(point.avgAm)} / ${Math.round(point.avgPm)}` : "-";
 }
 
+// The user's am / pm places, e.g. "30 / 20"; "-" when none are set.
+function formatPlaces(am: number | null | undefined, pm: number | null | undefined) {
+  return am != null && pm != null ? `${Math.round(am)} / ${Math.round(pm)}` : "-";
+}
+
 function formatCapacity(capacity: number | null) {
   return capacity == null ? "-" : String(Math.round(capacity));
+}
+
+// The capacity % full roll divides by, then the licence in {curly brackets}.
+function formatCapacityWithLicence(capacity: number | null, licence: number | null) {
+  if (capacity == null) return "-";
+  return `${formatCapacity(capacity)} {${formatCapacity(licence)}}`;
+}
+
+function capacityTitle(capacity: EnrolmentQualityRow["currentCapacity"], licence: number | null) {
+  if (!capacity) return "";
+  const base = capacity.source === "operating"
+    ? `Busier of am ${capacity.am ?? "-"} / pm ${capacity.pm ?? "-"} places; licence ${licence ?? "-"} in {}`
+    : `Licence (no am / pm places set) ${licence ?? "-"}`;
+  return capacity.under2 != null ? `${base}, of which ${capacity.under2} under-2` : base;
 }
 
 // A % coloured by its band: 90%+ green, 80-89% grey, under 80% red.
@@ -166,7 +188,12 @@ export function renderEnrolmentQualityHeaderActions(view: EnrolmentQualityView) 
     + `<a class="panel-action-button" href="/api/enrolment-quality/pdf?${fragmentQuery(view.windowKey, view.sort)}" download data-roll-pdf aria-label="Download this view as a PDF to print" title="Download this view as a PDF to print"><i class="bi bi-printer ui-icon" aria-hidden="true"></i></a>`;
 }
 
-// --- Detail (month table + operating capacity) ---------------------------------
+// --- Detail (month table + am / pm places) -------------------------------------
+
+// When a history entry was saved, e.g. "11 Nov 2026" (New Zealand time).
+function formatChangedDate(iso: string) {
+  return new Date(iso).toLocaleDateString("en-NZ", { day: "numeric", month: "short", year: "numeric", timeZone: "Pacific/Auckland" });
+}
 
 function renderCapacityEditor(row: EnrolmentQualityRow, currentMonth: string) {
   const history = row.capacities.length
@@ -174,11 +201,13 @@ function renderCapacityEditor(row: EnrolmentQualityRow, currentMonth: string) {
         .reverse()
         .map(
           (entry) => `
-            <li class="flex items-center gap-8">
-              <span class="text-strong">${entry.capacity}${entry.under2Capacity != null ? ` (under-2 ${entry.under2Capacity})` : ""}</span>
-              <span class="text-ghost">from ${formatMonthLabel(entry.effectiveFrom)}</span>
-              ${entry.note ? `<span class="text-ghost">${escapeHtml(entry.note)}</span>` : ""}
-              <button type="button" class="button-remove" data-roll-capacity-delete data-centre-key="${row.centreKey}" data-effective-from="${entry.effectiveFrom}" aria-label="Remove operating capacity ${entry.capacity} from ${formatMonthLabel(entry.effectiveFrom)}" title="Remove"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+            <li class="flex items-center gap-8" data-roll-capacity-entry="${entry.id ?? ""}">
+              <span class="flex items-center gap-8" data-roll-capacity-text>
+                <span class="text-strong">${entry.amCapacity ?? entry.capacity} / ${entry.pmCapacity ?? entry.capacity}${entry.under2Capacity != null ? ` (under-2 ${entry.under2Capacity})` : ""}</span>
+                <span class="text-ghost">${isFirstFigure(entry, row.capacities) ? "from the start" : `from ${formatMonthLabel(entry.effectiveFrom)}`}, changed ${formatChangedDate(entry.changedAt)}</span>
+                ${entry.note ? `<span class="text-ghost">${escapeHtml(entry.note)}</span>` : ""}
+              </span>
+              <button type="button" class="button-remove" data-roll-capacity-remove aria-pressed="false" aria-label="Remove am / pm places ${entry.amCapacity ?? entry.capacity} / ${entry.pmCapacity ?? entry.capacity} when saved" title="Remove when saved"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
             </li>`,
         )
         .join("")}</ul>`
@@ -192,20 +221,30 @@ function renderCapacityEditor(row: EnrolmentQualityRow, currentMonth: string) {
     row.suggestedCapacity != null
       ? `<p class="text-small flex items-center gap-8" title="Teachers on contact at 10am on a typical day × ratio, capped at the licence">Staffing suggests <strong>${row.suggestedCapacity}</strong> <button type="button" class="button-sm" data-roll-use-suggestion="${row.suggestedCapacity}">Use ${row.suggestedCapacity}</button></p>`
       : "";
-  const defaultFrom = row.capacities.length ? currentMonth : row.firstStoredMonth ?? currentMonth;
+  // Prefilled with the user's places in force; empty until the user sets
+  // some (the licence is never copied in).
+  const current = row.currentCapacity?.source === "operating" ? row.currentCapacity : null;
+  const amValue = current ? Math.round(current.am ?? current.capacity) : "";
+  // The first figure covers the whole history, so it has no From month.
+  const fromField = row.capacities.length
+    ? `<label class="field-label">From month<input class="form-control form-control--sm" type="month" name="effectiveFrom" required value="${currentMonth}" /></label>`
+    : `<input type="hidden" name="effectiveFrom" value="${FIRST_FIGURE_MONTH}" />`;
+  const pmValue = current ? Math.round(current.pm ?? current.capacity) : "";
 
   return `
-    <section class="card enrolment-quality__capacity flex flex-col gap-8">
-      <h4 class="subheading">Operating capacity</h4>
+    <section class="card enrolment-quality__capacity flex flex-col gap-8" data-roll-capacity-editor hidden>
+      <h4 class="subheading">Am / pm places</h4>
       ${licence}
       ${history}
       ${suggestion}
       <form class="flex flex-wrap items-end gap-8" data-roll-capacity-form data-centre-key="${row.centreKey}">
-        <label class="field-label">Capacity<input class="form-control form-control--sm" type="number" name="capacity" min="1" max="500" required value="${row.currentCapacity ? Math.round(row.currentCapacity.capacity) : ""}" /></label>
+        <label class="field-label">Am<input class="form-control form-control--sm" type="number" name="amCapacity" min="0" max="500" value="${amValue}" /></label>
+        <label class="field-label">Pm<input class="form-control form-control--sm" type="number" name="pmCapacity" min="0" max="500" value="${pmValue}" /></label>
         ${under2Field}
-        <label class="field-label">From month<input class="form-control form-control--sm" type="month" name="effectiveFrom" required value="${defaultFrom}" /></label>
+        ${fromField}
         <label class="field-label">Note<input class="form-control form-control--sm" type="text" name="note" maxlength="200" placeholder="e.g. 4 teachers" /></label>
         <button type="submit" class="button-sm">Save</button>
+        <button type="reset" class="button-sm">Cancel</button>
       </form>
     </section>
   `;
@@ -220,8 +259,9 @@ function renderMonthTable(row: EnrolmentQualityRow) {
           <td class="data-table__numeric">${bandedPct(point.percent)}</td>
           <td class="data-table__numeric">${point.openDays > 0 ? point.avgPlacements.toFixed(1) : "-"}</td>
           <td class="data-table__numeric">${formatAmPm(point)}</td>
+          <td class="data-table__numeric">${formatPlaces(point.placesAm, point.placesPm)}</td>
           <td class="data-table__numeric">${point.openDays || "-"}</td>
-          <td class="data-table__numeric" title="${point.capacitySource === "operating" ? "Operating capacity" : point.capacitySource === "licence" ? "Licence (no operating capacity set)" : ""}">${formatCapacity(point.capacity)}</td>
+          <td class="data-table__numeric nowrap" title="${point.capacitySource === "operating" ? "Busier of the am / pm places; licence in {}" : point.capacitySource === "licence" ? "Licence (no am / pm places set)" : ""}">${formatCapacityWithLicence(point.capacity, point.licence)}</td>
         </tr>`,
     )
     .join("");
@@ -234,7 +274,8 @@ function renderMonthTable(row: EnrolmentQualityRow) {
             <th>Month</th>
             <th class="data-table__numeric">% full roll</th>
             <th class="data-table__numeric">Placements</th>
-            <th class="data-table__numeric">Avg am / pm</th>
+            <th class="data-table__numeric" title="Average children booked in the morning / afternoon (Infocare)">Booked am / pm</th>
+            <th class="data-table__numeric" title="Your am / pm places for the month">Places am / pm</th>
             <th class="data-table__numeric">Open days</th>
             <th class="data-table__numeric">Capacity</th>
           </tr>
@@ -261,10 +302,11 @@ function renderOrganisationRow(row: EnrolmentQualityRow, view: EnrolmentQualityV
       <td class="data-table__numeric text-strong" title="${escapeHtml(latestLabel)}">${bandedPct(row.latestPercent)}</td>
       <td class="data-table__numeric text-strong${row.direction ? ` enrolment-quality__trend--${row.direction}` : ""}">${formatChange(row.change)}</td>
       <td class="data-table__numeric text-strong">${formatAmPm(row.latest)}</td>
-      <td class="data-table__numeric text-strong nowrap" title="All centres' capacities added up (licences ${row.licence ?? "-"})">${formatCapacity(row.currentCapacity?.capacity ?? null)}</td>
+      <td class="data-table__numeric text-strong">-</td>
+      <td class="data-table__numeric text-strong nowrap" title="All centres' capacities added up; licences in {}">${formatCapacityWithLicence(row.currentCapacity?.capacity ?? null, row.licence)}</td>
     </tr>
     <tr class="enrolment-quality__detail" data-roll-detail="${row.centreKey}"${open ? "" : " hidden"}>
-      <td colspan="7">${renderMonthTable(row)}</td>
+      <td colspan="8">${renderMonthTable(row)}</td>
     </tr>
   `;
 }
@@ -282,10 +324,11 @@ function renderRow(row: EnrolmentQualityRow, view: EnrolmentQualityView) {
       <td class="data-table__numeric" title="${escapeHtml(latestLabel)}">${bandedPct(row.latestPercent)}</td>
       <td class="data-table__numeric${row.direction ? ` enrolment-quality__trend--${row.direction}` : ""}">${formatChange(row.change)}</td>
       <td class="data-table__numeric">${formatAmPm(row.latest)}</td>
-      <td class="data-table__numeric nowrap" title="${row.currentCapacity?.source === "operating" ? `Operating capacity (licence ${row.licence ?? "-"})` : "Licence (no operating capacity set)"}${row.currentCapacity?.under2 != null ? `, of which ${row.currentCapacity.under2} under-2` : ""}">${formatCapacity(row.currentCapacity?.capacity ?? null)} <button type="button" class="button-remove" data-roll-edit-capacity="${row.centreKey}" aria-label="Edit operating capacity for ${escapeHtml(shortName)}" title="Edit operating capacity"><i class="bi bi-pencil" aria-hidden="true"></i></button></td>
+      <td class="data-table__numeric nowrap">${formatPlaces(row.currentCapacity?.source === "operating" ? row.currentCapacity.am : null, row.currentCapacity?.source === "operating" ? row.currentCapacity.pm : null)} <button type="button" class="button-remove" data-roll-edit-capacity="${row.centreKey}" aria-label="Edit am / pm places for ${escapeHtml(shortName)}" title="Edit am / pm places"><i class="bi bi-pencil" aria-hidden="true"></i></button></td>
+      <td class="data-table__numeric nowrap" title="${escapeHtml(capacityTitle(row.currentCapacity, row.licence))}">${formatCapacityWithLicence(row.currentCapacity?.capacity ?? null, row.licence)}</td>
     </tr>
     <tr class="enrolment-quality__detail" data-roll-detail="${row.centreKey}"${open ? "" : " hidden"}>
-      <td colspan="7">
+      <td colspan="8">
         <div class="enrolment-quality__detail-grid grid gap-10">
           ${renderMonthTable(row)}
           ${renderCapacityEditor(row, view.currentMonth)}
@@ -309,8 +352,9 @@ export function renderEnrolmentQualityBody(view: EnrolmentQualityView) {
               <th class="data-table__numeric" title="% full roll in the first month of the period">Start</th>
               <th class="data-table__numeric" title="% full roll in the latest month (this month is month to date)">Latest</th>
               <th class="data-table__numeric" title="Latest month minus the first month of the period. Steady = within ${STEADY_POINTS}% either way">Change</th>
-              <th class="data-table__numeric" title="Average children booked in the morning / afternoon, latest month">Am / pm</th>
-              <th class="data-table__numeric" title="Operating capacity, or the licence (lic) when none is set">Capacity</th>
+              <th class="data-table__numeric" title="Average children booked in the morning / afternoon, latest month (Infocare)">Booked am / pm</th>
+              <th class="data-table__numeric" title="Your am / pm places this month (pencil to edit)">Places am / pm</th>
+              <th class="data-table__numeric" title="The busier of the am / pm places (the licence when none are set), with the licence in {}">Capacity</th>
             </tr>
           </thead>
           <tbody>${view.organisation ? renderOrganisationRow(view.organisation, view) : ""}${view.rows.map((row) => renderRow(row, view)).join("")}</tbody>
@@ -405,14 +449,34 @@ export function renderEnrolmentQualityScript() {
             pollTimer = setTimeout(function() { load().catch(function() {}); }, 20000);
           }
         }
-        // The Capacity cell's pencil: open the centre's row and its editor.
+        // The Places cell's pencil: open the centre's row and show its editor
+        // (the editor stays hidden until then).
         function editCapacity(key) {
           var row = current().querySelector("[data-roll-row='" + key + "']");
           var detail = current().querySelector("[data-roll-detail='" + key + "']");
           if (!row || !detail) return;
           if (detail.hasAttribute("hidden")) toggleRow(row);
-          var input = detail.querySelector("[data-roll-capacity-form] input[name='capacity']");
+          var editor = detail.querySelector("[data-roll-capacity-editor]");
+          if (editor) editor.removeAttribute("hidden");
+          var input = detail.querySelector("[data-roll-capacity-form] input[name='amCapacity']");
           if (input) { input.focus(); input.select(); }
+        }
+        function markForRemoval(entry, removing) {
+          if (!entry) return;
+          var button = entry.querySelector("[data-roll-capacity-remove]");
+          var text = entry.querySelector("[data-roll-capacity-text]");
+          var struck = text && text.parentElement && text.parentElement.tagName === "DEL" ? text.parentElement : null;
+          if (removing && text && !struck) {
+            var del = document.createElement("del");
+            text.replaceWith(del);
+            del.appendChild(text);
+          } else if (!removing && struck) {
+            struck.replaceWith(text);
+          }
+          button.setAttribute("aria-pressed", String(removing));
+          button.setAttribute("title", removing ? "Keep (undo remove)" : "Remove when saved");
+          var icon = button.querySelector("i");
+          if (icon) icon.className = "bi " + (removing ? "bi-arrow-counterclockwise" : "bi-x-lg");
         }
         function toggleRow(row) {
           var key = row.getAttribute("data-roll-row");
@@ -422,6 +486,16 @@ export function renderEnrolmentQualityScript() {
           detail.toggleAttribute("hidden", !opening);
           row.setAttribute("aria-expanded", String(opening));
           row.classList.toggle("analytics-table__row--selected", opening);
+          if (!opening) {
+            var editor = detail.querySelector("[data-roll-capacity-editor]");
+            var form = editor && editor.querySelector("[data-roll-capacity-form]");
+            if (form) form.reset();
+            if (editor) editor.setAttribute("hidden", "");
+          }
+          // Opening a centre points Beep Beep's chat at it (not the organisation row).
+          if (opening && key !== "${ORGANISATION_ROW_KEY}") {
+            document.dispatchEvent(new CustomEvent("centre-selected", { detail: { centreKey: key } }));
+          }
         }
         document.addEventListener("click", function(event) {
           var target = event.target instanceof Element ? event.target : null;
@@ -446,16 +520,20 @@ export function renderEnrolmentQualityScript() {
           }
           var suggestion = target.closest("[data-roll-use-suggestion]");
           if (suggestion) {
-            var form = suggestion.closest("td").querySelector("[data-roll-capacity-form] input[name='capacity']");
-            if (form) { form.value = suggestion.getAttribute("data-roll-use-suggestion"); form.focus(); }
+            var suggestionForm = suggestion.closest("td").querySelector("[data-roll-capacity-form]");
+            if (suggestionForm) {
+              var places = suggestion.getAttribute("data-roll-use-suggestion");
+              suggestionForm.querySelector("input[name='amCapacity']").value = places;
+              suggestionForm.querySelector("input[name='pmCapacity']").value = places;
+              suggestionForm.querySelector("input[name='amCapacity']").focus();
+            }
             return;
           }
-          var remove = target.closest("[data-roll-capacity-delete]");
+          // Removing only marks the entry (struck through); nothing changes
+          // until Save. Pressing it again keeps the entry.
+          var remove = target.closest("[data-roll-capacity-remove]");
           if (remove) {
-            post("/api/enrolment-quality/capacity/delete", {
-              centreKey: Number(remove.getAttribute("data-centre-key")),
-              effectiveFrom: remove.getAttribute("data-effective-from"),
-            }).then(function() { return load(); }).catch(function(error) { window.alert(error.message); });
+            markForRemoval(remove.closest("[data-roll-capacity-entry]"), remove.getAttribute("aria-pressed") !== "true");
             return;
           }
           var row = target.closest("[data-roll-row]");
@@ -473,13 +551,45 @@ export function renderEnrolmentQualityScript() {
           if (!form) return;
           event.preventDefault();
           var data = new FormData(form);
+          var section = form.closest(".enrolment-quality__capacity");
+          // Every change is sent together on Save: the entries marked for
+          // removal, and a new figure only when a box was changed.
+          var removeIds = Array.prototype.slice
+            .call(section.querySelectorAll("[data-roll-capacity-remove][aria-pressed='true']"))
+            .map(function(button) { return Number(button.closest("[data-roll-capacity-entry]").getAttribute("data-roll-capacity-entry")); });
+          var changed = Array.prototype.some.call(form.querySelectorAll("input"), function(input) { return input.value !== input.defaultValue; });
+          if (!changed && removeIds.length === 0) return;
+          var add = null;
+          if (changed) {
+            if (String(data.get("amCapacity") || "") === "" || String(data.get("pmCapacity") || "") === "") {
+              window.alert("Enter both the am and pm places.");
+              return;
+            }
+            add = {
+              amCapacity: Number(data.get("amCapacity")),
+              pmCapacity: Number(data.get("pmCapacity")),
+              effectiveFrom: String(data.get("effectiveFrom") || ""),
+              under2Capacity: data.has("under2Capacity") && String(data.get("under2Capacity")) !== "" ? Number(data.get("under2Capacity")) : null,
+              note: String(data.get("note") || ""),
+            };
+          }
           post("/api/enrolment-quality/capacity", {
             centreKey: Number(form.getAttribute("data-centre-key")),
-            capacity: Number(data.get("capacity")),
-            under2Capacity: data.has("under2Capacity") && String(data.get("under2Capacity")) !== "" ? Number(data.get("under2Capacity")) : null,
-            effectiveFrom: String(data.get("effectiveFrom") || ""),
-            note: String(data.get("note") || ""),
-          }).then(function() { return load(); }).catch(function(error) { window.alert(error.message); });
+            removeIds: removeIds,
+            add: add,
+          }).then(function() { return load(); }).then(function() {
+            // The new figures can re-sort the table: keep the saved centre (still open) in view.
+            var saved = current().querySelector("[data-roll-row='" + form.getAttribute("data-centre-key") + "']");
+            if (saved) saved.scrollIntoView({ block: "nearest" });
+          }).catch(function(error) { window.alert(error.message); });
+        });
+        // Cancel puts the boxes back, un-marks every entry and hides the editor.
+        document.addEventListener("reset", function(event) {
+          var form = event.target instanceof Element ? event.target.closest("[data-roll-capacity-form]") : null;
+          if (!form) return;
+          var section = form.closest(".enrolment-quality__capacity");
+          section.querySelectorAll("[data-roll-capacity-entry]").forEach(function(entry) { markForRemoval(entry, false); });
+          section.setAttribute("hidden", "");
         });
         schedulePoll();
       })();

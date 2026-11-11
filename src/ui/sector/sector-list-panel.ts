@@ -2,6 +2,7 @@ import type { SectorCentreView, SectorCrawlRunView } from "../../storage/sector-
 import { normaliseName } from "../../sector/names.js";
 import { PROMOTION_CATEGORY_LABELS, type PromotionCategory } from "../../sector/promotions.js";
 import { isClosedCentre, SERVICE_TYPE_LABELS } from "../../sector/query.js";
+import { centreOpenedLabel } from "../../sector/ero.js";
 
 function escapeHtml(value: string) {
   return value
@@ -66,6 +67,7 @@ function renderCentreRow(centre: SectorCentreView): string {
   const promotions = centre.promotions.length
     ? centre.promotions.map((promotion) => `<strong>${escapeHtml(promotion.text)}</strong>`).join("")
     : `<span>None found</span>`;
+  const opened = centreOpenedLabel(centre);
 
   return `
     <tr data-sector-row
@@ -80,6 +82,7 @@ function renderCentreRow(centre: SectorCentreView): string {
       <td>${escapeHtml(serviceTypeLabel(centre.serviceType))}</td>
       <td><strong>${escapeHtml(centre.city)}</strong>${centre.suburb && centre.suburb !== centre.city ? `<span>${escapeHtml(centre.suburb)}</span>` : ""}</td>
       <td class="google-analytics-table__numeric data-table__numeric">${places}</td>
+      <td data-sector-opened>${opened ? `<span title="${escapeHtml(centre.openedEvidence)}">${escapeHtml(opened)}</span>` : ""}</td>
       <td>${renderFeature(centre.providesMeals, centre.meals)}</td>
       <td>${renderFeature(centre.providesTransport, centre.transport)}</td>
       <td>${promotions}</td>
@@ -139,11 +142,11 @@ export function renderSectorCentresPanel(options: SectorCentresPanelOptions): st
     <div class="google-analytics-table-wrap table-frame table-frame--scroll">
       <table class="google-analytics-table data-table" data-sector-table>
         <thead>
-          <tr><th>Centre</th><th>Type</th><th>Town</th><th class="google-analytics-table__numeric data-table__numeric">Places</th><th>Meals</th><th>Transport</th><th>Promotions</th></tr>
+          <tr><th>Centre</th><th>Type</th><th>Town</th><th class="google-analytics-table__numeric data-table__numeric">Places</th><th>Opened</th><th>Meals</th><th>Transport</th><th>Promotions</th></tr>
         </thead>
         <tbody>
           ${competitors.map(renderCentreRow).join("")}
-          <tr data-sector-empty hidden><td colspan="7" class="google-analytics-table__empty text-ghost">No centres match these filters.</td></tr>
+          <tr data-sector-empty hidden><td colspan="8" class="google-analytics-table__empty text-ghost">No centres match these filters.</td></tr>
         </tbody>
       </table>
     </div>

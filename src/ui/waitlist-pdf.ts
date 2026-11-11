@@ -138,16 +138,17 @@ function ageDistributionTable(report: WaitlistDiscoveryReport): PdfContent {
 function ageProfileTable(report: WaitlistDiscoveryReport): PdfContent {
   if (!report.ageProfileByThreshold.length) return noteText("No DOB profile in the latest waitlist report.");
   return dataTable(
-    ["Wait category", "Under 5", "Turning 5", "Aged 5+", "Unknown DOB", "Total"],
+    ["Wait category", "Under 5", "of which Aged 2", "Turning 5", "Aged 5+", "Unknown DOB", "Total"],
     report.ageProfileByThreshold.map((row) => [
       row.category,
       String(row.under5),
+      String(row.aged2 ?? "-"),
       String(row.turning5),
       String(row.aged5Plus),
       String(row.unknownDob),
       String(row.total),
     ]),
-    ["*", 60, 60, 60, 70, 55],
+    ["*", 50, 70, 50, 50, 60, 45],
   );
 }
 

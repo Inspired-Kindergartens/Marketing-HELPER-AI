@@ -6,7 +6,7 @@
 // placement); this is the same "booked children per day" figure that the
 // Infocare Analytics ENROL/MAX percentage uses.
 // % full roll: placements / operating capacity, where operating capacity is
-// the user's figure for the month, or the licence when none is set.
+// the user's am / pm places (the busier session), or the licence when none is set.
 import { parseTimeToMinutes } from "../infocare/extraction.js";
 import type {
   InfocareAttendance,
@@ -211,10 +211,22 @@ export function suggestCapacityFromStaffing(
 
 // --- Operating capacity ----------------------------------------------------
 
+// A user-entered figure; nothing else ever writes one. Each save is kept as
+// a history entry (when it was changed, and why). It applies from its month
+// onwards, until a later month's figure takes over.
 export type OperatingCapacity = {
+  id?: number;
   centreKey: number;
   effectiveFrom: string; // YYYY-MM
+  // When the user saved it (ISO).
+  changedAt: string;
+  // The busier of the morning and afternoon places (what % full roll divides
+  // by, matching placements = the busier session).
   capacity: number;
+  // Places run in the morning / afternoon. Null on entries saved before am/pm
+  // existed: those use capacity for both.
+  amCapacity?: number | null;
+  pmCapacity?: number | null;
   // Of the total, the under-2 places the centre runs (OPEYS: 10, though its
   // licence allows 18). Null when not set or the centre has no under-2 places.
   under2Capacity: number | null;
@@ -223,10 +235,48 @@ export type OperatingCapacity = {
 
 // `capacity` is the combined total that % full roll divides by; `under2` is
 // the part of it for under-2s (operating if set, else the licence's), or null.
-export type ResolvedCapacity = { capacity: number; under2: number | null; source: "operating" | "licence" };
+// `am` / `pm` are the operating places per session (null for the licence).
+export type ResolvedCapacity = {
+  capacity: number;
+  under2: number | null;
+  source: "operating" | "licence";
+  am?: number | null;
+  pm?: number | null;
+};
 
-// The newest operating capacity that started on or before the month wins;
-// before the first one (or with none), the licence is used.
+// Capacity from morning and afternoon places: the busier session.
+export function capacityFromAmPm(am: number, pm: number): number {
+  return Math.max(am, pm);
+}
+
+// A centre's first figure has no From month: it covers the whole history.
+// It is stored with this month, earlier than any roll history, so any later
+// figure (whatever its From month) takes over from its own month.
+export const FIRST_FIGURE_MONTH = "2000-01";
+
+// The entries covering the start of the history (the earliest From month):
+// shown as "from the start" rather than a month.
+export function isFirstFigure(entry: OperatingCapacity, centreCapacities: readonly OperatingCapacity[]) {
+  return centreCapacities.every((other) => other.effectiveFrom >= entry.effectiveFrom);
+}
+
+// Latest From month first; for the same month, the latest save first.
+function byNewest(a: OperatingCapacity, b: OperatingCapacity) {
+  return b.effectiveFrom.localeCompare(a.effectiveFrom) || b.changedAt.localeCompare(a.changedAt) || (b.id ?? 0) - (a.id ?? 0);
+}
+
+// The figure for a month: the latest one whose From month is on or before it
+// (a rise from November leaves October on the old figure). Months before the
+// centre's first figure use that first figure, so a figure with nothing
+// earlier covers the whole history. With no figures at all, the licence.
+export function capacityEntryForMonth(month: string, centreCapacities: readonly OperatingCapacity[]): OperatingCapacity | null {
+  const sorted = [...centreCapacities].sort(byNewest);
+  const onOrBefore = sorted.find((entry) => entry.effectiveFrom <= month);
+  if (onOrBefore) return onOrBefore;
+  const earliestMonth = sorted[sorted.length - 1]?.effectiveFrom;
+  return earliestMonth ? sorted.find((entry) => entry.effectiveFrom === earliestMonth) ?? null : null;
+}
+
 export function resolveCapacityForMonth(
   month: string,
   avgLicence: number,
@@ -234,11 +284,15 @@ export function resolveCapacityForMonth(
   avgLicenceU2 = 0,
 ): ResolvedCapacity | null {
   const licenceU2 = avgLicenceU2 > 0 ? Math.round(avgLicenceU2) : null;
-  const applicable = centreCapacities
-    .filter((entry) => entry.effectiveFrom <= month)
-    .sort((a, b) => b.effectiveFrom.localeCompare(a.effectiveFrom))[0];
+  const applicable = capacityEntryForMonth(month, centreCapacities);
   if (applicable && applicable.capacity > 0) {
-    return { capacity: applicable.capacity, under2: applicable.under2Capacity ?? licenceU2, source: "operating" };
+    return {
+      capacity: applicable.capacity,
+      under2: applicable.under2Capacity ?? licenceU2,
+      source: "operating",
+      am: applicable.amCapacity ?? applicable.capacity,
+      pm: applicable.pmCapacity ?? applicable.capacity,
+    };
   }
   return avgLicence > 0 ? { capacity: avgLicence, under2: licenceU2, source: "licence" } : null;
 }
@@ -287,6 +341,11 @@ export type RollPoint = {
   openDays: number;
   capacity: number | null;
   capacitySource: ResolvedCapacity["source"] | null;
+  // The user's am / pm places in force that month (null when none are set).
+  placesAm: number | null;
+  placesPm: number | null;
+  // The licensed places that month (average over open days), shown in {}.
+  licence: number | null;
   monthToDate: boolean;
 };
 
@@ -304,7 +363,6 @@ export type EnrolmentQualityRow = {
   licence: number | null;
   licenceU2: number | null;
   suggestedCapacity: number | null;
-  firstStoredMonth: string | null;
 };
 
 export function buildEnrolmentQualityRows(input: {
@@ -332,6 +390,9 @@ export function buildEnrolmentQualityRows(input: {
         openDays: stored?.openDays ?? 0,
         capacity: capacity?.capacity ?? null,
         capacitySource: capacity?.source ?? null,
+        placesAm: capacity?.source === "operating" ? capacity.am ?? null : null,
+        placesPm: capacity?.source === "operating" ? capacity.pm ?? null : null,
+        licence: stored && stored.openDays > 0 && stored.avgLicence > 0 ? stored.avgLicence : null,
         monthToDate: month === input.currentMonth,
       };
     });
@@ -356,12 +417,12 @@ export function buildEnrolmentQualityRows(input: {
       change,
       direction: trendDirection(change),
       latest,
-      capacities: [...capacities].sort((a, b) => a.effectiveFrom.localeCompare(b.effectiveFrom)),
+      // History, oldest first (the panel lists it newest first).
+      capacities: [...capacities].sort((a, b) => byNewest(b, a)),
       currentCapacity,
       licence: newest ? Math.round(newest.avgLicence) : null,
       licenceU2: newest && newest.avgLicenceU2 > 0 ? Math.round(newest.avgLicenceU2) : null,
       suggestedCapacity: staffed ? suggestCapacityFromStaffing(staffed, currentCapacity?.under2 ?? 0) : null,
-      firstStoredMonth: sortedStored[0]?.month ?? null,
     };
   });
 }
@@ -392,6 +453,9 @@ export function buildOrganisationRollRow(rows: readonly EnrolmentQualityRow[]): 
       openDays: reporting.length ? Math.max(...reporting.map((point) => point.openDays)) : 0,
       capacity: capacity > 0 ? capacity : null,
       capacitySource: reporting.length ? (reporting.some((point) => point.capacitySource === "operating") ? "operating" : "licence") : null,
+      placesAm: null,
+      placesPm: null,
+      licence: reporting.some((point) => point.licence != null) ? reporting.reduce((sum, point) => sum + (point.licence ?? 0), 0) : null,
       monthToDate: template.monthToDate,
     };
   });
@@ -424,7 +488,6 @@ export function buildOrganisationRollRow(rows: readonly EnrolmentQualityRow[]): 
     licence: licensed.length ? licensed.reduce((sum, row) => sum + row.licence!, 0) : null,
     licenceU2: null,
     suggestedCapacity: null,
-    firstStoredMonth: null,
   };
 }
 
@@ -488,13 +551,13 @@ export function buildEnrolmentQualityGrounding(
       .map((point) => `${formatMonthLabel(point.month)} ${pct(point.percent!)}`)
       .join(", ");
     const capacity = row.currentCapacity
-      ? `${Math.round(row.currentCapacity.capacity)} (${row.currentCapacity.source === "operating" ? "operating capacity" : "licence"}${row.currentCapacity.under2 != null ? `, of which ${row.currentCapacity.under2} under-2` : ""})`
+      ? `${Math.round(row.currentCapacity.capacity)} (${row.currentCapacity.source === "operating" ? `operating capacity, busier of am ${row.currentCapacity.am ?? "-"} / pm ${row.currentCapacity.pm ?? "-"}; licence ${row.licence ?? "-"}` : "licence"}${row.currentCapacity.under2 != null ? `, of which ${row.currentCapacity.under2} under-2` : ""})`
       : "unknown";
     const change = row.change != null ? `, change ${row.change >= 0 ? "+" : ""}${Math.round(row.change)}% (${row.direction})` : "";
     return `- ${row.name}: latest ${pct(row.latestPercent!)}${change}, capacity ${capacity}. Monthly: ${trend}`;
   });
   return [
-    `Enrolment Quality (% full roll by month over the last ${windowKey}; placements = children booked in the busier session (am or pm) averaged over open days, divided by operating capacity; the current month is month to date; change = latest month minus the first month of the period, steady within ${STEADY_POINTS}%). Biggest fall first${ranked.length > withData.length ? `, ${withData.length} of ${ranked.length} shown` : ""}.`,
+    `Enrolment Quality (% full roll by month over the last ${windowKey}; placements = children booked in the busier session (am or pm) averaged over open days, divided by operating capacity (the busier of the am and pm places the centre runs); the current month is month to date; change = latest month minus the first month of the period, steady within ${STEADY_POINTS}%). Biggest fall first${ranked.length > withData.length ? `, ${withData.length} of ${ranked.length} shown` : ""}.`,
     ...lines,
   ].join("\n");
 }

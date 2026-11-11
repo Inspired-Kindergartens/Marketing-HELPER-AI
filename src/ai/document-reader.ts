@@ -76,6 +76,7 @@ export async function extractPdfText(buffer: Buffer) {
     data: new Uint8Array(buffer),
     disableFontFace: true,
     useWorkerFetch: false,
+    verbosity: 0, // errors only; font warnings ("TT: undefined function") are noise
   });
   const document = await loadingTask.promise;
   const pages: string[] = [];

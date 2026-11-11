@@ -1,21 +1,13 @@
-// Meta advert reviews: after a kindergarten's Meta advert run ends, compare
-// its % full roll (against the other kindergartens over the same months) and
-// its waitlist before and after the run, and record a verdict. A centre's
-// reviews over time decide whether it responds well to Meta adverts.
+// Meta advert reviews: after a kindergarten's Meta advert run ends, count the
+// families who applied while it ran (from Infocare's application_date), split
+// into children now enrolled and children still on the waitlist, and compare
+// that with how many applications the kindergarten usually gets in the same
+// number of days. Clearly more than usual is a spike: the advert did well.
+// A centre's reviews over time decide whether it responds well to Meta adverts.
 //
 // The unit is an "advert run": the centre's ad sets merged where they overlap
 // or nearly touch, because the Enrolment campaign runs one ad set per centre
 // and a centre's overlapping ad sets cannot be measured apart.
-
-import {
-  addMonths,
-  formatMonthLabel,
-  GOOD_PERCENT,
-  monthKey,
-  resolveCapacityForMonth,
-  STEADY_POINTS,
-  type OperatingCapacity,
-} from "./enrolment-quality.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -28,15 +20,16 @@ export const RUN_MERGE_GAP_DAYS = 14;
 // changes to credit the advert.
 export const MIN_RUN_DAYS = 7;
 export const MAX_RUN_DAYS = 183;
-// Enquiries take weeks to reach the waitlist or the roll.
-export const SETTLE_DAYS = 28;
-// The "before" waitlist must be close to the start; the "after" one is taken
-// between 2 and 6 weeks after the run.
-export const WAITLIST_BEFORE_MAX_DAYS = 21;
-export const WAITLIST_AFTER_MIN_DAYS = 14;
-export const WAITLIST_AFTER_MAX_DAYS = 42;
-// A waitlist change of this many children counts as a response.
-export const WAITLIST_RESPONSE_CHILDREN = 2;
+// Applications can be entered in Infocare a while after the family applied.
+export const SETTLE_DAYS = 14;
+// The usual rate comes from the half year before the run, without the days
+// other adverts for the centre ran, and needs at least 8 such weeks.
+export const USUAL_LOOKBACK_DAYS = 182;
+export const USUAL_MIN_QUIET_DAYS = 56;
+// A spike: at least half as many applications again as usual, and at least
+// two more families.
+export const SPIKE_RATIO = 1.5;
+export const SPIKE_MIN_EXTRA = 2;
 
 export type AdvertAdSet = {
   metaAdSetId: string;
@@ -110,25 +103,42 @@ export function buildAdvertRuns(input: {
       input.deliveryCoverageStart != null && (plannedEnd == null || plannedEnd >= input.deliveryCoverageStart);
 
     if (spent.length > 0) {
-      const firstSpend = Math.min(...spent.map((day) => day.date.getTime()));
-      const lastSpend = Math.max(...spent.map((day) => day.date.getTime()));
-      // Spend before the delivery data starts is unknown, so an ad set that
-      // was already spending then keeps its own start date.
-      const startedBeforeData =
-        input.deliveryCoverageStart != null &&
-        adSet.startTime < input.deliveryCoverageStart &&
-        firstSpend <= input.deliveryCoverageStart.getTime() + 3 * DAY_MS;
+      // An ad set reused for a later advert period stops spending in
+      // between; each stretch of spending is its own run.
+      spent.sort((a, b) => a.date.getTime() - b.date.getTime());
+      const stretches: AdvertDeliveryDay[][] = [];
+      for (const day of spent) {
+        const stretch = stretches.at(-1);
+        const lastDay = stretch?.at(-1);
+        if (stretch && lastDay && day.date.getTime() <= lastDay.date.getTime() + RUN_MERGE_GAP_DAYS * DAY_MS) {
+          stretch.push(day);
+        } else {
+          stretches.push([day]);
+        }
+      }
       const plannedToRunOn = plannedEnd == null || plannedEnd > input.now;
-      const spendingAtLastPull =
-        input.deliveryCoverageEnd != null && lastSpend >= input.deliveryCoverageEnd.getTime() - 3 * DAY_MS;
-      spans.push({
-        centreKey: adSet.centreKey,
-        name: adSet.name,
-        start: startOfDay(startedBeforeData ? adSet.startTime : new Date(firstSpend)),
-        end: startOfDay(new Date(lastSpend)),
-        spend: spent.reduce((sum, day) => sum + day.spend, 0),
-        clicks: spent.reduce((sum, day) => sum + day.clicks, 0),
-        ongoing: plannedToRunOn && spendingAtLastPull,
+
+      stretches.forEach((stretch, index) => {
+        const firstSpend = stretch[0]!.date.getTime();
+        const lastSpend = stretch.at(-1)!.date.getTime();
+        // Spend before the delivery data starts is unknown, so an ad set that
+        // was already spending then keeps its own start date.
+        const startedBeforeData =
+          index === 0 &&
+          input.deliveryCoverageStart != null &&
+          adSet.startTime! < input.deliveryCoverageStart &&
+          firstSpend <= input.deliveryCoverageStart.getTime() + 3 * DAY_MS;
+        const spendingAtLastPull =
+          input.deliveryCoverageEnd != null && lastSpend >= input.deliveryCoverageEnd.getTime() - 3 * DAY_MS;
+        spans.push({
+          centreKey: adSet.centreKey,
+          name: adSet.name,
+          start: startOfDay(startedBeforeData ? adSet.startTime! : new Date(firstSpend)),
+          end: startOfDay(new Date(lastSpend)),
+          spend: stretch.reduce((sum, day) => sum + day.spend, 0),
+          clicks: stretch.reduce((sum, day) => sum + day.clicks, 0),
+          ongoing: index === stretches.length - 1 && plannedToRunOn && spendingAtLastPull,
+        });
       });
       continue;
     }
@@ -194,19 +204,44 @@ export function buildAdvertRuns(input: {
   return runs.sort((a, b) => a.start.getTime() - b.start.getTime() || a.centreKey - b.centreKey);
 }
 
-export type RollMonthRecord = {
+// A stored review is out of date when the runs now covering its days differ
+// from it: a reused ad set split into separate runs, or older delivery data
+// filled in, which can also give spend to a review made without it. With no
+// run on its days, it is out of date only when delivery
+// data covers those days (so the advert did not run as reviewed); before the
+// data starts it is kept as it is.
+export function findOutdatedAdvertReviews<T extends Pick<AdvertReview, "reviewId" | "centreKey" | "start" | "end" | "spend">>(
+  reviews: readonly T[],
+  runs: readonly AdvertRun[],
+  deliveryCoverageStart: Date | null,
+): T[] {
+  return reviews.filter((review) => {
+    const overlapping = runs.filter(
+      (run) => run.centreKey === review.centreKey && run.start <= review.end && run.end >= startOfDay(review.start),
+    );
+    if (overlapping.length === 0) return deliveryCoverageStart != null && review.start >= deliveryCoverageStart;
+    return !overlapping.some(
+      (run) =>
+        run.reviewId === review.reviewId &&
+        !run.ongoing &&
+        isoDate(run.end) === isoDate(review.end) &&
+        (review.spend != null || run.spend == null),
+    );
+  });
+}
+
+// --- Judging a run -------------------------------------------------------------
+
+// A family who applied to the centre, from Infocare's application_date, and
+// whether the child has enrolled (now or since left) or is still waiting.
+export type Applicant = {
   centreKey: number;
-  month: string;
-  openDays: number;
-  avgPlacements: number;
-  avgLicence: number;
-  avgLicenceU2: number;
-  complete: boolean;
+  childKey: number;
+  applicationDate: Date;
+  enrolled: boolean;
 };
 
-export type WaitlistPoint = { centreKey: number; date: Date; waitlistCount: number };
-
-export type AdvertVerdict = "well" | "not-well" | "mixed" | "held-full";
+export type AdvertVerdict = "well" | "no-spike" | "no-history";
 
 export type AdvertReview = {
   reviewId: string;
@@ -217,107 +252,85 @@ export type AdvertReview = {
   measuredAt: Date;
   spend: number | null;
   clicks: number | null;
-  rollBeforeMonth: string | null;
-  rollBefore: number | null;
-  rollAfterMonth: string | null;
-  rollAfter: number | null;
-  networkChange: number | null;
-  waitlistBeforeAt: Date | null;
-  waitlistBefore: number | null;
-  waitlistAfterAt: Date | null;
-  waitlistAfter: number | null;
+  // Families who applied while the advert ran, by where the child is now.
+  enrolments: number;
+  waitlisted: number;
+  // How many applications the centre usually gets in the same number of days.
+  usualApplications: number | null;
   verdict: AdvertVerdict;
 };
 
-// The month before the run started against the month after it ended.
-export function advertRollMonths(run: Pick<AdvertRun, "start" | "end">) {
-  return { before: addMonths(monthKey(run.start), -1), after: addMonths(monthKey(run.end), 1) };
+function daysInclusive(start: Date, end: Date) {
+  return Math.round((startOfDay(end).getTime() - startOfDay(start).getTime()) / DAY_MS) + 1;
 }
 
-// When a run can be judged: the settle period has passed, the "after" month
-// is over (plus a week for the roll to be fetched) and the latest waitlist
-// window has closed.
-export function advertReviewDueAt(run: Pick<AdvertRun, "start" | "end">) {
-  const { after } = advertRollMonths(run);
-  const [year, month] = after.split("-").map(Number) as [number, number];
-  const afterMonthOver = new Date(year, month, 1 + 7);
-  const waitlistWindowClosed = new Date(run.end.getTime() + WAITLIST_AFTER_MAX_DAYS * DAY_MS);
-  const settled = new Date(run.end.getTime() + SETTLE_DAYS * DAY_MS);
-  return new Date(Math.max(afterMonthOver.getTime(), waitlistWindowClosed.getTime(), settled.getTime()));
+// Applications entered late in Infocare still carry the day the family
+// applied, so the run is judged once they have had time to be entered.
+export function advertReviewDueAt(run: Pick<AdvertRun, "end">) {
+  return new Date(startOfDay(run.end).getTime() + SETTLE_DAYS * DAY_MS);
 }
 
-function percentFull(record: RollMonthRecord | undefined, capacities: readonly OperatingCapacity[]) {
-  if (!record || record.openDays <= 0) return null;
-  const capacity = resolveCapacityForMonth(record.month, record.avgLicence, capacities, record.avgLicenceU2);
-  return capacity ? { percent: (record.avgPlacements / capacity.capacity) * 100, placements: record.avgPlacements, capacity: capacity.capacity } : null;
+// The centre's usual applications per day over the half year before the run,
+// leaving out days its other adverts ran. Null with too few days to tell.
+export function usualApplicationsPerDay(
+  run: Pick<AdvertRun, "centreKey" | "start">,
+  applicants: readonly Applicant[],
+  otherRuns: readonly Pick<AdvertRun, "centreKey" | "start" | "end">[],
+): number | null {
+  const runStart = startOfDay(run.start).getTime();
+  const from = runStart - USUAL_LOOKBACK_DAYS * DAY_MS;
+  const advertDays = otherRuns.filter((other) => other.centreKey === run.centreKey);
+  const isAdvertDay = (time: number) =>
+    advertDays.some((other) => time >= startOfDay(other.start).getTime() && time <= startOfDay(other.end).getTime());
+
+  let quietDays = 0;
+  for (let time = from; time < runStart; time += DAY_MS) {
+    if (!isAdvertDay(startOfDay(new Date(time)).getTime())) quietDays += 1;
+  }
+  if (quietDays < USUAL_MIN_QUIET_DAYS) return null;
+
+  const applications = applicants.filter((applicant) => {
+    if (applicant.centreKey !== run.centreKey) return false;
+    const time = startOfDay(applicant.applicationDate).getTime();
+    return time >= from && time < runStart && !isAdvertDay(time);
+  }).length;
+  return applications / quietDays;
 }
 
-// Judges one run. Returns null when it is not due yet, or when neither the
-// roll nor the waitlist can be compared (the data may still arrive).
+// A spike is clearly more applications than usual: at least half as many
+// again, and at least two more families. Judged on the whole number the note
+// shows, so the sentence always adds up.
+export function advertVerdict(applications: number, usual: number | null): AdvertVerdict {
+  if (usual == null) return "no-history";
+  const shown = Math.round(usual);
+  return applications >= shown * SPIKE_RATIO && applications - shown >= SPIKE_MIN_EXTRA ? "well" : "no-spike";
+}
+
+// Judges one run. Returns null while it is still running or not due yet.
 export function assessAdvertRun(
   run: AdvertRun,
-  data: {
-    rolls: readonly RollMonthRecord[];
-    capacities: readonly OperatingCapacity[];
-    waitlist: readonly WaitlistPoint[];
-    now: Date;
-  },
+  data: { applicants: readonly Applicant[]; otherRuns: readonly AdvertRun[]; now: Date },
 ): AdvertReview | null {
   if (run.ongoing) return null;
   const dueAt = advertReviewDueAt(run);
   if (data.now < dueAt) return null;
 
-  const { before, after } = advertRollMonths(run);
-  const rollsAt = (centreKey: number, month: string) =>
-    data.rolls.find((row) => row.centreKey === centreKey && row.month === month && row.complete);
-  const capacitiesFor = (centreKey: number) => data.capacities.filter((entry) => entry.centreKey === centreKey);
+  const start = startOfDay(run.start).getTime();
+  const end = startOfDay(run.end).getTime();
+  const during = data.applicants.filter((applicant) => {
+    if (applicant.centreKey !== run.centreKey) return false;
+    const time = startOfDay(applicant.applicationDate).getTime();
+    return time >= start && time <= end;
+  });
+  const enrolments = during.filter((applicant) => applicant.enrolled).length;
+  const waitlisted = during.length - enrolments;
 
-  const rollBefore = percentFull(rollsAt(run.centreKey, before), capacitiesFor(run.centreKey));
-  const rollAfter = percentFull(rollsAt(run.centreKey, after), capacitiesFor(run.centreKey));
-
-  // The other kindergartens with both months, added up like the
-  // "All kindergartens" row.
-  const otherKeys = [...new Set(data.rolls.map((row) => row.centreKey))].filter((key) => key !== run.centreKey);
-  let placementsBefore = 0;
-  let capacityBefore = 0;
-  let placementsAfter = 0;
-  let capacityAfter = 0;
-  for (const key of otherKeys) {
-    const b = percentFull(rollsAt(key, before), capacitiesFor(key));
-    const a = percentFull(rollsAt(key, after), capacitiesFor(key));
-    if (!b || !a) continue;
-    placementsBefore += b.placements;
-    capacityBefore += b.capacity;
-    placementsAfter += a.placements;
-    capacityAfter += a.capacity;
-  }
-  const networkChange =
-    capacityBefore > 0 && capacityAfter > 0
-      ? (placementsAfter / capacityAfter) * 100 - (placementsBefore / capacityBefore) * 100
-      : null;
-
-  const centreWaitlist = data.waitlist
-    .filter((point) => point.centreKey === run.centreKey)
-    .sort((a, b) => a.date.getTime() - b.date.getTime());
-  const waitlistBefore = [...centreWaitlist]
-    .reverse()
-    .find((point) => point.date <= run.start && point.date.getTime() >= run.start.getTime() - WAITLIST_BEFORE_MAX_DAYS * DAY_MS) ?? null;
-  const target = run.end.getTime() + SETTLE_DAYS * DAY_MS;
-  const waitlistAfter =
-    centreWaitlist
-      .filter(
-        (point) =>
-          point.date.getTime() >= run.end.getTime() + WAITLIST_AFTER_MIN_DAYS * DAY_MS &&
-          point.date.getTime() <= run.end.getTime() + WAITLIST_AFTER_MAX_DAYS * DAY_MS,
-      )
-      .sort((a, b) => Math.abs(a.date.getTime() - target) - Math.abs(b.date.getTime() - target))[0] ?? null;
-
-  const rollLift =
-    rollBefore && rollAfter ? rollAfter.percent - rollBefore.percent - (networkChange ?? 0) : null;
-  const waitlistChange =
-    waitlistBefore && waitlistAfter ? waitlistAfter.waitlistCount - waitlistBefore.waitlistCount : null;
-
-  if (rollLift == null && waitlistChange == null) return null;
+  const perDay = usualApplicationsPerDay(
+    run,
+    data.applicants,
+    data.otherRuns.filter((other) => other.reviewId !== run.reviewId),
+  );
+  const usualApplications = perDay == null ? null : perDay * daysInclusive(run.start, run.end);
 
   return {
     reviewId: run.reviewId,
@@ -328,112 +341,59 @@ export function assessAdvertRun(
     measuredAt: dueAt,
     spend: run.spend,
     clicks: run.clicks,
-    rollBeforeMonth: rollBefore ? before : null,
-    rollBefore: rollBefore?.percent ?? null,
-    rollAfterMonth: rollAfter ? after : null,
-    rollAfter: rollAfter?.percent ?? null,
-    networkChange: rollBefore && rollAfter ? networkChange : null,
-    waitlistBeforeAt: waitlistBefore?.date ?? null,
-    waitlistBefore: waitlistBefore?.waitlistCount ?? null,
-    waitlistAfterAt: waitlistAfter?.date ?? null,
-    waitlistAfter: waitlistAfter?.waitlistCount ?? null,
-    verdict: advertVerdict(rollLift, waitlistChange, {
-      rollBefore: rollBefore?.percent ?? null,
-      rollAfter: rollAfter?.percent ?? null,
-    }),
+    enrolments,
+    waitlisted,
+    usualApplications,
+    verdict: advertVerdict(during.length, usualApplications),
   };
 }
 
-// The roll rising more than the other kindergartens' (by the same 3 points
-// Enrolment Quality calls a real change) counts most. A growing waitlist
-// counts when the roll held; a falling waitlist alone is not held against the
-// advert, because enrolling children leave the waitlist. A centre that was
-// already full and stayed full had no room to show a response, so that run
-// is "held full" and does not count either way.
-export function advertVerdict(
-  rollLift: number | null,
-  waitlistChange: number | null,
-  roll: { rollBefore: number | null; rollAfter: number | null } = { rollBefore: null, rollAfter: null },
-): AdvertVerdict {
-  const rollScore = rollLift == null ? 0 : rollLift >= STEADY_POINTS ? 1 : rollLift <= -STEADY_POINTS ? -1 : 0;
-  const waitlistScore =
-    waitlistChange == null ? 0 : waitlistChange >= WAITLIST_RESPONSE_CHILDREN ? 1 : waitlistChange <= -WAITLIST_RESPONSE_CHILDREN ? -1 : 0;
-  if (rollScore > 0) return "well";
-  if (waitlistScore > 0) return rollScore < 0 ? "mixed" : "well";
-  if (
-    rollScore === 0 &&
-    roll.rollBefore != null &&
-    roll.rollAfter != null &&
-    roll.rollBefore >= GOOD_PERCENT &&
-    roll.rollAfter >= GOOD_PERCENT
-  ) {
-    return "held-full";
-  }
-  return "not-well";
-}
-
-// Verdicts that say something about how the centre responds to adverts.
+// Runs with no history before them say nothing about how the centre responds.
 export function countsTowardsResponse(verdict: AdvertVerdict) {
-  return verdict !== "held-full";
+  return verdict !== "no-history";
 }
 
 export const ADVERT_VERDICT_WORDS: Record<AdvertVerdict, string> = {
-  well: "responded well",
-  "not-well": "did not respond well",
-  mixed: "mixed response",
-  "held-full": "already full, no room to respond",
+  well: "did well",
+  "no-spike": "brought no spike",
+  "no-history": "has no history to compare",
 };
 
-function formatShortDate(date: Date) {
-  return date.toLocaleDateString("en-NZ", { day: "numeric", month: "short", year: "numeric" });
+function formatShortDate(date: Date, withYear = true) {
+  return date.toLocaleDateString("en-NZ", withYear ? { day: "numeric", month: "short", year: "numeric" } : { day: "numeric", month: "short" });
 }
 
-function formatPoints(value: number) {
-  const rounded = Math.round(value);
-  return `${rounded > 0 ? "+" : rounded < 0 ? "-" : "±"}${Math.abs(rounded)} ${Math.abs(rounded) === 1 ? "pt" : "pts"}`;
+function formatRunDates(start: Date, end: Date) {
+  return `${formatShortDate(start, start.getFullYear() !== end.getFullYear())} to ${formatShortDate(end)}`;
 }
 
 function formatMoney(value: number) {
   return new Intl.NumberFormat("en-NZ", { style: "currency", currency: "NZD", maximumFractionDigits: 0 }).format(value);
 }
 
+function plural(count: number, one: string, many: string) {
+  return `${count} ${count === 1 ? one : many}`;
+}
+
 // The note stored against the centre (plain text, shown in Notes and read by
-// Beep Beep).
+// Beep Beep), for example: "Meta advert that ran from 13 May to 11 Jun 2026
+// did well with 2 enrolments and 4 on the waitlist during that period,
+// against a usual 2. ($221 spent, 813 clicks)"
 export function formatAdvertReviewNote(review: AdvertReview): string {
-  const parts: string[] = [];
+  const counts = `${plural(review.enrolments, "enrolment", "enrolments")} and ${review.waitlisted} on the waitlist during that period`;
+  const usual = review.usualApplications == null ? null : Math.round(review.usualApplications);
+  const ran = `Meta advert that ran from ${formatRunDates(review.start, review.end)}`;
+  const sentence =
+    review.verdict === "well"
+      ? `${ran} did well with ${counts}, against a usual ${usual}.`
+      : review.verdict === "no-spike"
+        ? `${ran} brought no spike: ${counts}, against a usual ${usual}.`
+        : `${ran} had ${counts}; there is not enough history before it to say whether that is a spike.`;
   const delivery = [
-    review.spend != null ? `${formatMoney(review.spend)} spend` : null,
-    review.clicks != null ? `${review.clicks.toLocaleString("en-NZ")} link clicks` : null,
+    review.spend != null ? `${formatMoney(review.spend)} spent` : null,
+    review.clicks != null ? `${review.clicks.toLocaleString("en-NZ")} clicks` : null,
   ].filter(Boolean);
-  parts.push(
-    `Meta advert ${formatShortDate(review.start)} – ${formatShortDate(review.end)} (${review.adSetNames.join(", ")}${delivery.length ? `; ${delivery.join(", ")}` : ""}).`,
-  );
-
-  if (review.rollBefore != null && review.rollAfter != null && review.rollBeforeMonth && review.rollAfterMonth) {
-    // Shown from the rounded figures so the sentence adds up.
-    const change = Math.round(review.rollAfter) - Math.round(review.rollBefore);
-    const network =
-      review.networkChange == null
-        ? ""
-        : `; other kindergartens ${formatPoints(review.networkChange)}, so ${formatPoints(change - Math.round(review.networkChange))} against them`;
-    parts.push(
-      `% full roll ${Math.round(review.rollBefore)}% (${formatMonthLabel(review.rollBeforeMonth)}) → ${Math.round(review.rollAfter)}% (${formatMonthLabel(review.rollAfterMonth)}), ${formatPoints(change)}${network}.`,
-    );
-  } else {
-    parts.push("% full roll not available for the months either side.");
-  }
-
-  if (review.waitlistBefore != null && review.waitlistAfter != null && review.waitlistBeforeAt && review.waitlistAfterAt) {
-    const change = review.waitlistAfter - review.waitlistBefore;
-    parts.push(
-      `Waitlist ${review.waitlistBefore} → ${review.waitlistAfter} (${change > 0 ? "+" : ""}${change}) from ${formatShortDate(review.waitlistBeforeAt)} to ${formatShortDate(review.waitlistAfterAt)}.`,
-    );
-  } else {
-    parts.push("No waitlist snapshot either side of the advert.");
-  }
-
-  parts.push(`Verdict: ${ADVERT_VERDICT_WORDS[review.verdict]}.`);
-  return parts.join(" ");
+  return delivery.length ? `${sentence} (${delivery.join(", ")})` : sentence;
 }
 
 // --- A centre's response over time -------------------------------------------
@@ -445,7 +405,6 @@ export type MetaResponseSummary = {
   level: MetaResponseLevel;
   reviewed: number;
   respondedWell: number;
-  averageRollLift: number | null;
   latest: AdvertReview;
 };
 
@@ -458,9 +417,6 @@ export function summariseMetaResponse(reviews: readonly AdvertReview[]): MetaRes
     .sort((a, b) => a.end.getTime() - b.end.getTime());
   if (sorted.length === 0) return null;
   const respondedWell = sorted.filter((review) => review.verdict === "well").length;
-  const lifts = sorted
-    .filter((review) => review.rollBefore != null && review.rollAfter != null)
-    .map((review) => review.rollAfter! - review.rollBefore! - (review.networkChange ?? 0));
   const share = respondedWell / sorted.length;
   const level: MetaResponseLevel =
     sorted.length < MIN_REVIEWS_FOR_PATTERN ? "early" : share >= 2 / 3 ? "well" : share <= 1 / 3 ? "not-well" : "mixed";
@@ -470,7 +426,6 @@ export function summariseMetaResponse(reviews: readonly AdvertReview[]): MetaRes
     level,
     reviewed: sorted.length,
     respondedWell,
-    averageRollLift: lifts.length ? lifts.reduce((sum, value) => sum + value, 0) / lifts.length : null,
     latest: sorted[sorted.length - 1]!,
   };
 }
@@ -493,12 +448,10 @@ export function summariseMetaResponseByCentre(reviews: readonly AdvertReview[]):
 // One plain sentence for the centre intro and the AI. `strong` wraps the
 // verdict for the HTML intro; the AI gets it without markup.
 export function describeMetaResponse(summary: MetaResponseSummary, strong: (text: string) => string = (text) => text): string {
-  const lift =
-    summary.averageRollLift == null ? "" : `, average roll ${formatPoints(summary.averageRollLift)} against the other kindergartens`;
-  const latest = `latest advert (${formatShortDate(summary.latest.start)} – ${formatShortDate(summary.latest.end)}) ${ADVERT_VERDICT_WORDS[summary.latest.verdict]}`;
+  const latest = `the latest (${formatRunDates(summary.latest.start, summary.latest.end)}) ${ADVERT_VERDICT_WORDS[summary.latest.verdict]}`;
 
   if (summary.level === "early") {
-    return `Meta adverts: one run reviewed so far, which ${ADVERT_VERDICT_WORDS[summary.latest.verdict]}${lift}; not enough runs yet to call a pattern.`;
+    return `Meta adverts: one advert reviewed so far, which ${ADVERT_VERDICT_WORDS[summary.latest.verdict]}; not enough adverts yet to call a pattern.`;
   }
 
   const verdict =
@@ -507,7 +460,7 @@ export function describeMetaResponse(summary: MetaResponseSummary, strong: (text
       : summary.level === "not-well"
         ? "does not respond well to Meta adverts"
         : "has a mixed response to Meta adverts";
-  return `This kindergarten ${strong(verdict)}: ${summary.respondedWell} of ${summary.reviewed} reviewed runs lifted the roll or waitlist${lift}; ${latest}.`;
+  return `This kindergarten ${strong(verdict)}: ${summary.respondedWell} of ${summary.reviewed} adverts brought a spike in enrolments or waitlist; ${latest}.`;
 }
 
 export function buildMetaResponseGrounding(
@@ -520,7 +473,7 @@ export function buildMetaResponseGrounding(
   if (keys.length === 0) return null;
 
   const lines = [
-    "Meta advert reviews (each run's % full roll against the other kindergartens and waitlist change, measured after the advert ended). Use these to say whether a kindergarten responds well to Meta adverts before recommending more spend:",
+    "Meta advert reviews (for each advert, the families who applied while it ran, now enrolled or on the waitlist, against the kindergarten's usual number of applications for that length of time). Use these to say whether a kindergarten responds well to Meta adverts before recommending more spend:",
   ];
   for (const key of keys) {
     const summary = summaries.get(key)!;

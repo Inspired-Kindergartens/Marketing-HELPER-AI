@@ -1,7 +1,8 @@
 import type { Prisma } from "../../generated/prisma/client.js";
 import { prisma } from "../db.js";
 import { matchMetaNameToCentre, type MatchableCentre } from "./centre-match.js";
-import { MetaAdsClient, type MetaInsightLevel } from "./client.js";
+import { MetaAdsClient, type MetaInsight, type MetaInsightLevel } from "./client.js";
+import { localIsoDate, planMetaInsightRanges } from "./insight-window.js";
 import type { MetaConfig } from "./config.js";
 
 type MetaRefreshCounts = {
@@ -16,6 +17,13 @@ type MetaRefreshCounts = {
 
 export type MetaRefreshResult = MetaRefreshCounts & {
   pulledAt: string;
+  // First older day asked for beyond the last 30, when there were any.
+  historyFrom: string | null;
+};
+
+export type MetaRefreshOptions = {
+  // Re-pull every day from this one (YYYY-MM-DD) to fill gaps further back.
+  historyFrom?: string;
 };
 
 function normalizeAdAccountId(adAccountId: string) {
@@ -66,7 +74,7 @@ function getInsightDate(dateStart: string | undefined, pulledAt: Date) {
   return Number.isNaN(date.getTime()) ? pulledAt : date;
 }
 
-export async function refreshMetaAds(config: MetaConfig): Promise<MetaRefreshResult> {
+export async function refreshMetaAds(config: MetaConfig, options: MetaRefreshOptions = {}): Promise<MetaRefreshResult> {
   const client = new MetaAdsClient(config);
   const pulledAt = new Date();
   const centres: MatchableCentre[] = await prisma.centreReference.findMany({
@@ -88,6 +96,7 @@ export async function refreshMetaAds(config: MetaConfig): Promise<MetaRefreshRes
     adSetInsights: 0,
     adInsights: 0,
   };
+  let historyFrom: string | null = null;
   const accounts = config.adAccountId
     ? [{ id: toStoredAdAccountId(config.adAccountId), name: toStoredAdAccountId(config.adAccountId) }]
     : (await client.listAdAccounts()).data;
@@ -252,10 +261,18 @@ export async function refreshMetaAds(config: MetaConfig): Promise<MetaRefreshRes
       counts.ads += 1;
     }
 
-    for (const level of ["campaign", "adset", "ad"] satisfies MetaInsightLevel[]) {
-      const insightsResponse = await client.listInsights(accountId, level);
+    const lastStored = await prisma.metaInsightSnapshot.aggregate({
+      where: { metaAdAccountId },
+      _max: { insightDate: true },
+    });
+    const { recent, history } = planMetaInsightRanges({
+      today: localIsoDate(pulledAt, account.timezone_name),
+      lastStoredDay: lastStored._max.insightDate?.toISOString().slice(0, 10) ?? null,
+      historyFrom: options.historyFrom,
+    });
 
-      for (const insight of insightsResponse.data) {
+    const saveInsights = async (level: MetaInsightLevel, insights: MetaInsight[]) => {
+      for (const insight of insights) {
         const insightCampaignId = insight.campaign_id && campaignIds.has(insight.campaign_id) ? insight.campaign_id : null;
         const insightAdSetId = insight.adset_id && adSetIds.has(insight.adset_id) ? insight.adset_id : null;
         const insightAdId = insight.ad_id && adIds.has(insight.ad_id) ? insight.ad_id : null;
@@ -294,11 +311,27 @@ export async function refreshMetaAds(config: MetaConfig): Promise<MetaRefreshRes
       }
 
       if (level === "campaign") {
-        counts.campaignInsights += insightsResponse.data.length;
+        counts.campaignInsights += insights.length;
       } else if (level === "adset") {
-        counts.adSetInsights += insightsResponse.data.length;
+        counts.adSetInsights += insights.length;
       } else {
-        counts.adInsights += insightsResponse.data.length;
+        counts.adInsights += insights.length;
+      }
+    };
+
+    for (const level of ["campaign", "adset", "ad"] satisfies MetaInsightLevel[]) {
+      await saveInsights(level, (await client.listInsights(accountId, level, recent)).data);
+    }
+
+    // Older days not stored yet. A month with no campaign results had no
+    // adverts running, so its ad set and ad levels are not asked for.
+    if (history[0] && (!historyFrom || history[0].since < historyFrom)) historyFrom = history[0].since;
+    for (const range of history) {
+      const campaignInsights = (await client.listInsights(accountId, "campaign", range)).data;
+      if (campaignInsights.length === 0) continue;
+      await saveInsights("campaign", campaignInsights);
+      for (const level of ["adset", "ad"] satisfies MetaInsightLevel[]) {
+        await saveInsights(level, (await client.listInsights(accountId, level, range)).data);
       }
     }
   }
@@ -306,5 +339,6 @@ export async function refreshMetaAds(config: MetaConfig): Promise<MetaRefreshRes
   return {
     ...counts,
     pulledAt: pulledAt.toISOString(),
+    historyFrom,
   };
 }

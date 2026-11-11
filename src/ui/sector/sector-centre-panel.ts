@@ -1,5 +1,6 @@
 import type { SectorCentreView, SectorPromotionView } from "../../storage/sector-store.js";
 import { isClosedCentre } from "../../sector/query.js";
+import { centreOpenedLabel } from "../../sector/ero.js";
 import { formatSectorDate, hostOf, promotionCategoryLabel, serviceTypeLabel } from "./sector-list-panel.js";
 
 function escapeHtml(value: string) {
@@ -75,6 +76,7 @@ export function renderSectorCentrePanel(centre: SectorCentreView | null): string
     ["20 Hours ECE", centre.twentyHoursEce === true ? "Yes" : centre.twentyHoursEce === false ? "No" : ""],
     ["Phone", centre.phone],
     ["Email", centre.email],
+    ["Opened", centreOpenedLabel(centre)],
     ["MoE licence", centre.eceId != null ? String(centre.eceId) : "Not found in the directory"],
     ["Website last read", formatSectorDate(centre.lastCrawledAt)],
   ];

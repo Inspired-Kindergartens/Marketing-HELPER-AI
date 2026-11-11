@@ -1,6 +1,7 @@
 import type { AiChatMessage } from "./client.js";
 import { sanitizeChatHistory, type AiChatHistoryMessageInput } from "./chat.js";
 import type { SectorCentreView } from "../storage/sector-store.js";
+import { centreOpenedLabel } from "../sector/ero.js";
 import {
   applySectorFilters,
   buildSectorVocabulary,
@@ -113,6 +114,7 @@ function compactCentre(centre: SectorCentreView, full: boolean) {
     meals: centre.providesMeals === true ? centre.meals || "yes" : centre.providesMeals === false ? "no" : "unknown",
     transport: centre.providesTransport === true ? centre.transport || "yes" : centre.providesTransport === false ? "no" : "unknown",
     promotions: centre.promotions.length ? centre.promotions.map((promotion) => promotion.text) : undefined,
+    opened: centreOpenedLabel(centre) || undefined,
     inspiredCentre: centre.isOwn || undefined,
   };
   if (full) {
@@ -179,6 +181,7 @@ export function buildSectorSystemPrompt() {
     "matches are exactly the centres that answer the question, already filtered by the app, and matchCount is their true number. State that number exactly.",
     "The app shows the full matching list under your reply. With 8 matches or fewer you may name them. With more, do not list centres: summarise using the exact counts in matchesByOperator and matchesByTown (e.g. \"Busy Bees run 7 of them\") and any common offers.",
     "meals or transport of 'unknown' means not known, not 'no'. A centre marked inspiredCentre is one of ours, not a competitor.",
+    "opened is when the centre opened as near as ERO reports tell: a month or year is stated by ERO; \"c. 2022\" means its first ERO review was in 2022; \"2015 or earlier\" means it was open by then; \"Recent\" means it has had no ERO review yet. Say it with that care.",
     "With no matches, say none were found and suggest checking the spelling or asking more broadly. If the data cannot answer, say what is missing.",
     "Write in New Zealand English: plain, direct, at most five short sentences or a short list with \"-\" bullets. Plain text only: no bold, headings or other markdown. Never show JSON, field names or code.",
   ].join("\n");

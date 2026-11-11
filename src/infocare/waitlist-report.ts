@@ -27,6 +27,9 @@ export type WaitlistThreshold = {
 export type WaitlistAgeProfileRow = {
   category: string;
   under5: number;
+  // Children aged 2, already counted in under5. Missing from reports made
+  // before the column was added.
+  aged2?: number;
   turning5: number;
   aged5Plus: number;
   unknownDob: number;
@@ -202,14 +205,18 @@ function parseRecentDemandRows(tableSource: string): RecentDemandRow[] {
 }
 
 function parseWaitlistAgeProfileRows(tableSource: string): WaitlistAgeProfileRow[] {
-  return parseMarkdownTable(tableSource).map((row) => ({
-    category: getCell(row, "Wait category", "Category") ?? "",
-    under5: parseNumber(getCell(row, "Under 5")) ?? 0,
-    turning5: parseNumber(getCell(row, "Turning 5 this year", "Turning 5")) ?? 0,
-    aged5Plus: parseNumber(getCell(row, "Aged 5+", "5+")) ?? 0,
-    unknownDob: parseNumber(getCell(row, "Unknown DOB", "Unknown")) ?? 0,
-    total: parseNumber(getCell(row, "Total")) ?? 0,
-  }));
+  return parseMarkdownTable(tableSource).map((row) => {
+    const aged2 = parseNumber(getCell(row, "Of which aged 2", "Aged 2"));
+    return {
+      category: getCell(row, "Wait category", "Category") ?? "",
+      under5: parseNumber(getCell(row, "Under 5")) ?? 0,
+      ...(aged2 != null ? { aged2 } : {}),
+      turning5: parseNumber(getCell(row, "Turning 5 this year", "Turning 5")) ?? 0,
+      aged5Plus: parseNumber(getCell(row, "Aged 5+", "5+")) ?? 0,
+      unknownDob: parseNumber(getCell(row, "Unknown DOB", "Unknown")) ?? 0,
+      total: parseNumber(getCell(row, "Total")) ?? 0,
+    };
+  });
 }
 
 export async function readWaitlistDiscoveryReport() {

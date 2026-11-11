@@ -125,7 +125,8 @@ test("JD list panel's create form posts job title profile id and centre key", ()
   assert.match(html, /data-jd-create-submit/);
   assert.match(html, /data-jd-create-busy/);
   assert.match(html, /Generating job description intro/);
-  assert.match(html, /<option value="115">PAENGAROA Kindergarten<\/option>/);
+  // Location names are shown title-cased (PAENGAROA -> Paengaroa).
+  assert.match(html, /<option value="115">Paengaroa Kindergarten<\/option>/);
 });
 
 test("JD create flow opens the new editor after the server returns the generated JD id", () => {
@@ -279,7 +280,7 @@ test("JD editor panel shows the Download PDF and Save buttons", () => {
   });
 
   assert.match(html, /data-jd-action="pdf" data-jd-id="1"/);
-  assert.match(html, /jd-editor__save/);
+  assert.match(html, /<button type="submit" class="panel-action-button"><i class="bi bi-save ui-icon"[^>]*><\/i><span>Save<\/span><\/button>/);
   assert.match(html, /data-jd-edit data-jd-id="1"/);
 });
 
@@ -542,10 +543,11 @@ test("JD editor date fields are text-editable with native picker buttons", () =>
   });
   const css = readFileSync("src/ui/app.css", "utf8");
 
-  assert.match(html, /<input type="text" name="dateAdvertised"[^>]*data-jd-date-text/);
-  assert.match(html, /<input type="text" name="closingAt"[^>]*data-jd-date-text/);
+  assert.match(html, /<input class="form-control" type="text" name="dateAdvertised"[^>]*data-jd-date-text/);
+  assert.match(html, /<input class="form-control" type="text" name="closingAt"[^>]*data-jd-date-text/);
   assert.match(html, /<input type="date" class="jd-editor__date-picker"[^>]*data-jd-date-picker/);
-  assert.match(html, /<input type="datetime-local" class="jd-editor__date-picker"[^>]*data-jd-date-picker/);
+  assert.match(html, /<input type="date" class="jd-editor__date-picker"[^>]*data-jd-date-picker data-jd-keep-time/);
+  assert.match(html, /picker\.hasAttribute\("data-jd-keep-time"\)/);
   assert.match(html, /data-jd-open-date-picker/);
   assert.match(html, /syncDatePickerValue/);
   assert.doesNotMatch(html, /Bold lead-in/);
@@ -556,7 +558,8 @@ test("JD editor date fields are text-editable with native picker buttons", () =>
   assert.match(css, /@keyframes jd-create-spin/);
   assert.match(css, /pointer-events: auto/);
   assert.match(css, /user-select: text/);
-  assert.match(css, /color-scheme: dark/);
+  assert.match(css, /--color-scheme-controls: dark/);
+  assert.match(css, /color-scheme: var\(--color-scheme-controls\)/);
 });
 
 test("JD editor renders advertised and closing dates in Auckland time, not UTC", () => {

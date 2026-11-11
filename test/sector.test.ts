@@ -282,6 +282,7 @@ function centre(overrides: Partial<SectorCentreView>): SectorCentreView {
     phone: "", email: "", website: "", promotionUrl: "", licensedPlaces: 50, under2Places: 10, roll: null, rollDate: null,
     twentyHoursEce: true, meals: "", providesMeals: null, transport: "", providesTransport: null, verified: true,
     inDirectory: true, notes: "", lastCrawledAt: null, updatedAt: "2026-10-22T00:00:00.000Z", promotions: [], pastPromotions: [],
+    openedYear: null, openedMonth: null, openedBasis: "", openedEvidence: "",
     ...overrides,
   };
 }
@@ -292,7 +293,10 @@ const PROMO = (text: string, category: string) => ({
 });
 
 const CENTRES: SectorCentreView[] = [
-  centre({ id: 1, name: "BestStart Greerton", operator: "BestStart Educare", suburb: "Greerton", promotions: [PROMO("50% off for 4 months", "discount")] }),
+  centre({
+    id: 1, name: "BestStart Greerton", operator: "BestStart Educare", suburb: "Greerton", promotions: [PROMO("50% off for 4 months", "discount")],
+    openedBasis: "stated", openedYear: 2018, openedMonth: 8, openedEvidence: "BestStart Greerton opened in August 2018.",
+  }),
   centre({ id: 2, name: "Busy Bees Mangakakahi", operator: "Busy Bees", city: "Rotorua", district: "Rotorua District", providesMeals: true, meals: "Yes", providesTransport: true }),
   centre({ id: 3, name: "Future Focus - West Dune", operator: "Future Focus", city: "Papamoa", suburb: "Papamoa", providesMeals: true, meals: "Fresh seasonal meals" }),
   centre({ id: 4, name: "Arataki Free Kindergarten", operator: "Inspired Kindergartens", serviceType: "Free Kindergarten", isOwn: true, providesMeals: true }),
@@ -389,6 +393,9 @@ test("Sector Insight page: competitors only, promotion filter on by default, cha
   assert.match(html, /Updated 22 Oct 2026/);
   assert.match(html, /50% off for 4 months/);
   assert.match(html, /href="\/api\/sector\/export\.csv"/);
+  assert.match(html, /<th>Opened<\/th>/);
+  assert.match(html, /<td data-sector-opened><span title="BestStart Greerton opened in August 2018\.">Aug 2018<\/span><\/td>/);
+  assert.match(html, /colspan="8"/, "the empty row spans every column");
 });
 
 test("the centre view shows the editor and scopes the chat to that centre", () => {

@@ -215,6 +215,9 @@ function buildWaitlistAgeProfileRows(
       {
         label,
         under5: 0,
+        // Children aged 2 (2.0-2.99 years). Also counted in under5, so it is
+        // not part of the total.
+        aged2: 0,
         turning5: 0,
         aged5Plus: 0,
         unknown: 0,
@@ -235,6 +238,8 @@ function buildWaitlistAgeProfileRows(
 
       if (row) {
         row[childAgeLabel] += 1;
+        const age = calculateAgeInYears(entry.birthDate, referenceDate);
+        if (age != null && age >= 2 && age < 3) row.aged2 += 1;
       }
     }
   }
@@ -504,11 +509,11 @@ export async function generateWaitlistReportMarkdown(referenceDate: Date = new D
   lines.push("");
   lines.push("## Waitlist Age Profile By Threshold");
   lines.push("");
-  lines.push("| Wait category | Under 5 | Turning 5 this year | Aged 5+ | Unknown DOB | Total |");
-  lines.push("|---|---:|---:|---:|---:|---:|");
+  lines.push("| Wait category | Under 5 | Of which aged 2 | Turning 5 this year | Aged 5+ | Unknown DOB | Total |");
+  lines.push("|---|---:|---:|---:|---:|---:|---:|");
   for (const row of waitlistAgeProfileRows) {
     lines.push(
-      `| ${row.label} | ${row.under5} | ${row.turning5} | ${row.aged5Plus} | ${row.unknown} | ${row.total} |`,
+      `| ${row.label} | ${row.under5} | ${row.aged2} | ${row.turning5} | ${row.aged5Plus} | ${row.unknown} | ${row.total} |`,
     );
   }
   lines.push("");

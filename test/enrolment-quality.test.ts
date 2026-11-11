@@ -5,6 +5,8 @@ import {
   addMonths,
   buildEnrolmentQualityGrounding,
   buildEnrolmentQualityRows,
+  capacityFromAmPm,
+  capacityEntryForMonth,
   resolveCapacityForMonth,
   resolveRollSort,
   resolveRollWindowKey,
@@ -17,7 +19,7 @@ import {
   type StoredRollMonth,
 } from "../src/analytics/enrolment-quality.js";
 import { monthsToFetch } from "../src/infocare/roll-history.js";
-import { renderEnrolmentQualityBody, renderEnrolmentQualityHeaderActions, renderSparkline } from "../src/ui/enrolment-quality-panel.js";
+import { renderEnrolmentQualityBody, renderEnrolmentQualityHeaderActions, renderEnrolmentQualityScript, renderSparkline } from "../src/ui/enrolment-quality-panel.js";
 import { generateEnrolmentQualityPdfBuffer, renderCentreChartSvg, renderChangeChartSvg } from "../src/ui/enrolment-quality-pdf.js";
 
 const licence = (date: string, max = 40, extra: Record<string, unknown> = {}) => ({ date, max_children: max, ...extra });
@@ -119,15 +121,51 @@ test("staffing: contact staff at 10am, typical day, non-teaching staff excluded"
   assert.equal(suggestCapacityFromStaffing({ ...summary, contactStaff: null }), null);
 });
 
-test("operating capacity applies from its month onwards; licence before it", () => {
-  const capacities = [
-    { centreKey: 1, effectiveFrom: "2026-01", capacity: 36, under2Capacity: null, note: null },
-    { centreKey: 1, effectiveFrom: "2026-07", capacity: 40, under2Capacity: null, note: null },
+test("am / pm places: a first figure covers all history; later figures apply from their month on", () => {
+  const at = (day: string) => `${day}T00:00:00.000Z`;
+  // The only figure (set today, From month this month) also covers every earlier month.
+  const only = [{ id: 1, centreKey: 1, effectiveFrom: "2026-11", changedAt: at("2026-11-11"), capacity: 40, amCapacity: 40, pmCapacity: 30, under2Capacity: null, note: null }];
+  assert.deepEqual(resolveCapacityForMonth("2022-01", 45, only), { capacity: 40, under2: null, source: "operating", am: 40, pm: 30 });
+  assert.equal(resolveCapacityForMonth("2026-11", 45, only)?.capacity, 40);
+
+  // A rise from 2027-02: earlier months keep 40, from February on use 44.
+  const rise = [...only, { id: 2, centreKey: 1, effectiveFrom: "2027-02", changedAt: at("2026-12-01"), capacity: 44, under2Capacity: null, note: "extra teacher" }];
+  assert.equal(resolveCapacityForMonth("2022-01", 45, rise)?.capacity, 40);
+  assert.equal(resolveCapacityForMonth("2027-01", 45, rise)?.capacity, 40);
+  assert.equal(resolveCapacityForMonth("2027-02", 45, rise)?.capacity, 44);
+  assert.equal(resolveCapacityForMonth("2028-06", 45, rise)?.capacity, 44);
+
+  // Two saves for the same month: the later save applies, the earlier stays in the history.
+  const corrected = [...rise, { id: 3, centreKey: 1, effectiveFrom: "2027-02", changedAt: at("2026-12-02"), capacity: 42, under2Capacity: null, note: "typo" }];
+  assert.equal(resolveCapacityForMonth("2027-03", 45, corrected)?.capacity, 42);
+  assert.equal(capacityEntryForMonth("2027-03", corrected)?.id, 3);
+
+  // A first figure (stored "from the start") and a change from 2026-06: before June the first, from June the change.
+  const firstThenChange = [
+    { id: 4, centreKey: 1, effectiveFrom: "2000-01", changedAt: at("2026-11-11"), capacity: 30, amCapacity: 30, pmCapacity: 20, under2Capacity: null, note: null },
+    { id: 5, centreKey: 1, effectiveFrom: "2026-06", changedAt: at("2026-11-12"), capacity: 34, amCapacity: 34, pmCapacity: 20, under2Capacity: null, note: null },
   ];
-  assert.deepEqual(resolveCapacityForMonth("2025-12", 45, capacities), { capacity: 45, under2: null, source: "licence" });
-  assert.deepEqual(resolveCapacityForMonth("2026-03", 45, capacities), { capacity: 36, under2: null, source: "operating" });
-  assert.deepEqual(resolveCapacityForMonth("2026-07", 45, capacities), { capacity: 40, under2: null, source: "operating" });
+  assert.equal(resolveCapacityForMonth("2026-05", 35, firstThenChange)?.capacity, 30);
+  assert.equal(resolveCapacityForMonth("2026-06", 35, firstThenChange)?.capacity, 34);
+
+  // No figures: the licence.
+  assert.deepEqual(resolveCapacityForMonth("2026-07", 45, []), { capacity: 45, under2: null, source: "licence" });
   assert.equal(resolveCapacityForMonth("2026-07", 0, []), null);
+
+  // In the panel rows: each month gets its own figure; the history keeps every save.
+  const rows = buildEnrolmentQualityRows({
+    centres: [{ centreKey: 1, name: "Brookfield Kindergarten" }],
+    months: [month(1, "2026-09", 36, 45), month(1, "2026-10", 36, 45), month(1, "2026-11", 36, 45)],
+    capacities: [
+      { id: 1, centreKey: 1, effectiveFrom: "2026-01", changedAt: at("2026-11-10"), capacity: 40, under2Capacity: null, note: null },
+      { id: 2, centreKey: 1, effectiveFrom: "2026-11", changedAt: at("2026-11-11"), capacity: 36, under2Capacity: null, note: null },
+    ],
+    windowKey: "3M",
+    currentMonth: "2026-11",
+  });
+  assert.deepEqual(rows[0]!.points.map((point) => point.capacity), [40, 40, 36]);
+  assert.equal(rows[0]!.currentCapacity?.capacity, 36);
+  assert.deepEqual(rows[0]!.capacities.map((entry) => entry.id), [1, 2]);
 });
 
 test("windows, months and option parsing", () => {
@@ -190,7 +228,7 @@ test("default order is Change, biggest fall first; direction rise/fall/steady; n
   const withCapacity = buildEnrolmentQualityRows({
     centres: [{ centreKey: 3, name: "Karamuramu Kindergarten" }],
     months,
-    capacities: [{ centreKey: 3, effectiveFrom: "2026-01", capacity: 28, under2Capacity: null, note: null }],
+    capacities: [{ centreKey: 3, effectiveFrom: "2026-01", changedAt: "2026-01-01T00:00:00.000Z", capacity: 28, under2Capacity: null, note: null }],
     windowKey: "3M",
     currentMonth: "2026-11",
   });
@@ -237,7 +275,7 @@ test("default order is Change, biggest fall first; direction rise/fall/steady; n
 });
 
 test("trend line breaks at months with no data instead of inventing them", () => {
-  const point = (percent: number | null) => ({ month: "2026-01", percent, avgPlacements: 0, avgAm: 0, avgPm: 0, openDays: 0, capacity: null, capacitySource: null, monthToDate: false });
+  const point = (percent: number | null) => ({ month: "2026-01", percent, avgPlacements: 0, avgAm: 0, avgPm: 0, openDays: 0, capacity: null, capacitySource: null, placesAm: null, placesPm: null, licence: null, monthToDate: false });
   const svg = renderSparkline([point(90), point(95), point(null), point(80), point(85)], "trend");
   assert.equal(svg.match(/<polyline/g)?.length, 2);
 });
@@ -287,7 +325,7 @@ test("bands, Worst latest sort, capacity shown without 'lic' and editable", () =
       { centreKey: 3, name: "Arataki Kindergarten" },
     ],
     months,
-    capacities: [{ centreKey: 3, effectiveFrom: "2026-01", capacity: 40, under2Capacity: null, note: null }],
+    capacities: [{ centreKey: 3, effectiveFrom: "2026-01", changedAt: "2026-01-01T00:00:00.000Z", capacity: 40, under2Capacity: null, note: null }],
     windowKey: "3M",
     currentMonth: "2026-11",
   });
@@ -321,11 +359,11 @@ test("under-2 places: licence split, operating override, staffing at 1:5", () =>
   // Licence only: under-2 comes from the licence.
   assert.deepEqual(resolveCapacityForMonth("2026-07", 60, [], 18), { capacity: 60, under2: 18, source: "licence" });
   // Operating capacity 60, of which 10 under-2 (the licence allows 18).
-  const opeys = [{ centreKey: 1, effectiveFrom: "2026-01", capacity: 60, under2Capacity: 10, note: null }];
-  assert.deepEqual(resolveCapacityForMonth("2026-07", 60, opeys, 18), { capacity: 60, under2: 10, source: "operating" });
+  const opeys = [{ centreKey: 1, effectiveFrom: "2026-01", changedAt: "2026-01-01T00:00:00.000Z", capacity: 60, under2Capacity: 10, note: null }];
+  assert.deepEqual(resolveCapacityForMonth("2026-07", 60, opeys, 18), { capacity: 60, under2: 10, source: "operating", am: 60, pm: 60 });
   // An operating capacity without an under-2 figure keeps the licence's.
-  const noSplit = [{ centreKey: 1, effectiveFrom: "2026-01", capacity: 55, under2Capacity: null, note: null }];
-  assert.deepEqual(resolveCapacityForMonth("2026-07", 60, noSplit, 18), { capacity: 55, under2: 18, source: "operating" });
+  const noSplit = [{ centreKey: 1, effectiveFrom: "2026-01", changedAt: "2026-01-01T00:00:00.000Z", capacity: 55, under2Capacity: null, note: null }];
+  assert.deepEqual(resolveCapacityForMonth("2026-07", 60, noSplit, 18), { capacity: 55, under2: 18, source: "operating", am: 55, pm: 55 });
 
   // 4 teachers: 40 over-2s, but 10 under-2s take 2 teachers -> 10 + 2 x 10 = 30.
   const staff = { contactStaff: 4, sessional: false, avgLicence: 60 };
@@ -358,7 +396,53 @@ test("under-2 places: licence split, operating override, staffing at 1:5", () =>
   assert.match(html, /name="under2Capacity"[^>]*value="10"/);
   assert.match(html, /under-2 up to 18/);
   assert.match(html, /60 \(under-2 10\)/);
-  assert.match(buildEnrolmentQualityGrounding(rows, "3M")!, /operating capacity, of which 10 under-2/);
+  assert.match(buildEnrolmentQualityGrounding(rows, "3M")!, /operating capacity, busier of am 60 \/ pm 60; licence 60, of which 10 under-2/);
+});
+
+test("am / pm places: capacity is the busier session, licence in curly brackets", () => {
+  assert.equal(capacityFromAmPm(40, 30), 40);
+  assert.equal(capacityFromAmPm(0, 25), 25);
+  const places = [{ centreKey: 1, effectiveFrom: "2026-01", changedAt: "2026-01-01T00:00:00.000Z", capacity: 40, amCapacity: 40, pmCapacity: 30, under2Capacity: null, note: null }];
+  assert.deepEqual(resolveCapacityForMonth("2026-07", 50, places), { capacity: 40, under2: null, source: "operating", am: 40, pm: 30 });
+
+  const rows = buildEnrolmentQualityRows({
+    centres: [{ centreKey: 1, name: "Brookfield Kindergarten" }],
+    months: [month(1, "2026-11", 36, 50)],
+    capacities: places,
+    windowKey: "3M",
+    currentMonth: "2026-11",
+  });
+  // % full roll divides by the busier session: 36 / 40.
+  assert.equal(Math.round(rows[0]!.latestPercent!), 90);
+
+  const html = renderEnrolmentQualityBody({
+    rows,
+    windowKey: "3M",
+    sort: "interest",
+    currentMonth: "2026-11",
+    progress: { running: false, phase: "", done: 0, total: 0, failed: 0, finishedAt: null },
+  });
+  // The table shows the user's places (with the pencil) next to the capacity they give.
+  assert.match(html, />40 \/ 30 <button[^>]*data-roll-edit-capacity="1"/);
+  assert.match(html, /<\/button><\/td>\s*<td class="data-table__numeric nowrap"[^>]*>40 \{50\}<\/td>/);
+  assert.match(html, /Booked am \/ pm/);
+  assert.match(html, /name="amCapacity"[^>]*value="40"/);
+  assert.match(html, /name="pmCapacity"[^>]*value="30"/);
+  assert.match(html, /40 \/ 30/);
+  assert.doesNotMatch(html, /name="capacity"/);
+  assert.doesNotMatch(html, /Operating capacity/);
+  // From month defaults to this month; the save date is recorded automatically.
+  assert.match(html, /name="effectiveFrom" required value="2026-11"/);
+  // The only figure covers the whole history: no From month shown for it.
+  assert.match(html, /from the start, changed 1 Jan 2026/);
+  // Removing only marks an entry; changes are sent together on Save (or put back by Cancel).
+  assert.match(html, /data-roll-capacity-entry=""/);
+  assert.match(html, /data-roll-capacity-remove aria-pressed="false"[^>]*title="Remove when saved"/);
+  assert.match(html, /<button type="reset" class="button-sm">Cancel<\/button>/);
+  const script = renderEnrolmentQualityScript();
+  assert.doesNotMatch(script, /capacity\/delete/);
+  assert.match(script, /removeIds: removeIds,\s*add: add,/);
+  assert.match(script, /input\.value !== input\.defaultValue/);
 });
 
 test("centres without under-2 places get no under-2 field", () => {
@@ -447,7 +531,7 @@ test("All kindergartens row: totals across centres, pinned first whatever the so
       month(2, "2026-09", 30), month(2, "2026-11", 28),
       month(3, "2026-11", 10, 20),
     ],
-    capacities: [{ centreKey: 2, effectiveFrom: "2026-01", capacity: 40, under2Capacity: null, note: null }],
+    capacities: [{ centreKey: 2, effectiveFrom: "2026-01", changedAt: "2026-01-01T00:00:00.000Z", capacity: 40, under2Capacity: null, note: null }],
     windowKey: "3M",
     currentMonth: "2026-11",
   });
@@ -476,4 +560,28 @@ test("All kindergartens row: totals across centres, pinned first whatever the so
   // No capacity editor for the organisation row.
   assert.doesNotMatch(html, /data-roll-edit-capacity="0"/);
   assert.match(buildEnrolmentQualityGrounding(rows, "3M")!, /- All kindergartens: latest 74%/);
+});
+
+test("am / pm boxes stay empty until the user saves some (the licence is never copied in)", () => {
+  const rows = buildEnrolmentQualityRows({
+    centres: [{ centreKey: 1, name: "Brookfield Kindergarten" }],
+    months: [month(1, "2026-11", 36, 45)],
+    capacities: [],
+    windowKey: "3M",
+    currentMonth: "2026-11",
+  });
+  const html = renderEnrolmentQualityBody({
+    rows,
+    windowKey: "3M",
+    sort: "interest",
+    currentMonth: "2026-11",
+    progress: { running: false, phase: "", done: 0, total: 0, failed: 0, finishedAt: null },
+  });
+  assert.match(html, />- <button[^>]*data-roll-edit-capacity="1"/);
+  assert.match(html, />45 \{45\}<\/td>/);
+  // First figure: no From month to choose, it covers the whole history.
+  assert.match(html, /<input type="hidden" name="effectiveFrom" value="2000-01" \/>/);
+  assert.doesNotMatch(html, /From month/);
+  assert.match(html, /name="amCapacity"[^>]*value=""/);
+  assert.match(html, /name="pmCapacity"[^>]*value=""/);
 });

@@ -8,6 +8,7 @@ import { normalizeLinkUrl } from "../storage/link-url.js";
 import { decodeCsvBytes, readSectorCsv } from "./csv.js";
 import { fetchDirectoryServices, websiteFromEmail, type DirectoryService } from "./ece-directory.js";
 import { buildExtractionMessages, EXCERPT_MAX_CHARS, EXTRACTION_SCHEMA, readExtraction, type SiteFindings } from "./extract.js";
+import { fetchEroOpening, GROUP_REVIEWED_EVIDENCE, mergeOpening, recentLicenceThreshold, type EroOpening, type OpenedBasis } from "./ero.js";
 import { findBestNameMatch, normaliseName, shortDistrictName } from "./names.js";
 import { buildPageExcerpt, centreWindows, embeddedPayloadRecords, pageVisibleText, pickFollowLinks, type PayloadRecord } from "./page-text.js";
 import { categorisePromotion, findMatchingPromotion, isSupportedByPage } from "./promotions.js";
@@ -274,6 +275,55 @@ async function fillMissingWebsites() {
   }
 }
 
+// --- When centres opened (ERO) ------------------------------------------------------
+
+function storedOpening(centre: { openedBasis: string; openedYear: number | null; openedMonth: number | null; openedEvidence: string }): EroOpening {
+  return { basis: centre.openedBasis as OpenedBasis, year: centre.openedYear, month: centre.openedMonth, evidence: centre.openedEvidence };
+}
+
+// A missing ERO page on an older licence is a group review, not a new centre.
+export async function clearGroupReviewedAsRecent(): Promise<number> {
+  const dated = await prisma.sectorCentre.findMany({ where: { eceId: { not: null } }, select: { eceId: true, openedBasis: true, openedYear: true } });
+  const threshold = recentLicenceThreshold(dated);
+  const result = await prisma.sectorCentre.updateMany({
+    where: { openedBasis: "no-review", ...(threshold != null ? { eceId: { lt: threshold } } : {}) },
+    data: { openedBasis: "", openedYear: null, openedMonth: null, openedEvidence: GROUP_REVIEWED_EVIDENCE },
+  });
+  return result.count;
+}
+
+// Reads each licensed centre's ERO page, one request at a time, for when it
+// opened. A stated date or a first review is final and not read again; the
+// rest are re-read each update, as a new report can say more.
+export async function refreshEroOpenings(notes: string[], log: Logger): Promise<{ checked: number; failed: number }> {
+  const centres = await prisma.sectorCentre.findMany({
+    where: { eceId: { not: null }, inDirectory: true, openedBasis: { notIn: ["stated", "first-review"] } },
+    select: { id: true, eceId: true, name: true, openedBasis: true, openedYear: true, openedMonth: true, openedEvidence: true },
+    orderBy: { eceId: "desc" },
+  });
+  progress = { ...progress, phase: "Reading ERO reports for opening dates", done: 0, total: centres.length };
+  let failed = 0;
+  for (const centre of centres) {
+    progress = { ...progress, done: progress.done + 1 };
+    const found = await fetchEroOpening(centre.eceId!, centre.name, () => sleep(REQUEST_DELAY_MS));
+    if (!found) {
+      failed++;
+    } else {
+      const next = mergeOpening(storedOpening(centre), found);
+      await prisma.sectorCentre.update({
+        where: { id: centre.id },
+        data: { openedBasis: next.basis, openedYear: next.year, openedMonth: next.month, openedEvidence: next.evidence.slice(0, 300), eroCheckedAt: new Date() },
+      });
+    }
+    await sleep(REQUEST_DELAY_MS);
+  }
+
+  await clearGroupReviewedAsRecent();
+  if (failed > 0) notes.push(`ERO could not be reached for ${failed} centre${failed === 1 ? "" : "s"}; their opening dates were left as they were.`);
+  log.info({ checked: centres.length, failed }, "Sector sync: ERO opening dates read");
+  return { checked: centres.length, failed };
+}
+
 // --- Polite fetching -------------------------------------------------------------
 
 const robotsCache = new Map<string, string[]>();
@@ -516,6 +566,7 @@ export async function runSectorSync(config: SectorSyncConfig, trigger: "schedule
     }
     await fileUnverifiedUnderGroups(counts);
     await fillMissingWebsites();
+    await refreshEroOpenings(notes, log);
     await crawlWebsites(config, counts, notes, log);
 
     await prisma.sectorCrawlRun.update({

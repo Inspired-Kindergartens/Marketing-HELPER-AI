@@ -1,6 +1,7 @@
 import { prisma } from "../db.js";
 import { normalizeLinkUrl } from "./link-url.js";
 import { categorisePromotion } from "../sector/promotions.js";
+import { centreOpenedLabel } from "../sector/ero.js";
 import type { SectorQueryCentre } from "../sector/query.js";
 
 // Sector Insight storage: competitor and other ECE centres, the promotions
@@ -34,6 +35,10 @@ export type SectorCentreView = SectorQueryCentre & {
   verified: boolean;
   notes: string;
   lastCrawledAt: string | null;
+  openedYear: number | null;
+  openedMonth: number | null;
+  openedBasis: string; // see src/sector/ero.ts
+  openedEvidence: string;
   updatedAt: string;
   promotions: SectorPromotionView[]; // active only
   pastPromotions: SectorPromotionView[]; // filled by getSectorCentre only
@@ -116,6 +121,10 @@ function toCentreView(row: CentreRow): SectorCentreView {
     inDirectory: row.inDirectory,
     notes: row.notes,
     lastCrawledAt: row.lastCrawledAt?.toISOString() ?? null,
+    openedYear: row.openedYear,
+    openedMonth: row.openedMonth,
+    openedBasis: row.openedBasis,
+    openedEvidence: row.openedEvidence,
     updatedAt: row.updatedAt.toISOString(),
     promotions: promotions.filter((promotion) => promotion.active).map(toPromotionView),
     pastPromotions: [],
@@ -240,6 +249,7 @@ export function sectorCentresToCsv(centres: readonly SectorCentreView[]): string
     "Centre", "Operator / service group", "Promotion category", "Meals", "Transport", "City", "Suburb",
     "Operator source URL", "Promotion source URL", "Service type", "Ownership", "District", "Address",
     "Licensed places", "Under-2 places", "Roll", "Phone", "Email", "MoE licence number", "Inspired centre", "Notes",
+    "Opened (from ERO)", "Opened source",
   ];
   const rows = centres.map((centre) => [
     centre.name,
@@ -263,6 +273,8 @@ export function sectorCentresToCsv(centres: readonly SectorCentreView[]): string
     centre.eceId,
     centre.isOwn ? "Yes" : "",
     centre.notes,
+    centreOpenedLabel(centre),
+    centre.openedEvidence,
   ]);
   return [header, ...rows].map((row) => row.map(csvCell).join(",")).join("\r\n");
 }

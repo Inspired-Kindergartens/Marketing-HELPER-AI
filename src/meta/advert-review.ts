@@ -1,19 +1,22 @@
 import {
+  advertReviewDueAt,
   assessAdvertRun,
   buildAdvertRuns,
   buildMetaResponseGrounding,
+  findOutdatedAdvertReviews,
   summariseMetaResponseByCentre,
+  USUAL_LOOKBACK_DAYS,
   type AdvertReview,
+  type Applicant,
   type MetaResponseSummary,
 } from "../analytics/meta-advert-review.js";
+import { fetchCentreApplicants } from "../infocare/applicants.js";
+import { createInfocareClient } from "../infocare/client.js";
 import { readCentreReferences } from "../storage/analytics-store.js";
-import { readOperatingCapacities } from "../storage/enrolment-quality-store.js";
 import {
   readAdvertAdSets,
   readAdvertDelivery,
-  readAdvertRollMonths,
-  readAdvertWaitlistPoints,
-  readMetaAdvertReviewIds,
+  deleteMetaAdvertReview,
   readMetaAdvertReviews,
   saveMetaAdvertReview,
 } from "../storage/meta-advert-review-store.js";
@@ -21,14 +24,16 @@ import { matchMetaNameToCentre } from "./centre-match.js";
 
 type Logger = { info: (obj: unknown, msg?: string) => void; warn: (obj: unknown, msg?: string) => void };
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
 // Reviews every centre advert run that has ended and settled and has not been
 // reviewed yet. Safe to call often: reviewed runs are skipped.
-export async function reviewEndedMetaAdverts(now = new Date()): Promise<AdvertReview[]> {
-  const [centres, adSets, delivery, reviewed] = await Promise.all([
+export async function reviewEndedMetaAdverts(now = new Date(), reviewLogger?: Logger): Promise<AdvertReview[]> {
+  const [centres, adSets, delivery, storedReviews] = await Promise.all([
     readCentreReferences(),
     readAdvertAdSets(),
     readAdvertDelivery(),
-    readMetaAdvertReviewIds(),
+    readMetaAdvertReviews(),
   ]);
   const centreNames = new Map(centres.map((centre) => [centre.centreKey, centre.name]));
   // An ad set whose own name points at a different centre was matched by its
@@ -37,27 +42,43 @@ export async function reviewEndedMetaAdverts(now = new Date()): Promise<AdvertRe
     const named = matchMetaNameToCentre(adSet.name, centres);
     return centreNames.has(adSet.centreKey) && (!named || named.centreKey === adSet.centreKey);
   });
-  const runs = buildAdvertRuns({
+  const allRuns = buildAdvertRuns({
     adSets: trustedAdSets,
     delivery: delivery.days,
     deliveryCoverageStart: delivery.coverageStart,
     deliveryCoverageEnd: delivery.coverageEnd,
     now,
-  }).filter((run) => !run.ongoing && !reviewed.has(run.reviewId));
+  });
+  const outdated = findOutdatedAdvertReviews(storedReviews, allRuns, delivery.coverageStart);
+  for (const review of outdated) await deleteMetaAdvertReview(review);
+  const outdatedIds = new Set(outdated.map((review) => review.reviewId));
+  const reviewed = new Set(storedReviews.map((review) => review.reviewId).filter((id) => !outdatedIds.has(id)));
+  const runs = allRuns.filter((run) => !run.ongoing && !reviewed.has(run.reviewId));
   if (runs.length === 0) return [];
 
-  const [rolls, capacities, waitlist] = await Promise.all([
-    readAdvertRollMonths(),
-    readOperatingCapacities(),
-    readAdvertWaitlistPoints([...new Set(runs.map((run) => run.centreKey))]),
-  ]);
+  const due = runs.filter((run) => advertReviewDueAt(run) <= now);
+  if (due.length === 0) return [];
 
+  // Infocare is asked once per centre, back to the earliest usual-rate window
+  // any of its runs needs. A centre Infocare fails for is tried next time.
+  const client = createInfocareClient();
   const saved: AdvertReview[] = [];
-  for (const run of runs) {
-    const review = assessAdvertRun(run, { rolls, capacities, waitlist, now });
-    if (!review) continue;
-    await saveMetaAdvertReview(review, centreNames.get(run.centreKey) ?? `Centre ${run.centreKey}`, now);
-    saved.push(review);
+  for (const centreKey of new Set(due.map((run) => run.centreKey))) {
+    const centreRuns = due.filter((run) => run.centreKey === centreKey);
+    const earliest = Math.min(...centreRuns.map((run) => run.start.getTime())) - USUAL_LOOKBACK_DAYS * DAY_MS;
+    let applicants: Applicant[];
+    try {
+      applicants = await fetchCentreApplicants(centreKey, new Date(earliest), now, client);
+    } catch (error) {
+      reviewLogger?.warn({ error, centreKey }, "Meta advert review: Infocare applicants unavailable");
+      continue;
+    }
+    for (const run of centreRuns) {
+      const review = assessAdvertRun(run, { applicants, otherRuns: allRuns, now });
+      if (!review) continue;
+      await saveMetaAdvertReview(review, centreNames.get(run.centreKey) ?? `Centre ${run.centreKey}`, now);
+      saved.push(review);
+    }
   }
   return saved;
 }
@@ -71,7 +92,7 @@ export function tickMetaAdvertReviews(logger: Logger, options: { force?: boolean
   if (reviewInFlight) return reviewInFlight;
   if (!options.force && Date.now() - lastReviewStartedAt < REVIEW_INTERVAL_MS) return Promise.resolve([]);
   lastReviewStartedAt = Date.now();
-  reviewInFlight = reviewEndedMetaAdverts()
+  reviewInFlight = reviewEndedMetaAdverts(new Date(), logger)
     .then((saved) => {
       if (saved.length) logger.info({ reviews: saved.map((review) => review.reviewId) }, "Meta advert reviews added");
       return saved;

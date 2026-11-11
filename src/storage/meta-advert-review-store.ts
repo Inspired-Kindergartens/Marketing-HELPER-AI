@@ -6,8 +6,6 @@ import {
   type AdvertDeliveryDay,
   type AdvertReview,
   type AdvertVerdict,
-  type RollMonthRecord,
-  type WaitlistPoint,
 } from "../analytics/meta-advert-review.js";
 import { prisma } from "../db.js";
 
@@ -26,15 +24,9 @@ function mapReview(record: {
   measuredAt: Date;
   spend: Prisma.Decimal | null;
   clicks: number | null;
-  rollBeforeMonth: string | null;
-  rollBefore: number | null;
-  rollAfterMonth: string | null;
-  rollAfter: number | null;
-  networkChange: number | null;
-  waitlistBeforeAt: Date | null;
-  waitlistBefore: number | null;
-  waitlistAfterAt: Date | null;
-  waitlistAfter: number | null;
+  enrolments: number;
+  waitlisted: number;
+  usualApplications: number | null;
   verdict: string;
 }): AdvertReview {
   return {
@@ -46,16 +38,10 @@ function mapReview(record: {
     measuredAt: record.measuredAt,
     spend: record.spend == null ? null : Number(record.spend.toString()),
     clicks: record.clicks,
-    rollBeforeMonth: record.rollBeforeMonth,
-    rollBefore: record.rollBefore,
-    rollAfterMonth: record.rollAfterMonth,
-    rollAfter: record.rollAfter,
-    networkChange: record.networkChange,
-    waitlistBeforeAt: record.waitlistBeforeAt,
-    waitlistBefore: record.waitlistBefore,
-    waitlistAfterAt: record.waitlistAfterAt,
-    waitlistAfter: record.waitlistAfter,
-    verdict: (record.verdict in ADVERT_VERDICT_WORDS ? record.verdict : "not-well") as AdvertVerdict,
+    enrolments: record.enrolments,
+    waitlisted: record.waitlisted,
+    usualApplications: record.usualApplications,
+    verdict: (record.verdict in ADVERT_VERDICT_WORDS ? record.verdict : "no-history") as AdvertVerdict,
   };
 }
 
@@ -67,11 +53,6 @@ export async function readMetaAdvertReviews(centreKey?: number | null): Promise<
   return records.map(mapReview);
 }
 
-export async function readMetaAdvertReviewIds(): Promise<Set<string>> {
-  const records = await db.metaAdvertReview.findMany({ select: { reviewId: true } });
-  return new Set(records.map((record) => record.reviewId));
-}
-
 // Saves the review and adds its note to the centre through the existing Meta
 // notes (a notification row under the review id carries the centre). The note
 // is dated when the result became measurable, so a backfilled old run sorts
@@ -79,7 +60,6 @@ export async function readMetaAdvertReviewIds(): Promise<Set<string>> {
 export async function saveMetaAdvertReview(review: AdvertReview, centreName: string, now = new Date()) {
   const noteText = formatAdvertReviewNote(review);
   const notedAt = review.measuredAt < now ? review.measuredAt : now;
-  const waitlistCount = review.waitlistAfter ?? review.waitlistBefore ?? 0;
 
   await db.$transaction([
     db.metaAdvertReview.create({
@@ -92,15 +72,9 @@ export async function saveMetaAdvertReview(review: AdvertReview, centreName: str
         measuredAt: review.measuredAt,
         spend: review.spend,
         clicks: review.clicks,
-        rollBeforeMonth: review.rollBeforeMonth,
-        rollBefore: review.rollBefore,
-        rollAfterMonth: review.rollAfterMonth,
-        rollAfter: review.rollAfter,
-        networkChange: review.networkChange,
-        waitlistBeforeAt: review.waitlistBeforeAt,
-        waitlistBefore: review.waitlistBefore,
-        waitlistAfterAt: review.waitlistAfterAt,
-        waitlistAfter: review.waitlistAfter,
+        enrolments: review.enrolments,
+        waitlisted: review.waitlisted,
+        usualApplications: review.usualApplications,
         verdict: review.verdict,
       },
     }),
@@ -116,19 +90,37 @@ export async function saveMetaAdvertReview(review: AdvertReview, centreName: str
         priority: 0,
         openPlaces: 0,
         actionableWaitlist: 0,
-        waitlistCount,
+        waitlistCount: review.waitlisted,
         replacementPressure: 0,
         activeCampaignCount: 0,
         spend30d: review.spend ?? 0,
         firstSeenAt: notedAt,
         lastSeenAt: notedAt,
       },
-      update: {},
+      // A notification kept for a hand-written note takes the new verdict.
+      update: { message: `${centreName}: Meta advert ${ADVERT_VERDICT_WORDS[review.verdict]}.` },
     }),
     db.metaRecommendationNote.create({
       data: { notificationId: review.reviewId, text: noteText, submittedAt: notedAt },
     }),
   ]);
+}
+
+// Removes a review whose run has changed (for example an ad set that was
+// reused, or older delivery data filled in), so it can be judged again. Only
+// the review's own note goes; any note added by hand stays, and so does the
+// notification that carries it.
+export async function deleteMetaAdvertReview(review: AdvertReview) {
+  await db.$transaction(async (tx) => {
+    await tx.metaAdvertReview.delete({ where: { reviewId: review.reviewId } });
+    await tx.metaRecommendationNote.deleteMany({
+      where: { notificationId: review.reviewId, text: formatAdvertReviewNote(review) },
+    });
+    const remainingNotes = await tx.metaRecommendationNote.count({ where: { notificationId: review.reviewId } });
+    if (remainingNotes === 0) {
+      await tx.metaRecommendationNotification.deleteMany({ where: { notificationId: review.reviewId } });
+    }
+  });
 }
 
 // --- Inputs for the review run ------------------------------------------------
@@ -175,20 +167,4 @@ export async function readAdvertDelivery(): Promise<{ days: AdvertDeliveryDay[];
     coverageStart: range._min.insightDate,
     coverageEnd: range._max.insightDate,
   };
-}
-
-export async function readAdvertRollMonths(): Promise<RollMonthRecord[]> {
-  return db.centreMonthlyRoll.findMany({
-    select: { centreKey: true, month: true, openDays: true, avgPlacements: true, avgLicence: true, avgLicenceU2: true, complete: true },
-  });
-}
-
-export async function readAdvertWaitlistPoints(centreKeys: readonly number[]): Promise<WaitlistPoint[]> {
-  if (centreKeys.length === 0) return [];
-  const records = await db.serviceAnalyticsSnapshot.findMany({
-    where: { centreKey: { in: [...centreKeys] } },
-    select: { centreKey: true, date: true, waitlistCount: true },
-    orderBy: [{ date: "asc" }],
-  });
-  return records;
 }
