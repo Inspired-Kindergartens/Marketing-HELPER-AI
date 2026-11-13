@@ -835,6 +835,7 @@ export function renderTasksAppShell(options: TasksAppShellOptions): string {
       <a class="nav-rail__item inline-flex items-center justify-center text-muted" href="/comms" aria-label="Online Communications dashboard" title="Online Communications"><i class="bi bi-envelope-paper" aria-hidden="true"></i></a>
       <a class="nav-rail__item inline-flex items-center justify-center text-muted" href="/jd" aria-label="Job Descriptions" title="Job Descriptions"><i class="bi bi-file-earmark-person" aria-hidden="true"></i></a>
       <a class="nav-rail__item inline-flex items-center justify-center text-muted" href="/wiki" aria-label="Things To Know" title="Things To Know"><i class="bi bi-journal-bookmark" aria-hidden="true"></i></a>
+      <a class="nav-rail__item inline-flex items-center justify-center text-muted" href="/budget" aria-label="Budget" title="Budget"><i class="bi bi-piggy-bank" aria-hidden="true"></i></a>
     </aside>
     ${layout}
     ${renderTasksScript()}

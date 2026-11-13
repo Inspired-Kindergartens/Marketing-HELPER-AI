@@ -8,6 +8,7 @@ import {
 } from "../../storage/jd-store.js";
 import { formatNzDateTimeInput, formatNzDisplayDate } from "./jd-date.js";
 import { formatJdLocationDisplay } from "./jd-email.js";
+import { PRINT_ICON } from "../action-buttons.js";
 
 function escapeHtml(value: string) {
   return value
@@ -38,7 +39,7 @@ function renderJdRow(jd: JobDescriptionListItem): string {
       </div>
       <div class="jd-list__actions flex gap-6">
         <a class="jd-list__link button-icon" href="/jd?panel=jd-blurb&jd=${jd.id}" title="Website blurb"><i class="bi bi-file-earmark-richtext ui-icon" aria-hidden="true"></i></a>
-        <button type="button" class="jd-list__button button-icon" data-jd-action="pdf" data-jd-id="${jd.id}" title="Download PDF"><i class="bi bi-file-earmark-pdf ui-icon" aria-hidden="true"></i></button>
+        <button type="button" class="jd-list__button button-icon" data-jd-action="pdf" data-jd-id="${jd.id}" title="Download PDF to print" aria-label="Download PDF to print"><i class="bi ${PRINT_ICON} ui-icon" aria-hidden="true"></i></button>
         <button type="button" class="jd-list__button button-icon" data-jd-action="duplicate" data-jd-id="${jd.id}" title="Duplicate"><i class="bi bi-copy ui-icon" aria-hidden="true"></i></button>
         <button type="button" class="jd-list__button button-icon jd-list__button--danger button-danger" data-jd-action="delete" data-jd-id="${jd.id}" title="Delete"><i class="bi bi-trash3 ui-icon" aria-hidden="true"></i></button>
       </div>

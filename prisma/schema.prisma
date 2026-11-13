@@ -1205,3 +1205,126 @@ model SectorCrawlRun {
 
   @@index([startedAt])
 }
+
+// Budget: replaces the yearly "Budget Calculator 20xx-xx.xlsx" workbooks.
+// A financial year runs 1 July - 30 June; startYear 2026 = 2026-27.
+// operatingBudget is typed in by the user only; next year's budget is never
+// set for them. report is the year-end report: generated from the figures
+// (buildBudgetReport) and saved once the user edits it; blank = generate it
+// when asked for. notes are the old typed year notes, kept but no longer shown.
+model BudgetYear {
+  id                Int                      @id @default(autoincrement())
+  startYear         Int                      @unique
+  operatingBudget   Decimal?                 @db.Decimal(12, 2)
+  thresholdPercent  Decimal                  @default(2) @db.Decimal(5, 2)
+  notes             String                   @default("")
+  report            String                   @default("")
+  createdAt         DateTime                 @default(now())
+  updatedAt         DateTime                 @updatedAt
+  subscriptions     BudgetSubscriptionYear[]
+  expenses          BudgetExpense[]
+  futureSpends      BudgetFutureSpend[]
+  additionalBudgets BudgetAdditional[]
+}
+
+// Additional budget for one purchase category in one year (2026-27: $20,000
+// for Office Signage). It is part of that year's operatingBudget, and a
+// one-off: its category's purchases are not carried forward in predictions
+// or expected again the next year.
+model BudgetAdditional {
+  id           Int        @id @default(autoincrement())
+  budgetYearId Int
+  category     String
+  amount       Decimal    @db.Decimal(12, 2)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+  budgetYear   BudgetYear @relation(fields: [budgetYearId], references: [id], onDelete: Cascade)
+
+  @@index([budgetYearId])
+}
+
+// One subscription across years, so a rename ("OpenAI Chatgpt" -> "Anthropic
+// Claude") keeps its year-over-year history linked. startedOn / endedOn are
+// the dates the subscription itself started and ended (either may be unknown).
+model BudgetSubscription {
+  id        Int                      @id @default(autoincrement())
+  name      String
+  category  String                   @default("")
+  startedOn DateTime?                @db.Date
+  endedOn   DateTime?                @db.Date
+  createdAt DateTime                 @default(now())
+  updatedAt DateTime                 @updatedAt
+  years     BudgetSubscriptionYear[]
+}
+
+// A subscription in one financial year. Yearly cost = amount x payments per
+// year for its frequency. Ended subscriptions cost amount x tally (payments
+// made) and are shown but not totalled.
+model BudgetSubscriptionYear {
+  id             Int                @id @default(autoincrement())
+  subscriptionId Int
+  budgetYearId   Int
+  amount         Decimal            @db.Decimal(12, 2)
+  frequency      String // week | fortnight | month | quarter | year
+  status         String             @default("active") // active | ended
+  tally          Int                @default(0)
+  note           String             @default("")
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+  subscription   BudgetSubscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  budgetYear     BudgetYear         @relation(fields: [budgetYearId], references: [id], onDelete: Cascade)
+
+  @@unique([subscriptionId, budgetYearId])
+  @@index([budgetYearId])
+}
+
+// A purchase. Imported history has no dates (spentOn null). Meta rows are one
+// per month (sourceMonth YYYY-MM), so a Meta refresh updates rather than
+// duplicates; sourceMonth is null for manual and imported rows.
+// The landing reminder reads createdAt (when the expense was added).
+model BudgetExpense {
+  id           Int                @id @default(autoincrement())
+  budgetYearId Int
+  supplier     String
+  group        String             @default("")
+  amount       Decimal            @db.Decimal(12, 2)
+  note         String             @default("")
+  spentOn      DateTime?          @db.Date
+  source       String             @default("manual") // manual | import | meta
+  sourceMonth  String?
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+  budgetYear   BudgetYear         @relation(fields: [budgetYearId], references: [id], onDelete: Cascade)
+  futureSpend  BudgetFutureSpend?
+
+  @@unique([source, sourceMonth])
+  @@index([budgetYearId])
+  @@index([createdAt])
+}
+
+// A planned spend. Bought turns it into a purchase (expenseId).
+model BudgetFutureSpend {
+  id           Int            @id @default(autoincrement())
+  budgetYearId Int
+  project      String
+  supplier     String         @default("")
+  amount       Decimal        @db.Decimal(12, 2)
+  qty          Int            @default(1)
+  note         String         @default("")
+  status       String         @default("planned") // planned | tbc | bought
+  expenseId    Int?           @unique
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+  budgetYear   BudgetYear     @relation(fields: [budgetYearId], references: [id], onDelete: Cascade)
+  expense      BudgetExpense? @relation(fields: [expenseId], references: [id], onDelete: SetNull)
+
+  @@index([budgetYearId])
+}
+
+// "No expenses added this month" dismissed on the landing page; covers that
+// month only.
+model BudgetReminderDismissal {
+  id          Int      @id @default(autoincrement())
+  month       String   @unique
+  dismissedAt DateTime @default(now())
+}

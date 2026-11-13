@@ -9,7 +9,21 @@
       "WebFetch(domain:developer.metservice.com)",
       "Bash(npx tsc *)",
       "PowerShell(ollama list *)",
-      "PowerShell(powershell.exe -NoProfile -File \"D:\\\\iK\\\\Marketing-HELPER-AI\\\\scripts\\\\open-marketing-helper.ps1\")"
+      "PowerShell(powershell.exe -NoProfile -File \"D:\\\\iK\\\\Marketing-HELPER-AI\\\\scripts\\\\open-marketing-helper.ps1\")",
+      "Bash(npm run *)",
+      "Bash(npm test)",
+      "Bash(npm test *)",
+      "Bash(npx tsx *)",
+      "Bash(npx prisma generate)",
+      "Bash(npx prisma migrate deploy)",
+      "Bash(npx prisma migrate status)",
+      "Bash(npx prisma format)",
+      "Bash(git status *)",
+      "Bash(git diff *)",
+      "Bash(git log *)",
+      "PowerShell(npm test)",
+      "PowerShell(npx tsx *)",
+      "PowerShell(npx tsc *)"
     ]
   }
 }

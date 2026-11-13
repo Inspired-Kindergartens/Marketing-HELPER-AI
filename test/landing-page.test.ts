@@ -91,7 +91,8 @@ test("landing page includes an Upscalar launcher tile", () => {
   const html = renderLandingPage({});
 
   assert.match(html, /href="upscalar:\/\/open"/);
-  assert.match(html, /Open Upscalar/);
+  assert.match(html, />Upscalar</);
+  assert.doesNotMatch(html, /Open Upscalar/);
 });
 
 test("landing page surfaces a KTCA expiry reminder alongside task reminders", () => {

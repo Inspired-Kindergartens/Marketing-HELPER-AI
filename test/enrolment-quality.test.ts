@@ -16,6 +16,7 @@ import {
   summariseRollMonth,
   trendDirection,
   windowMonths,
+  withOperatingCapacity,
   type StoredRollMonth,
 } from "../src/analytics/enrolment-quality.js";
 import { monthsToFetch } from "../src/infocare/roll-history.js";
@@ -260,7 +261,7 @@ test("default order is Change, biggest fall first; direction rise/fall/steady; n
   assert.doesNotMatch(html, /% full roll = placements/);
   assert.doesNotMatch(html, /enrolment-quality\/pdf|data-roll-fetch/);
   const actions = renderEnrolmentQualityHeaderActions(view);
-  assert.match(actions, /class="panel-action-button" href="\/api\/enrolment-quality\/pdf\?rollWindow=3M&rollSort=interest"/);
+  assert.match(actions, /class="panel-action-button action-print" href="\/api\/enrolment-quality\/pdf\?rollWindow=3M&amp;rollSort=interest"/);
   assert.match(actions, /bi-printer/);
   assert.doesNotMatch(actions, />PDF</);
   assert.match(actions, /data-roll-fetch/);
@@ -584,4 +585,37 @@ test("am / pm boxes stay empty until the user saves some (the licence is never c
   assert.doesNotMatch(html, /From month/);
   assert.match(html, /name="amCapacity"[^>]*value=""/);
   assert.match(html, /name="pmCapacity"[^>]*value=""/);
+});
+
+test("Infocare Analytics snapshots use the Enrolment Quality capacity for their month", () => {
+  const snapshot = {
+    date: "2026-10-05",
+    enrolledCount: 40,
+    bookedAverageDailyCount: 30,
+    licensedCapacity: 45,
+    licensedUnder2Capacity: null,
+    licensedOver2Capacity: 45,
+    enrolmentRatio: 40 / 45,
+    bookedUtilisationRatio: 30 / 45,
+  };
+  const entry = (effectiveFrom: string, capacity: number, under2Capacity: number | null = null) => ({
+    centreKey: 1, effectiveFrom, changedAt: "2026-11-01T00:00:00.000Z", capacity, under2Capacity, note: null,
+  });
+
+  // No figures: the Infocare licence stays.
+  assert.deepEqual(withOperatingCapacity(snapshot, []), snapshot);
+
+  const applied = withOperatingCapacity(snapshot, [entry("2000-01", 40), entry("2026-11", 35)]);
+  assert.equal(applied.licensedCapacity, 40); // October: the November rise does not apply yet
+  assert.equal(applied.licensedOver2Capacity, 40);
+  assert.equal(applied.enrolmentRatio, 1);
+  assert.equal(applied.bookedUtilisationRatio, 0.75);
+
+  const november = withOperatingCapacity({ ...snapshot, date: "2026-11-09" }, [entry("2000-01", 40), entry("2026-11", 35, 5)]);
+  assert.equal(november.licensedCapacity, 35);
+  assert.equal(november.licensedUnder2Capacity, 5);
+  assert.equal(november.licensedOver2Capacity, 30);
+
+  // No bookings: utilisation stays "not known" (0).
+  assert.equal(withOperatingCapacity({ ...snapshot, bookedAverageDailyCount: 0, bookedUtilisationRatio: 0 }, [entry("2000-01", 40)]).bookedUtilisationRatio, 0);
 });

@@ -839,8 +839,8 @@ test("Infocare Analytics and Waitlist Quality print buttons download their PDFs"
   const { snapshotSet, report } = pdfReportFixtures();
   const html = renderAppShell(snapshotSet, { waitlistReport: report, selectedWindowKey: "6M", serviceSort: "asc" });
 
-  assert.match(html, /class="panel-action-button" href="\/api\/analytics\/pdf\?window=6M&amp;sort=asc" download/);
-  assert.match(html, /class="panel-action-button" href="\/api\/waitlist\/pdf" download/);
+  assert.match(html, /class="panel-action-button action-print" href="\/api\/analytics\/pdf\?window=6M&amp;sort=asc" download/);
+  assert.match(html, /class="panel-action-button action-print" href="\/api\/waitlist\/pdf" download/);
   assert.doesNotMatch(html, /Print console/); // the analytics PDF replaces it
 
   const focused = renderAppShell(snapshotSet, { waitlistReport: report, focusPanelId: "waitlist" });

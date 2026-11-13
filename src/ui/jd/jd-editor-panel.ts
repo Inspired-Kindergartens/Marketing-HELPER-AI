@@ -6,6 +6,7 @@ import {
 } from "../../storage/jd-store.js";
 import { formatNzDateInput, formatNzDateTimeInput } from "./jd-date.js";
 import { formatJdLocationDisplay } from "./jd-email.js";
+import { renderPrintAction } from "../action-buttons.js";
 
 function escapeHtml(value: string) {
   return value
@@ -170,7 +171,7 @@ export function renderJdEditorPanel(options: JdEditorPanelOptions): string {
       </div>
 
       <div class="jd-editor__actions flex gap-10 justify-end">
-        <button type="button" class="panel-action-button" data-jd-action="pdf" data-jd-id="${jd.id}"><i class="bi bi-file-earmark-pdf ui-icon" aria-hidden="true"></i><span>Download PDF</span></button>
+        ${renderPrintAction({ label: "Download this job description as a PDF to print", attributes: `data-jd-action="pdf" data-jd-id="${jd.id}"` })}
         <button type="submit" class="panel-action-button"><i class="bi bi-save ui-icon" aria-hidden="true"></i><span>Save</span></button>
       </div>
     </form>

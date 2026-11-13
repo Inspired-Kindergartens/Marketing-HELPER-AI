@@ -1,5 +1,6 @@
 import { prisma } from "../db.js";
 import { sanitizeJdBlurbHtml } from "./jd-sanitize-html.js";
+import { normaliseWikiParagraphs } from "./wiki-paragraphs.js";
 
 // A "Things To Know" article. Rich text is stored as HTML, sanitised on write
 // with the same allow-list the JD blurb editor uses.
@@ -63,7 +64,9 @@ function toArticleView(row: WikiArticleRow): WikiArticleView {
     category: row.category,
     tags: splitTags(row.tags),
     summary: row.summary,
-    contentHtml: row.contentHtml,
+    // Articles saved before paragraphs were normalised still hold loose text
+    // and empty paragraphs; tidy them on read so they display evenly too.
+    contentHtml: normaliseWikiParagraphs(row.contentHtml),
     isArchived: row.isArchived,
     isCategoryLocked: row.isCategoryLocked,
     updatedAt: row.updatedAt.toISOString(),
@@ -285,7 +288,7 @@ function buildWriteData(input: WikiArticleInput) {
     category: normalizeText(input.category, 80, WIKI_DEFAULT_CATEGORY),
     tags: normalizeWikiTags(input.tags),
     summary: normalizeText(input.summary, 400),
-    contentHtml: sanitizeJdBlurbHtml(String(input.contentHtml ?? "")),
+    contentHtml: normaliseWikiParagraphs(sanitizeJdBlurbHtml(String(input.contentHtml ?? ""))),
   };
 }
 

@@ -18,6 +18,7 @@ import {
 } from "../analytics/enrolment-quality.js";
 import type { RollHistoryProgress } from "../infocare/roll-history.js";
 import { formatAnalyticsServiceDisplayName } from "./centre-name.js";
+import { REFRESH_ICON, renderPrintAction, renderRefreshAction, SPINNER_CLASS } from "./action-buttons.js";
 
 export type EnrolmentQualityView = {
   rows: EnrolmentQualityRow[];
@@ -28,6 +29,10 @@ export type EnrolmentQualityView = {
   currentMonth: string;
   progress: RollHistoryProgress;
   openCentreKey?: number | null;
+  // The SLT filter: the chosen SLT (rows are already only their centres) and
+  // every SLT in the contact list.
+  slt?: string | null;
+  sltOptions?: readonly string[];
 };
 
 function escapeHtml(value: string) {
@@ -82,8 +87,8 @@ function bandedPct(value: number | null) {
   return band ? `<span class="enrolment-quality__band--${band}">${pct(value)}</span>` : pct(value);
 }
 
-export function fragmentQuery(windowKey: RollWindowKey, sort: RollSort) {
-  return `rollWindow=${encodeURIComponent(windowKey)}&rollSort=${encodeURIComponent(sort)}`;
+export function fragmentQuery(windowKey: RollWindowKey, sort: RollSort, slt?: string | null) {
+  return `rollWindow=${encodeURIComponent(windowKey)}&rollSort=${encodeURIComponent(sort)}${slt ? `&rollSlt=${encodeURIComponent(slt)}` : ""}`;
 }
 
 // --- Trend line ---------------------------------------------------------------
@@ -158,19 +163,34 @@ export function renderSparkline(points: readonly RollPoint[], label: string) {
 // --- Toolbar -------------------------------------------------------------------
 
 function renderToolbar(view: EnrolmentQualityView) {
+  const slt = view.slt ?? null;
+  // Every link carries the whole view (period, order and SLT).
+  const link = (query: string, active: boolean, label: string, extra = "") =>
+    `<a class="analytics-toolbar__window${active ? " analytics-toolbar__window--active" : ""}" href="/app?${query}" data-roll-query="${query}"${extra}>${label}</a>`;
   const windowLinks = ROLL_WINDOW_OPTIONS.map((option) => {
     const active = option.key === view.windowKey;
-    return `<a class="analytics-toolbar__window${active ? " analytics-toolbar__window--active" : ""}" href="/app?${fragmentQuery(option.key, view.sort)}" data-roll-query="${fragmentQuery(option.key, view.sort)}"${active ? ' aria-current="true"' : ""}>${option.label}</a>`;
+    return link(fragmentQuery(option.key, view.sort, slt), active, option.label, active ? ' aria-current="true"' : "");
   }).join("");
   const sortLink = (sort: RollSort, label: string, aria: string) =>
-    `<a class="analytics-toolbar__window${view.sort === sort ? " analytics-toolbar__window--active" : ""}" href="/app?${fragmentQuery(view.windowKey, sort)}" data-roll-query="${fragmentQuery(view.windowKey, sort)}" aria-label="${aria}" title="${aria}">${label}</a>`;
+    link(fragmentQuery(view.windowKey, sort, slt), view.sort === sort, label, ` aria-label="${aria}" title="${aria}"`);
+  const sltLink = (name: string | null, label: string) =>
+    link(fragmentQuery(view.windowKey, view.sort, name), name === slt, escapeHtml(label), name === slt ? ' aria-current="true"' : "");
+  const sltFilter = view.sltOptions?.length
+    ? `
+    <div class="analytics-toolbar__actions flex flex-wrap gap-4 items-center" data-slt-filter>
+      ${sltLink(null, "All SLT")}
+      ${view.sltOptions.map((name) => sltLink(name, name)).join("")}
+    </div>`
+    : "";
   return `
+    <div class="analytics-toolbar">
     <div class="analytics-toolbar__actions flex flex-wrap gap-4 items-center">
       ${windowLinks}
       ${sortLink("interest", "Worst change", "Sort by Change, the biggest fall first")}
       ${sortLink("latest", "Worst latest", "Sort by Latest, the lowest % first")}
       ${sortLink("asc", "A-Z", "Sort service A to Z")}
       ${sortLink("desc", "Z-A", "Sort service Z to A")}
+    </div>${sltFilter}
     </div>
   `;
 }
@@ -184,8 +204,8 @@ export function renderEnrolmentQualityHeaderActions(view: EnrolmentQualityView) 
     ? `Fetching from Infocare ${view.progress.done}/${view.progress.total}`
     : "Update from Infocare: fetch any missing months (up to 5 years) and this month's figures";
   // Same order as Infocare Analytics: download (update) first, then print.
-  return `<button class="panel-action-button${running ? " panel-action-button--disabled" : ""}" type="button" data-roll-fetch${running ? " disabled" : ""} aria-label="${fetchLabel}" title="${fetchLabel}"><i class="bi ${running ? "bi-arrow-repeat panel-action-button__spinner" : "bi-download"} ui-icon" aria-hidden="true"></i></button>`
-    + `<a class="panel-action-button" href="/api/enrolment-quality/pdf?${fragmentQuery(view.windowKey, view.sort)}" download data-roll-pdf aria-label="Download this view as a PDF to print" title="Download this view as a PDF to print"><i class="bi bi-printer ui-icon" aria-hidden="true"></i></a>`;
+  return renderRefreshAction({ label: fetchLabel, attributes: "data-roll-fetch", running })
+    + renderPrintAction({ label: "Download this view as a PDF to print", href: `/api/enrolment-quality/pdf?${fragmentQuery(view.windowKey, view.sort, view.slt)}`, attributes: "data-roll-pdf" });
 }
 
 // --- Detail (month table + am / pm places) -------------------------------------
@@ -363,7 +383,7 @@ export function renderEnrolmentQualityBody(view: EnrolmentQualityView) {
     : `<p class="text-empty">No roll history stored yet.${progress.running ? "" : " Press <strong>Update from Infocare</strong> to fetch it."}</p>`;
 
   return `
-    <div class="enrolment-quality grid gap-10" data-enrolment-quality data-roll-window="${view.windowKey}" data-roll-sort="${view.sort}"${progress.running ? ` data-roll-fetching="${progress.done}/${progress.total}"` : ""}>
+    <div class="enrolment-quality grid gap-10" data-enrolment-quality data-roll-window="${view.windowKey}" data-roll-sort="${view.sort}"${view.slt ? ` data-roll-slt="${escapeHtml(view.slt)}"` : ""}${progress.running ? ` data-roll-fetching="${progress.done}/${progress.total}"` : ""}>
       ${renderToolbar(view)}
       ${table}
     </div>
@@ -382,6 +402,9 @@ export function renderEnrolmentQualityScript() {
           var params = new URLSearchParams();
           params.set("rollWindow", el ? el.getAttribute("data-roll-window") : "12M");
           params.set("rollSort", el ? el.getAttribute("data-roll-sort") : "interest");
+          // A filter link carries the whole view, so the SLT comes from it
+          // (All SLT has none); otherwise the SLT on screen is kept.
+          if (!extra && el && el.hasAttribute("data-roll-slt")) params.set("rollSlt", el.getAttribute("data-roll-slt"));
           var open = el && el.querySelector("[data-roll-row][aria-expanded='true']");
           if (open) params.set("rollOpen", open.getAttribute("data-roll-row"));
           if (extra) new URLSearchParams(extra).forEach(function(value, key) { params.set(key, value); });
@@ -405,6 +428,7 @@ export function renderEnrolmentQualityScript() {
             var params = new URLSearchParams();
             params.set("rollWindow", el.getAttribute("data-roll-window"));
             params.set("rollSort", el.getAttribute("data-roll-sort"));
+            if (el.hasAttribute("data-roll-slt")) params.set("rollSlt", el.getAttribute("data-roll-slt"));
             pdf.setAttribute("href", "/api/enrolment-quality/pdf?" + params.toString());
           }
           var fetchButton = document.querySelector("[data-roll-fetch]");
@@ -418,7 +442,7 @@ export function renderEnrolmentQualityScript() {
           fetchButton.setAttribute("aria-label", label);
           fetchButton.setAttribute("title", label);
           var icon = fetchButton.querySelector("i");
-          if (icon) icon.className = "bi " + (running ? "bi-arrow-repeat panel-action-button__spinner" : "bi-download") + " ui-icon";
+          if (icon) icon.className = "bi ${REFRESH_ICON} ui-icon" + (running ? " ${SPINNER_CLASS}" : "");
         }
         function load(extra) {
           var params = query(extra);
@@ -429,6 +453,8 @@ export function renderEnrolmentQualityScript() {
               var url = new URL(window.location.href);
               url.searchParams.set("rollWindow", params.get("rollWindow"));
               url.searchParams.set("rollSort", params.get("rollSort"));
+              if (params.get("rollSlt")) url.searchParams.set("rollSlt", params.get("rollSlt"));
+              else url.searchParams.delete("rollSlt");
               window.history.replaceState(null, "", url.toString());
             });
         }
@@ -440,6 +466,20 @@ export function renderEnrolmentQualityScript() {
                 return result;
               });
             });
+        }
+        // Infocare Analytics uses the same capacity: after a Save its panel is
+        // swapped in place from the page as rendered now (no reload).
+        function refreshAnalytics() {
+          var panel = document.querySelector("[data-panel-id='analytics']");
+          if (!panel) return;
+          fetch(window.location.href, { headers: { accept: "text/html" } })
+            .then(function(response) { if (!response.ok) throw new Error("Could not refresh Infocare Analytics."); return response.text(); })
+            .then(function(html) {
+              var fresh = new DOMParser().parseFromString(html, "text/html").querySelector("[data-panel-id='analytics']");
+              var here = document.querySelector("[data-panel-id='analytics']");
+              if (fresh && here) here.replaceWith(document.importNode(fresh, true));
+            })
+            .catch(function() {});
         }
         // While a fetch runs, refresh every 20s so months appear as they arrive.
         function schedulePoll() {
@@ -577,7 +617,7 @@ export function renderEnrolmentQualityScript() {
             centreKey: Number(form.getAttribute("data-centre-key")),
             removeIds: removeIds,
             add: add,
-          }).then(function() { return load(); }).then(function() {
+          }).then(function() { refreshAnalytics(); return load(); }).then(function() {
             // The new figures can re-sort the table: keep the saved centre (still open) in view.
             var saved = current().querySelector("[data-roll-row='" + form.getAttribute("data-centre-key") + "']");
             if (saved) saved.scrollIntoView({ block: "nearest" });

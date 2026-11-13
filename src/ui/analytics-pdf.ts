@@ -3,6 +3,7 @@
 // actions), with a total row. Cover, header, footer and print settings come
 // from report-pdf.ts; every figure comes from the panel's own helpers.
 import { getWindowOption, type WindowKey } from "../analytics/windows.js";
+import { sltTotalName } from "../analytics/slt-filter.js";
 import type { LatestSnapshotSet } from "../storage/analytics-store.js";
 import {
   formatAgeBandCapacity,
@@ -44,11 +45,11 @@ function sumAgeBand(rows: readonly AnalyticsRow[], enrolled: (row: AnalyticsRow)
   );
 }
 
-function totalRow(rows: readonly AnalyticsRow[], windowKey: WindowKey) {
+function totalRow(rows: readonly AnalyticsRow[], windowKey: WindowKey, slt: string | null) {
   const sum = (value: (row: AnalyticsRow) => number) => rows.reduce((total, row) => total + value(row), 0);
   const estimated = rows.filter((row) => row.bookedAverageDailyCount > 0 && row.licensedCapacity > 0);
   return [
-    "All kindergartens",
+    slt ? sltTotalName(slt) : "All kindergartens",
     `${sum((row) => row.enrolledCount)}/${sum((row) => row.licensedCapacity)}`,
     estimated.length ? String(estimated.reduce((total, row) => total + getEstimatedOpenPlaces(row), 0)) : "-",
     sumAgeBand(rows, (row) => row.enrolledUnder2Count, (row) => row.licensedUnder2Capacity),
@@ -65,6 +66,8 @@ export async function generateAnalyticsPdfBuffer(
   windowKey: WindowKey,
   serviceSort: ServiceSort,
   now = new Date(),
+  // The panel's SLT filter: the snapshot set holds only that SLT's centres.
+  slt: string | null = null,
 ): Promise<Buffer> {
   const rows = sortAnalyticsRows(snapshotSet.snapshots, serviceSort, windowKey);
   const body = rows.map((row) => [
@@ -84,15 +87,16 @@ export async function generateAnalyticsPdfBuffer(
   return renderReportPdf(
     {
       title: "Infocare Analytics",
-      coverLabel: "INFOCARE SNAPSHOT",
-      subtitle: `Snapshot ${snapshotAt}  ·  ${period}  ·  ${SORT_LABEL[serviceSort]}`,
-      subject: `Snapshot ${snapshotAt}; ${period}`,
+      coverKicker: "Marketing",
+      coverLabel: `INFOCARE SNAPSHOT${slt ? `  ·  SLT ${slt.toUpperCase()}` : ""}`,
+      subtitle: `Snapshot ${snapshotAt}  ·  ${slt ? `SLT ${slt}  ·  ` : ""}${period}  ·  ${SORT_LABEL[serviceSort]}`,
+      subject: `Snapshot ${snapshotAt}; ${slt ? `SLT ${slt}; ` : ""}${period}`,
       footerNote: "Enrol/Max = enrolled / licence",
       content: [
         sectionTitle("Centres"),
         dataTable(
           ["Service", "Enrol/Max", "Est", "U2", "O2", "Waitlist", "Age 5+", "Near 5", "Leaving"],
-          rows.length > 1 ? [totalRow(rows, windowKey), ...body] : body,
+          rows.length > 1 ? [totalRow(rows, windowKey, slt), ...body] : body,
           ["*", 68, 30, 40, 44, 50, 38, 38, 42],
           { totalRow: rows.length > 1 },
         ),
@@ -103,6 +107,6 @@ export async function generateAnalyticsPdfBuffer(
   );
 }
 
-export function analyticsPdfFilename(windowKey: WindowKey, now = new Date()) {
-  return `Infocare-Analytics-${windowKey}-${nzFileDate(now)}.pdf`;
+export function analyticsPdfFilename(windowKey: WindowKey, now = new Date(), slt: string | null = null) {
+  return `Infocare-Analytics-${windowKey}-${slt ? `${slt}-` : ""}${nzFileDate(now)}.pdf`;
 }

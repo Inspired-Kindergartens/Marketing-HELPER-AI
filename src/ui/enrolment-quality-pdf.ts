@@ -301,9 +301,10 @@ export async function generateEnrolmentQualityPdfBuffer(view: EnrolmentQualityVi
   return renderReportPdf(
     {
       title: "Enrolment Quality",
-      coverLabel: coverLabel(view),
-      subtitle: `% full roll by month  ·  ${periodLabel(view)}`,
-      subject: periodLabel(view),
+      coverKicker: "Marketing",
+      coverLabel: `${coverLabel(view)}${view.slt ? `  ·  SLT ${view.slt.toUpperCase()}` : ""}`,
+      subtitle: `% full roll by month  ·  ${view.slt ? `SLT ${view.slt}  ·  ` : ""}${periodLabel(view)}`,
+      subject: `${view.slt ? `SLT ${view.slt}; ` : ""}${periodLabel(view)}`,
       footerNote: "% full roll = placements ÷ capacity  ·  capacity {licence}",
       content: [
         { text: "Summary", fontSize: 12, bold: true, color: INK, margin: [0, 0, 0, 6] },
@@ -320,5 +321,5 @@ export async function generateEnrolmentQualityPdfBuffer(view: EnrolmentQualityVi
 }
 
 export function enrolmentQualityPdfFilename(view: EnrolmentQualityView, now = new Date()) {
-  return `Enrolment-Quality-${view.windowKey}-${nzFileDate(now)}.pdf`;
+  return `Enrolment-Quality-${view.windowKey}-${view.slt ? `${view.slt}-` : ""}${nzFileDate(now)}.pdf`;
 }

@@ -46,9 +46,11 @@ export function nzFileDate(date: Date) {
 
 // The cover is deliberately bare so a copy left lying around gives nothing
 // away: title, a short label, the created date and the logo only.
-function coverPage(title: string, coverLabel: string, logo: string | null, now: Date): PdfContent[] {
+// `kicker` is a first title line above the title, e.g. "Marketing".
+function coverPage(title: string, coverLabel: string, logo: string | null, now: Date, kicker?: string): PdfContent[] {
   return [
-    { text: title, fontSize: 34, bold: true, color: INK, alignment: "center", margin: [0, 230, 0, 0] },
+    ...(kicker ? [{ text: kicker, fontSize: 34, bold: true, color: INK, alignment: "center", margin: [0, 190, 0, 0] }] : []),
+    { text: title, fontSize: 34, bold: true, color: INK, alignment: "center", margin: [0, kicker ? 0 : 230, 0, 0] },
     { text: coverLabel, fontSize: 11, bold: true, color: MUTED, characterSpacing: 2, alignment: "center", margin: [0, 10, 0, 0] },
     { text: `document created ${coverDate(now)}`, fontSize: 7.5, color: MUTED, alignment: "center", margin: [0, 6, 0, 0] },
     logo
@@ -179,10 +181,13 @@ export function chartLegend(series: ReadonlyArray<{ label: string; colour: strin
 
 export type ReportDefinition = {
   title: string; // cover and page header
+  coverKicker?: string; // a line above the cover title, e.g. "Marketing"
+  coverTitle?: string; // the cover's title when it differs from the page header's
   coverLabel: string; // e.g. "12 MONTHS INFOCARE SNAPSHOT"
   subtitle: string; // page header line under the title
   subject: string; // PDF file properties
   footerNote: string;
+  infoTitle?: string; // PDF file properties title; default "<title> - Infocare snapshot"
   content: PdfContent[]; // the pages after the cover
 };
 
@@ -198,7 +203,7 @@ export async function renderReportPdf(report: ReportDefinition, now = new Date()
     pageSize: "A4",
     pageOrientation: "portrait",
     pageMargins: [40, 70, 40, 40],
-    info: { title: `${report.title} - Infocare snapshot`, subject: report.subject, author: "Marketing, Inspired Kindergartens" },
+    info: { title: report.infoTitle ?? `${report.title} - Infocare snapshot`, subject: report.subject, author: "Marketing, Inspired Kindergartens" },
     header: (page: number) => page === 1 ? null : ({
       margin: [40, 24, 40, 0],
       columns: [
@@ -220,7 +225,7 @@ export async function renderReportPdf(report: ReportDefinition, now = new Date()
       ],
     }),
     content: [
-      ...coverPage(report.title, report.coverLabel, logo, now),
+      ...coverPage(report.coverTitle ?? report.title, report.coverLabel, logo, now, report.coverKicker),
       ...(first ? [{ ...first, pageBreak: "before" }] : []),
       ...rest,
     ],

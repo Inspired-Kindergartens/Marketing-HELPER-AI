@@ -1,4 +1,5 @@
 import { renderLayout } from "./layout.js";
+import { renderPrintAction, renderRefreshAction, SPINNER_CLASS } from "./action-buttons.js";
 import type { SectorCentreView, SectorCrawlRunView } from "../storage/sector-store.js";
 import type { SectorSyncProgress } from "../sector/sync.js";
 import {
@@ -43,10 +44,12 @@ function renderSyncStatus(options: SectorAppShellOptions): string {
 function renderCentresActions(options: SectorAppShellOptions): string {
   const running = options.progress.running;
   return `
-    <button class="panel-action-button${running ? " panel-action-button--disabled" : ""}" type="button" data-sector-sync${running ? ' data-sector-sync-running="true"' : ""} title="Import the latest ECE directory and re-read competitor websites">
-      <i class="bi bi-arrow-repeat ui-icon${running ? " panel-action-button__spinner" : ""}" aria-hidden="true"></i><span>${running ? "Updating" : "Update now"}</span>
-    </button>
-    <a class="panel-action-link" href="/api/sector/export.csv" title="Download the centre list as a spreadsheet"><i class="bi bi-filetype-csv ui-icon" aria-hidden="true"></i><span>Export</span></a>
+    ${renderRefreshAction({
+      label: running ? "Updating: importing the ECE directory and re-reading competitor websites" : "Update now: import the latest ECE directory and re-read competitor websites",
+      attributes: `data-sector-sync${running ? ' data-sector-sync-running="true"' : ""}`,
+      running,
+    })}
+    ${renderPrintAction({ label: "Download the centres shown as a PDF to print", href: "/api/sector/pdf", attributes: "data-sector-print" })}
   `;
 }
 
@@ -113,9 +116,33 @@ function renderSectorScript(): string {
           });
           var count = document.querySelector("[data-sector-count]");
           if (count) count.textContent = shown + " of " + rows.length + " centres shown";
+          printHref();
           var empty = document.querySelector("[data-sector-empty]");
           if (empty) empty.hidden = shown > 0;
         }
+        // The print button prints what the table shows: the visible centres
+        // and a line naming the filters in use.
+        function printHref() {
+          var print = document.querySelector("[data-sector-print]");
+          if (!print || !filters) return;
+          var ids = [];
+          document.querySelectorAll("[data-sector-row]").forEach(function(row) {
+            if (!row.hidden) ids.push(row.getAttribute("data-sector-id"));
+          });
+          var described = [];
+          filters.querySelectorAll("input, select").forEach(function(field) {
+            if (!field.value) return;
+            var label = field.closest("label");
+            var name = label ? label.firstChild.textContent.trim() : field.name;
+            var text = field.tagName === "SELECT" ? field.options[field.selectedIndex].text : '"' + field.value + '"';
+            described.push(name + ": " + text);
+          });
+          var params = new URLSearchParams();
+          params.set("ids", ids.join(","));
+          if (described.length) params.set("filters", described.join(", "));
+          print.setAttribute("href", "/api/sector/pdf?" + params.toString());
+        }
+        printHref();
         if (filters) {
           filters.addEventListener("input", applyFilters);
           filters.addEventListener("change", applyFilters);
@@ -127,10 +154,12 @@ function renderSectorScript(): string {
         function showRunning(text) {
           if (!syncButton) return;
           syncButton.classList.add("panel-action-button--disabled");
-          var icon = syncButton.querySelector(".bi-arrow-repeat");
-          if (icon) icon.classList.add("panel-action-button__spinner");
-          var label = syncButton.querySelector("span");
-          if (label) label.textContent = "Updating";
+          syncButton.disabled = true;
+          var icon = syncButton.querySelector(".bi");
+          if (icon) icon.classList.add("${SPINNER_CLASS}");
+          var label = "Updating: importing the ECE directory and re-reading competitor websites";
+          syncButton.setAttribute("aria-label", label);
+          syncButton.setAttribute("title", label);
           if (syncStatus && text) syncStatus.textContent = text;
         }
         function poll() {
@@ -429,6 +458,7 @@ export function renderSectorAppShell(options: SectorAppShellOptions): string {
       <a class="nav-rail__item inline-flex items-center justify-center text-muted" href="/comms" aria-label="Online Communications dashboard" title="Online Communications"><i class="bi bi-envelope-paper" aria-hidden="true"></i></a>
       <a class="nav-rail__item inline-flex items-center justify-center text-muted" href="/jd" aria-label="Job Descriptions" title="Job Descriptions"><i class="bi bi-file-earmark-person" aria-hidden="true"></i></a>
       <a class="nav-rail__item inline-flex items-center justify-center text-muted" href="/wiki" aria-label="Things To Know" title="Things To Know"><i class="bi bi-journal-bookmark" aria-hidden="true"></i></a>
+      <a class="nav-rail__item inline-flex items-center justify-center text-muted" href="/budget" aria-label="Budget" title="Budget"><i class="bi bi-piggy-bank" aria-hidden="true"></i></a>
       <a class="nav-rail__item inline-flex items-center justify-center text-muted" href="/snippets" aria-label="Code Snippets" title="Code Snippets"><i class="bi bi-code-slash" aria-hidden="true"></i></a>
       <a class="nav-rail__item inline-flex items-center justify-center text-muted" href="/subscriptions" aria-label="Links" title="Links"><i class="bi bi-credit-card" aria-hidden="true"></i></a>
       <a class="nav-rail__item inline-flex items-center justify-center text-muted nav-rail__item--current" href="/sector" aria-label="Sector Insight" title="Sector Insight" aria-current="page"><i class="bi bi-binoculars" aria-hidden="true"></i></a>

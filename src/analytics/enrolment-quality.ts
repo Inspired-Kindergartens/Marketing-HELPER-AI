@@ -297,6 +297,35 @@ export function resolveCapacityForMonth(
   return avgLicence > 0 ? { capacity: avgLicence, under2: licenceU2, source: "licence" } : null;
 }
 
+// Infocare Analytics uses the same capacity: the user's places in force in
+// the snapshot's month replace the licence, and the ratios that divide by it
+// are worked out again. Applied at read time only; the stored snapshot (the
+// Infocare licence) is never changed. With no figures set, unchanged.
+export function withOperatingCapacity<T extends {
+  date: string;
+  enrolledCount: number;
+  bookedAverageDailyCount: number;
+  licensedCapacity: number;
+  licensedUnder2Capacity?: number | null;
+  licensedOver2Capacity?: number | null;
+  enrolmentRatio: number;
+  bookedUtilisationRatio: number;
+}>(snapshot: T, centreCapacities: readonly OperatingCapacity[]): T {
+  const entry = capacityEntryForMonth(snapshot.date.slice(0, 7), centreCapacities);
+  if (!entry || entry.capacity <= 0) return snapshot;
+  const capacity = Math.round(entry.capacity);
+  const under2 = entry.under2Capacity ?? snapshot.licensedUnder2Capacity ?? null;
+  return {
+    ...snapshot,
+    licensedCapacity: capacity,
+    licensedUnder2Capacity: under2,
+    licensedOver2Capacity: snapshot.licensedOver2Capacity != null || under2 != null ? Math.max(capacity - (under2 ?? 0), 0) : null,
+    enrolmentRatio: snapshot.enrolledCount / capacity,
+    // Snapshots without bookings keep 0 ("not known"), as computed.
+    bookedUtilisationRatio: snapshot.bookedAverageDailyCount > 0 ? snapshot.bookedAverageDailyCount / capacity : snapshot.bookedUtilisationRatio,
+  };
+}
+
 // --- Months ----------------------------------------------------------------
 
 export function monthKey(date: Date): string {

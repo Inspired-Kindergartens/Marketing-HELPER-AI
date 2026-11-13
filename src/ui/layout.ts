@@ -1,4 +1,5 @@
 import { renderPanel } from "./panel.js";
+import { SPINNER_CLASS } from "./action-buttons.js";
 
 type LayoutPanel = {
   id: string;
@@ -21,8 +22,8 @@ type LayoutOptions = {
   openPanelId?: string | null;
 };
 
-// A download/refresh action button navigates to an /actions route that does
-// server work then reloads the page. Swap its download icon for a spinner the
+// A refresh link (renderRefreshAction) navigates to an /actions route that
+// does server work then reloads the page. Its refresh icon starts spinning the
 // moment it is clicked so the wait is visible; the spinner lives until the
 // fresh page replaces the markup. Shared by every layout (incl. focus mode).
 const DOWNLOAD_SPINNER_SCRIPT = `
@@ -30,10 +31,10 @@ const DOWNLOAD_SPINNER_SCRIPT = `
       (function() {
         document.addEventListener("click", function(event) {
           var target = event.target;
-          var icon = target instanceof Element ? target.closest(".panel-action-button .bi-download") : null;
+          var link = target instanceof Element ? target.closest("a.action-refresh") : null;
+          var icon = link && link.querySelector(".bi");
           if (!icon) return;
-          icon.classList.remove("bi-download");
-          icon.classList.add("bi-arrow-repeat", "panel-action-button__spinner");
+          icon.classList.add("${SPINNER_CLASS}");
         });
       })();
     </script>

@@ -335,7 +335,7 @@ test("comms shell preserves the Webmail Meta advert filter beside the email wind
   assert.match(html, /analytics-toolbar__window analytics-toolbar__window--active" href="\/comms\?window=6M&panel=comms-postmark&metaAdsFilter=active-recent">6M<\/a>/);
   assert.match(html, /href="\/comms\?window=6M&panel=comms-postmark">All emails<\/a>/);
   assert.match(html, /analytics-toolbar__window analytics-toolbar__window--active" href="\/comms\?window=6M&panel=comms-postmark&metaAdsFilter=active-recent">Meta active\/recent \(4\)<\/a>/);
-  assert.match(html, /href="\/actions\/check-postmark\?window=6M&metaAdsFilter=active-recent"/);
+  assert.match(html, /href="\/actions\/check-postmark\?window=6M&amp;metaAdsFilter=active-recent"/);
 });
 
 test("centre activity alignment excludes Formstack submission counts", () => {

@@ -71,6 +71,7 @@ function renderCentreRow(centre: SectorCentreView): string {
 
   return `
     <tr data-sector-row
+      data-sector-id="${centre.id}"
       data-search="${escapeHtml(search)}"
       data-city="${escapeHtml(centre.city)}"
       data-type="${escapeHtml(centre.serviceType)}"

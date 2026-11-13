@@ -1,0 +1,1078 @@
+{
+  "source": "Budget Calculator 2024-25.xlsx, 2025-26.xlsx and 2026-27.xlsx (D:\\iK\\Documents), extracted 2026-11-12",
+  "importedThrough": "2026-09",
+  "years": [
+    {
+      "startYear": 2024,
+      "operatingBudget": 24000.0,
+      "notes": "Spend is derived from the financial year from July 2024 to April 2025 period. Purchase costs for the remainder of 2025 to July was estimated at current spending average over the entire period to April which may inflate the spend cost above an actual spend as it was not in the beginning. This over estimation of Purchase spend will be negated by inflation of costs in Purchases and in the Subscriptions spend for the next fiancial year. \n\nFuture Projects as already discussed with PM is the upgrade of our photograph assets, in particular to update the images on our website which some are a decade old. Images from this project can be used as collateral and to shore up the confusion over consent for our current images which should be archived once this project is complete.",
+      "subscriptions": [
+        {
+          "key": "google-ads",
+          "name": "Google Ads",
+          "amount": 57.29,
+          "frequency": "month",
+          "status": "active",
+          "tally": 0,
+          "note": ""
+        },
+        {
+          "key": "anthropic-claude",
+          "name": null,
+          "amount": 40.22,
+          "frequency": "month",
+          "status": "active",
+          "tally": 0,
+          "note": "Named OpenAI Chatgpt that year"
+        },
+        {
+          "key": "mailchimp",
+          "name": "Mailchimp",
+          "amount": 28.74,
+          "frequency": "month",
+          "status": "active",
+          "tally": 0,
+          "note": ""
+        },
+        {
+          "key": "zoom",
+          "name": "Zoom",
+          "amount": 84.22,
+          "frequency": "month",
+          "status": "active",
+          "tally": 0,
+          "note": ""
+        },
+        {
+          "key": "survey-monkey",
+          "name": "Survey Monkey",
+          "amount": 42.61,
+          "frequency": "month",
+          "status": "active",
+          "tally": 0,
+          "note": ""
+        },
+        {
+          "key": "youtube",
+          "name": "Youtube",
+          "amount": 17.99,
+          "frequency": "month",
+          "status": "active",
+          "tally": 0,
+          "note": ""
+        },
+        {
+          "key": "midjourney",
+          "name": "Midjourney",
+          "amount": 172.32,
+          "frequency": "year",
+          "status": "active",
+          "tally": 0,
+          "note": ""
+        },
+        {
+          "key": "blacksheep",
+          "name": null,
+          "amount": 195.0,
+          "frequency": "quarter",
+          "status": "active",
+          "tally": 0,
+          "note": "Named Enlighten Blacksheep that year"
+        },
+        {
+          "key": "adobe-creative-cloud",
+          "name": "Adobe Creative Cloud",
+          "amount": 971.68,
+          "frequency": "year",
+          "status": "active",
+          "tally": 0,
+          "note": ""
+        },
+        {
+          "key": "formstack",
+          "name": "Formstack",
+          "amount": 1096.72,
+          "frequency": "year",
+          "status": "active",
+          "tally": 0,
+          "note": ""
+        },
+        {
+          "key": "unbound",
+          "name": "Unbound",
+          "amount": 640.0,
+          "frequency": "month",
+          "status": "ended",
+          "tally": 4,
+          "note": ""
+        }
+      ],
+      "expenses": [
+        {
+          "supplier": "Kale",
+          "group": "Kale Print",
+          "amount": 670.0,
+          "note": "Welcome Guides"
+        },
+        {
+          "supplier": "Kale",
+          "group": "Kale Print",
+          "amount": 123.0,
+          "note": "Homebase Flyers"
+        },
+        {
+          "supplier": "Kale",
+          "group": "Kale Print",
+          "amount": 208.76,
+          "note": "Business Cards"
+        },
+        {
+          "supplier": "Kale",
+          "group": "Kale Print",
+          "amount": 133.92,
+          "note": "Business Cards"
+        },
+        {
+          "supplier": "Kale",
+          "group": "Kale Print",
+          "amount": 192.0,
+          "note": "Corflute Signs OPEYS Reno"
+        },
+        {
+          "supplier": "Kale",
+          "group": "Kale Print",
+          "amount": 133.92,
+          "note": "Business Cards"
+        },
+        {
+          "supplier": "Kale",
+          "group": "Kale Print",
+          "amount": 210.0,
+          "note": "Brochures OPEYS Reno"
+        },
+        {
+          "supplier": "Kale",
+          "group": "Kale Print",
+          "amount": 1954.0,
+          "note": "Folders"
+        },
+        {
+          "supplier": "Kale",
+          "group": "Kale Print",
+          "amount": 179.0,
+          "note": "Business Cards"
+        },
+        {
+          "supplier": "Kale",
+          "group": "Kale Print",
+          "amount": 136.0,
+          "note": "Flyers"
+        },
+        {
+          "supplier": "Kale",
+          "group": "Kale Print",
+          "amount": 753.0,
+          "note": "Welcome Guides"
+        },
+        {
+          "supplier": "Kale",
+          "group": "Kale Print",
+          "amount": 139.0,
+          "note": "Business Cards"
+        },
+        {
+          "supplier": "Kale",
+          "group": "Kale Print",
+          "amount": 203.0,
+          "note": "Business Cards"
+        },
+        {
+          "supplier": "Kale",
+          "group": "Kale Print",
+          "amount": 104.0,
+          "note": "Flyers"
+        },
+        {
+          "supplier": "PB Technologies",
+          "group": "PB Technologies",
+          "amount": 1400.0,
+          "note": "DJI Drone"
+        },
+        {
+          "supplier": "Black Sheep",
+          "group": "Black Sheep",
+          "amount": 414.0,
+          "note": "Emergency Communications"
+        },
+        {
+          "supplier": "PB Technologies",
+          "group": "PB Technologies",
+          "amount": 23.69,
+          "note": "4 Pt USB Hub"
+        },
+        {
+          "supplier": "Bunnings",
+          "group": "Bunnings",
+          "amount": 8.39,
+          "note": "Screws Welcomebay Sign"
+        },
+        {
+          "supplier": "Warehouse Stationary",
+          "group": "Warehouse Stationary",
+          "amount": 119.97,
+          "note": "Ext HD"
+        },
+        {
+          "supplier": "Noel Leeming",
+          "group": "Noel Leeming",
+          "amount": 122.99,
+          "note": "USB Cable + MicoSDx2"
+        },
+        {
+          "supplier": "Kmart",
+          "group": "Kmart",
+          "amount": 3.0,
+          "note": "Santa Hat OPEYS Reno"
+        },
+        {
+          "supplier": "Toolshed",
+          "group": "Toolshed",
+          "amount": 30.96,
+          "note": "OPEYS Reno"
+        },
+        {
+          "supplier": "Infocare",
+          "group": "Infocare",
+          "amount": 0.2,
+          "note": "Emergency Communications"
+        },
+        {
+          "supplier": "Infocare",
+          "group": "Infocare",
+          "amount": 0.1,
+          "note": "Emergency Communications"
+        },
+        {
+          "supplier": "Facebook",
+          "group": "Facebook",
+          "amount": 2102.6,
+          "note": ""
+        },
+        {
+          "supplier": "Google",
+          "group": "Google",
+          "amount": 538.09,
+          "note": "Ads"
+        },
+        {
+          "supplier": "Kmart",
+          "group": "Kmart",
+          "amount": 56.7,
+          "note": "Careers Expo"
+        },
+        {
+          "supplier": "Emroid Me",
+          "group": "Emroid Me",
+          "amount": 918.0,
+          "note": ""
+        },
+        {
+          "supplier": "Kmart",
+          "group": "Kmart",
+          "amount": 2.61,
+          "note": "OPEYS Reno"
+        }
+      ],
+      "futureSpends": [
+        {
+          "project": "Future Savings",
+          "supplier": "Zoom",
+          "amount": -1010.64,
+          "qty": 1,
+          "note": "Saving (deduction)",
+          "status": "planned"
+        },
+        {
+          "project": "Future Savings",
+          "supplier": "Mailchimp",
+          "amount": -344.88,
+          "qty": 1,
+          "note": "Saving (deduction)",
+          "status": "planned"
+        },
+        {
+          "project": "Photography - Website/Facebook Update",
+          "supplier": "",
+          "amount": 6000.0,
+          "qty": 1,
+          "note": "",
+          "status": "planned"
+        }
+      ],
+      "workbook": {
+        "subscriptions": 5455.27,
+        "purchases": 10880.9,
+        "endedSubscriptions": 2560.0,
+        "actualSpend": 18896.17,
+        "note": "Actual Spend in this workbook includes ended subscriptions"
+      }
+    },
+    {
+      "startYear": 2025,
+      "operatingBudget": 30000.0,
+      "notes": "The financial year from 1 July 2025 to 30 June 2026.\n\nSubscriptions: \n  • Blacksheep have increased their quarterly fee from $195 to $274.85 (41% increase) to our hosting of website. \n  • The largest increase of 179% was Midjourney Yearly subscription (20% discount) as subscription tier increased due to an incereased reliance. \n  • Despite increases in subscriptions cost, overall costs are down by 18% as we eliminated unnecessary subscriptions.\n  • Google Advertising has been reduced to 0 spend in January 2026 as we transitioned away from Homebased services. Reinstatement of regular spenditure has not been realised as Communications continue to monitor performance.\n\nPurchases: \n  • Kale Print continues to trend to be the biggest expenditure with about 30% of purchases.\n  • Media Works Campaign was about 30%\n  • Facebook Advertising expenditure is third highest with trending towards about 13%\n  • Homebased expenditure was alleviated from the Marketing spend so it is lower than shown.\n\nFuture Spends: \n  • Audio recording equipment for ongoing Quasar training modules and Josie Brown recording of her music. Currently we are using Eli's personal equipment.\n\nBudget: \n\nThe budget was increased from previous term from $24K to $30K (25%↑). Next year's forecast at current increase is $37.5K.\n\nSubscription notes:\nInc (incerease) is calculated from previous year's budget.\n\nRemoval of Zoom and Survey Monkey subs as unnecessary. Google Advertising has been reduced to 0 spend in January as we transitioned away from Homebased services. Reinstatement of regular spenditure has not been realised as Communications continue to monitor performance.\n\nWe don't currently spend on Infocare Emergency Comms but is the projected outcome for testing the emergency communications with txt per quarter.",
+      "subscriptions": [
+        {
+          "key": "google-ads",
+          "name": "Google Ads",
+          "amount": 57.29,
+          "frequency": "month",
+          "status": "ended",
+          "tally": 12,
+          "note": ""
+        },
+        {
+          "key": "anthropic-claude",
+          "name": null,
+          "amount": 40.22,
+          "frequency": "month",
+          "status": "active",
+          "tally": 0,
+          "note": "Named OpenAI Chatgpt that year"
+        },
+        {
+          "key": "mailchimp",
+          "name": "Mailchimp",
+          "amount": 28.76,
+          "frequency": "month",
+          "status": "active",
+          "tally": 0,
+          "note": ""
+        },
+        {
+          "key": "youtube",
+          "name": "Youtube",
+          "amount": 22.99,
+          "frequency": "month",
+          "status": "active",
+          "tally": 0,
+          "note": ""
+        },
+        {
+          "key": "midjourney",
+          "name": "Midjourney",
+          "amount": 480.16,
+          "frequency": "year",
+          "status": "active",
+          "tally": 0,
+          "note": ""
+        },
+        {
+          "key": "blacksheep",
+          "name": null,
+          "amount": 274.85,
+          "frequency": "quarter",
+          "status": "active",
+          "tally": 0,
+          "note": "Named Enlighten Blacksheep that year"
+        },
+        {
+          "key": "adobe-creative-cloud",
+          "name": "Adobe Creative Cloud",
+          "amount": 1314.0,
+          "frequency": "year",
+          "status": "active",
+          "tally": 0,
+          "note": ""
+        },
+        {
+          "key": "formstack",
+          "name": "Formstack",
+          "amount": 1171.72,
+          "frequency": "year",
+          "status": "active",
+          "tally": 0,
+          "note": ""
+        },
+        {
+          "key": "infocare-emergency-comms",
+          "name": "Infocare Emergency Comms",
+          "amount": 268.64,
+          "frequency": "quarter",
+          "status": "active",
+          "tally": 0,
+          "note": ""
+        },
+        {
+          "key": "zoom",
+          "name": "Zoom",
+          "amount": 84.22,
+          "frequency": "month",
+          "status": "ended",
+          "tally": 12,
+          "note": ""
+        },
+        {
+          "key": "survey-monkey",
+          "name": "Survey Monkey",
+          "amount": 42.61,
+          "frequency": "month",
+          "status": "ended",
+          "tally": 12,
+          "note": ""
+        }
+      ],
+      "expenses": [
+        {
+          "supplier": "Facebook",
+          "group": "Facebook",
+          "amount": 117.79,
+          "note": ""
+        },
+        {
+          "supplier": "Facebook",
+          "group": "Facebook",
+          "amount": 285.19,
+          "note": ""
+        },
+        {
+          "supplier": "Facebook",
+          "group": "Facebook",
+          "amount": 654.67,
+          "note": ""
+        },
+        {
+          "supplier": "Facebook",
+          "group": "Facebook",
+          "amount": 706.07,
+          "note": ""
+        },
+        {
+          "supplier": "Facebook",
+          "group": "Facebook",
+          "amount": 0.02,
+          "note": ""
+        },
+        {
+          "supplier": "Facebook",
+          "group": "Facebook",
+          "amount": 284.37,
+          "note": ""
+        },
+        {
+          "supplier": "Facebook",
+          "group": "Facebook",
+          "amount": 12.1,
+          "note": ""
+        },
+        {
+          "supplier": "Facebook",
+          "group": "Facebook",
+          "amount": 69.15,
+          "note": ""
+        },
+        {
+          "supplier": "Infocare",
+          "group": "Infocare",
+          "amount": 268.14,
+          "note": "Emergency Communications"
+        },
+        {
+          "supplier": "Black Sheep",
+          "group": "Black Sheep",
+          "amount": 414.0,
+          "note": "Website Upgrade"
+        },
+        {
+          "supplier": "Kale Print",
+          "group": "Kale Print",
+          "amount": 125.35,
+          "note": "Values Posters"
+        },
+        {
+          "supplier": "Kale Print",
+          "group": "Kale Print",
+          "amount": 641.7,
+          "note": "OTA Signage"
+        },
+        {
+          "supplier": "Kale Print",
+          "group": "Kale Print",
+          "amount": 274.85,
+          "note": "ARA signage"
+        },
+        {
+          "supplier": "Kale Print",
+          "group": "Kale Print",
+          "amount": 108.1,
+          "note": "Values Posters"
+        },
+        {
+          "supplier": "Kale Print",
+          "group": "Kale Print",
+          "amount": 194.35,
+          "note": "Values Posters"
+        },
+        {
+          "supplier": "Kale Print",
+          "group": "Kale Print",
+          "amount": 143.75,
+          "note": "Bus Cards Maa"
+        },
+        {
+          "supplier": "Kale Print",
+          "group": "Kale Print",
+          "amount": 121.9,
+          "note": "Strat Plan"
+        },
+        {
+          "supplier": "Kale Print",
+          "group": "Kale Print",
+          "amount": 120.75,
+          "note": "Flyers"
+        },
+        {
+          "supplier": "Kale Print",
+          "group": "Kale Print",
+          "amount": 998.2,
+          "note": "Signage"
+        },
+        {
+          "supplier": "Kale Print",
+          "group": "Kale Print",
+          "amount": 839.5,
+          "note": "Enviro Signage"
+        },
+        {
+          "supplier": "Kale Print",
+          "group": "Kale Print",
+          "amount": 64.4,
+          "note": "Values Posters"
+        },
+        {
+          "supplier": "Kale Print",
+          "group": "Kale Print",
+          "amount": 103.5,
+          "note": "Values Posters"
+        },
+        {
+          "supplier": "Kale Print",
+          "group": "Kale Print",
+          "amount": 134.55,
+          "note": "Values Posters"
+        },
+        {
+          "supplier": "Kale Print",
+          "group": "Kale Print",
+          "amount": 143.75,
+          "note": "Bus Cards Broo"
+        },
+        {
+          "supplier": "Kale Print",
+          "group": "Kale Print",
+          "amount": 713.0,
+          "note": "Te Puna Roundabout"
+        },
+        {
+          "supplier": "Ramma Construction",
+          "group": "Ramma Construction",
+          "amount": 647.68,
+          "note": "OTA signage install"
+        },
+        {
+          "supplier": "PUMPT Advertising",
+          "group": "PUMPT Advertising",
+          "amount": 1725.0,
+          "note": "Post mail delivery service Karamuramu"
+        },
+        {
+          "supplier": "Warehouse Stationary",
+          "group": "Warehouse Stationary",
+          "amount": 25.5,
+          "note": ""
+        },
+        {
+          "supplier": "Warehouse Stationary",
+          "group": "Warehouse Stationary",
+          "amount": 17.0,
+          "note": ""
+        },
+        {
+          "supplier": "Music Works",
+          "group": "Music Works",
+          "amount": 199.0,
+          "note": "Audio Equip"
+        },
+        {
+          "supplier": "Dulux",
+          "group": "Dulux",
+          "amount": 17.8,
+          "note": "Stationary"
+        },
+        {
+          "supplier": "Maunganui Road Pharmacy",
+          "group": "Maunganui Road Pharmacy",
+          "amount": 4.2,
+          "note": ""
+        },
+        {
+          "supplier": "Tauranga City Lotto",
+          "group": "Tauranga City Lotto",
+          "amount": 746.54,
+          "note": "Gift Cards - Parent Survey"
+        },
+        {
+          "supplier": "Prestige Framing & Gallery",
+          "group": "Prestige Framing & Gallery",
+          "amount": 240.0,
+          "note": "Values"
+        },
+        {
+          "supplier": "Bunnings Warehouse",
+          "group": "Bunnings Warehouse",
+          "amount": 35.76,
+          "note": "Signage Fixings"
+        },
+        {
+          "supplier": "Bunnings Warehouse",
+          "group": "Bunnings Warehouse",
+          "amount": 11.29,
+          "note": "Signage Fixings"
+        },
+        {
+          "supplier": "Carpark",
+          "group": "Carpark",
+          "amount": 1.0,
+          "note": "Stationary"
+        },
+        {
+          "supplier": "Canvas Champ",
+          "group": "Canvas Champ",
+          "amount": 376.15,
+          "note": "Values"
+        },
+        {
+          "supplier": "MediaWorks",
+          "group": "MediaWorks",
+          "amount": 3498.46,
+          "note": "BoB Adv Brookfield 2x"
+        },
+        {
+          "supplier": "MediaWorks",
+          "group": "MediaWorks",
+          "amount": 1067.86,
+          "note": "BoB Adv Homebased"
+        },
+        {
+          "supplier": "MediaWorks",
+          "group": "MediaWorks",
+          "amount": 390.18,
+          "note": "BoB Adv Homebased"
+        },
+        {
+          "supplier": "Bunnings Warehouse",
+          "group": "Bunnings Warehouse",
+          "amount": 48.73,
+          "note": "Whakamarama sign installation"
+        },
+        {
+          "supplier": "Toolshed",
+          "group": "Toolshed",
+          "amount": 17.9,
+          "note": "Whakamarama sign installation"
+        },
+        {
+          "supplier": "Jb HiFi",
+          "group": "Jb HiFi",
+          "amount": 249.0,
+          "note": "Computer mouse"
+        },
+        {
+          "supplier": "Gull",
+          "group": "Gull",
+          "amount": 40.0,
+          "note": "Petrol"
+        },
+        {
+          "supplier": "Car Park",
+          "group": "Car Park",
+          "amount": 5.0,
+          "note": "Conference"
+        },
+        {
+          "supplier": "Jaycar",
+          "group": "Jaycar",
+          "amount": 17.9,
+          "note": "Conference"
+        },
+        {
+          "supplier": "PB Tech",
+          "group": "PB Tech",
+          "amount": 16.5,
+          "note": "Conference"
+        }
+      ],
+      "futureSpends": [
+        {
+          "project": "Recording",
+          "supplier": "Music Works",
+          "amount": 429.0,
+          "qty": 1,
+          "note": "Zoom H5",
+          "status": "tbc"
+        },
+        {
+          "project": "Recording",
+          "supplier": "Music Works",
+          "amount": 119.0,
+          "qty": 3,
+          "note": "On-Stage MS9701TB+ Heavy-Duty Telescopic Boom Microphone Stand",
+          "status": "planned"
+        },
+        {
+          "project": "Recording",
+          "supplier": "Music Works",
+          "amount": 44.95,
+          "qty": 2,
+          "note": "Gator Cableworks GCWB-XLR-20 Backline Series Microphone Cable, XLR Female-XLR Male",
+          "status": "planned"
+        },
+        {
+          "project": "Recording",
+          "supplier": "Music Works",
+          "amount": 699.0,
+          "qty": 2,
+          "note": "sE Electronics X1 S Studio Bundle with Shockmount & Isolation Filter",
+          "status": "planned"
+        },
+        {
+          "project": "Recording",
+          "supplier": "Music Works",
+          "amount": 289.0,
+          "qty": 1,
+          "note": "sE Electronics sE7 sideFire Small-diaphragm Side-address Condenser Microphone",
+          "status": "planned"
+        },
+        {
+          "project": "Recording",
+          "supplier": "Bunnings",
+          "amount": 499.0,
+          "qty": 1,
+          "note": "ToughBuilt StackTech 2-Drawer Rolling Locking Box",
+          "status": "planned"
+        },
+        {
+          "project": "Recording",
+          "supplier": "Para Rubber",
+          "amount": 43.48,
+          "qty": 1,
+          "note": "Foam Insert -top drawer",
+          "status": "planned"
+        },
+        {
+          "project": "Recording",
+          "supplier": "Para Rubber",
+          "amount": 53.71,
+          "qty": 1,
+          "note": "Foam Insert -bottom drawer",
+          "status": "planned"
+        }
+      ],
+      "workbook": {
+        "subscriptions": 5429.11,
+        "purchases": 16937.6,
+        "futureSpends": 3159.09,
+        "endedSubscriptions": 2209.44,
+        "actualSpend": 22366.71,
+        "remaining": 7633.29
+      }
+    },
+    {
+      "startYear": 2026,
+      "operatingBudget": 60000.0,
+      "notes": "The financial year from 1 July 2026 to 30 June 2027.\n\nSubscriptions: \n\nPurchases: \n\nFuture Spends: \n  • Audio recording equipment for ongoing Quasar training modules and Josie Brown recording of her music. Currently we are using Eli's personal equipment. Policy training has changed so confirm with PM before purchase\n\nBudget:\n\nSubscription notes:\nInc (incerease) is calculated from previous year's budget.\n\nRemoval of Midjourney as we generate with ChatGPT.\n\nWe don't currently spend on Infocare Emergency Comms but is the projected outcome for testing the emergency communications with txt per quarter.",
+      "subscriptions": [
+        {
+          "key": "google-ads",
+          "name": "Google Ads",
+          "amount": 57.29,
+          "frequency": "month",
+          "status": "ended",
+          "tally": 12,
+          "note": ""
+        },
+        {
+          "key": "anthropic-claude",
+          "name": "Anthropic Claude",
+          "amount": 40.0,
+          "frequency": "month",
+          "status": "active",
+          "tally": 0,
+          "note": "Was OpenAI Chatgpt"
+        },
+        {
+          "key": "mailchimp",
+          "name": "Mailchimp",
+          "amount": 152.8,
+          "frequency": "year",
+          "status": "active",
+          "tally": 0,
+          "note": ""
+        },
+        {
+          "key": "youtube",
+          "name": "Youtube",
+          "amount": 22.99,
+          "frequency": "month",
+          "status": "active",
+          "tally": 0,
+          "note": ""
+        },
+        {
+          "key": "blacksheep",
+          "name": "Blacksheep",
+          "amount": 224.25,
+          "frequency": "quarter",
+          "status": "active",
+          "tally": 0,
+          "note": ""
+        },
+        {
+          "key": "adobe-creative-cloud",
+          "name": "Adobe Creative Cloud",
+          "amount": 1314.0,
+          "frequency": "year",
+          "status": "active",
+          "tally": 0,
+          "note": ""
+        },
+        {
+          "key": "formstack",
+          "name": "Formstack",
+          "amount": 1280.46,
+          "frequency": "year",
+          "status": "active",
+          "tally": 0,
+          "note": "Due July"
+        },
+        {
+          "key": "chatgpt",
+          "name": "ChatGPT",
+          "amount": 40.0,
+          "frequency": "month",
+          "status": "active",
+          "tally": 0,
+          "note": ""
+        },
+        {
+          "key": "suno-ai",
+          "name": "Suno.ai",
+          "amount": 21.33,
+          "frequency": "month",
+          "status": "active",
+          "tally": 0,
+          "note": ""
+        },
+        {
+          "key": "zoom",
+          "name": "Zoom",
+          "amount": 84.22,
+          "frequency": "month",
+          "status": "ended",
+          "tally": 12,
+          "note": ""
+        },
+        {
+          "key": "survey-monkey",
+          "name": "Survey Monkey",
+          "amount": 42.61,
+          "frequency": "month",
+          "status": "ended",
+          "tally": 12,
+          "note": ""
+        },
+        {
+          "key": "meta-google-ads-provider",
+          "name": "META & Google Ads Provider",
+          "amount": 800.0,
+          "frequency": "month",
+          "status": "ended",
+          "tally": 12,
+          "note": ""
+        }
+      ],
+      "expenses": [
+        {
+          "supplier": "Facebook",
+          "group": "Facebook",
+          "amount": 12.1,
+          "note": ""
+        },
+        {
+          "supplier": "Facebook",
+          "group": "Facebook",
+          "amount": 284.37,
+          "note": ""
+        },
+        {
+          "supplier": "Facebook",
+          "group": "Facebook",
+          "amount": 0.02,
+          "note": ""
+        },
+        {
+          "supplier": "Facebook",
+          "group": "Facebook",
+          "amount": 706.07,
+          "note": ""
+        },
+        {
+          "supplier": "Facebook",
+          "group": "Facebook",
+          "amount": 654.67,
+          "note": ""
+        },
+        {
+          "supplier": "Facebook",
+          "group": "Facebook",
+          "amount": 285.19,
+          "note": ""
+        },
+        {
+          "supplier": "Facebook",
+          "group": "Facebook",
+          "amount": 117.79,
+          "note": ""
+        },
+        {
+          "supplier": "Mailchimp",
+          "group": "Mailchimp",
+          "amount": 28.76,
+          "note": ""
+        },
+        {
+          "supplier": "Mailchimp",
+          "group": "Mailchimp",
+          "amount": 28.76,
+          "note": ""
+        },
+        {
+          "supplier": "Mailchimp",
+          "group": "Mailchimp",
+          "amount": 28.76,
+          "note": ""
+        },
+        {
+          "supplier": "CS Signs",
+          "group": "Office Signage",
+          "amount": 12032.9,
+          "note": ""
+        },
+        {
+          "supplier": "Prestige Plasterers",
+          "group": "Office Signage",
+          "amount": 3082.0,
+          "note": ""
+        },
+        {
+          "supplier": "Maker Supply",
+          "group": "Office Signage",
+          "amount": 101.0,
+          "note": ""
+        },
+        {
+          "supplier": "Bunnings",
+          "group": "Office Signage",
+          "amount": 59.3,
+          "note": ""
+        },
+        {
+          "supplier": "Bunnings",
+          "group": "Office Signage",
+          "amount": 18.99,
+          "note": ""
+        },
+        {
+          "supplier": "Bunnings",
+          "group": "Office Signage",
+          "amount": 229.21,
+          "note": ""
+        }
+      ],
+      "futureSpends": [
+        {
+          "project": "Recording",
+          "supplier": "Music Works",
+          "amount": 429.0,
+          "qty": 1,
+          "note": "Zoom H5",
+          "status": "tbc"
+        },
+        {
+          "project": "Recording",
+          "supplier": "Music Works",
+          "amount": 119.0,
+          "qty": 3,
+          "note": "On-Stage MS9701TB+ Heavy-Duty Telescopic Boom Microphone Stand",
+          "status": "planned"
+        },
+        {
+          "project": "Recording",
+          "supplier": "Music Works",
+          "amount": 44.95,
+          "qty": 2,
+          "note": "Gator Cableworks GCWB-XLR-20 Backline Series Microphone Cable, XLR Female-XLR Male",
+          "status": "planned"
+        },
+        {
+          "project": "Recording",
+          "supplier": "Music Works",
+          "amount": 699.0,
+          "qty": 2,
+          "note": "sE Electronics X1 S Studio Bundle with Shockmount & Isolation Filter",
+          "status": "planned"
+        },
+        {
+          "project": "Recording",
+          "supplier": "Music Works",
+          "amount": 289.0,
+          "qty": 1,
+          "note": "sE Electronics sE7 sideFire Small-diaphragm Side-address Condenser Microphone",
+          "status": "planned"
+        },
+        {
+          "project": "Recording",
+          "supplier": "Bunnings",
+          "amount": 499.0,
+          "qty": 1,
+          "note": "ToughBuilt StackTech 2-Drawer Rolling Locking Box",
+          "status": "planned"
+        },
+        {
+          "project": "Recording",
+          "supplier": "Para Rubber",
+          "amount": 43.48,
+          "qty": 1,
+          "note": "Foam Insert -top drawer",
+          "status": "planned"
+        },
+        {
+          "project": "Recording",
+          "supplier": "Para Rubber",
+          "amount": 53.71,
+          "qty": 1,
+          "note": "Foam Insert -bottom drawer",
+          "status": "planned"
+        }
+      ],
+      "workbook": {
+        "subscriptions": 4466.17,
+        "purchases": 17669.89,
+        "futureSpends": 3159.09,
+        "endedSubscriptions": 11809.44,
+        "actualSpend": 22136.06,
+        "remaining": 37863.94
+      }
+    }
+  ]
+}

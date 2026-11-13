@@ -1,7 +1,6 @@
 import { prisma } from "../db.js";
 import { normalizeLinkUrl } from "./link-url.js";
 import { categorisePromotion } from "../sector/promotions.js";
-import { centreOpenedLabel } from "../sector/ero.js";
 import type { SectorQueryCentre } from "../sector/query.js";
 
 // Sector Insight storage: competitor and other ECE centres, the promotions
@@ -229,52 +228,4 @@ export async function listSectorCrawlRuns(limit = 12): Promise<SectorCrawlRunVie
     promotionsEnded: row.promotionsEnded,
     message: row.message,
   }));
-}
-
-// --- CSV export ---------------------------------------------------------------
-
-function csvCell(value: unknown): string {
-  const text = value == null ? "" : String(value);
-  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
-}
-
-function yesNo(value: boolean | null): string {
-  return value === true ? "Yes" : value === false ? "No" : "";
-}
-
-// The same columns as the BOP competitor spreadsheet, then the directory
-// fields, so the export opens straight into the team's existing sheet.
-export function sectorCentresToCsv(centres: readonly SectorCentreView[]): string {
-  const header = [
-    "Centre", "Operator / service group", "Promotion category", "Meals", "Transport", "City", "Suburb",
-    "Operator source URL", "Promotion source URL", "Service type", "Ownership", "District", "Address",
-    "Licensed places", "Under-2 places", "Roll", "Phone", "Email", "MoE licence number", "Inspired centre", "Notes",
-    "Opened (from ERO)", "Opened source",
-  ];
-  const rows = centres.map((centre) => [
-    centre.name,
-    centre.operator || "Unverified",
-    centre.promotions.map((promotion) => promotion.text).join("; "),
-    centre.meals || yesNo(centre.providesMeals),
-    centre.transport || yesNo(centre.providesTransport),
-    centre.city,
-    centre.suburb,
-    centre.website,
-    centre.promotions[0]?.sourceUrl || centre.promotionUrl,
-    centre.serviceType,
-    centre.authority,
-    centre.district,
-    centre.address,
-    centre.licensedPlaces,
-    centre.under2Places,
-    centre.roll,
-    centre.phone,
-    centre.email,
-    centre.eceId,
-    centre.isOwn ? "Yes" : "",
-    centre.notes,
-    centreOpenedLabel(centre),
-    centre.openedEvidence,
-  ]);
-  return [header, ...rows].map((row) => row.map(csvCell).join(",")).join("\r\n");
 }

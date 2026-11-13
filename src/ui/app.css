@@ -765,6 +765,8 @@ button:focus-visible {
 .analytics-table-shell {
   min-height: 0;
   height: 100%;
+  /* Filter row, then the table takes the rest and scrolls. */
+  grid-template-rows: auto minmax(0, 1fr);
 }
 
 .analytics-toolbar {
@@ -912,6 +914,58 @@ button:focus-visible {
 .enrolment-quality__table tbody tr.enrolment-quality__total-row,
 .enrolment-quality__table tbody tr.enrolment-quality__total-row:hover {
   background: var(--color-row-total);
+}
+
+/* A table's total or group row (Budget): the same shade as the All kindergartens row. */
+.data-table tbody tr.data-table__total-row,
+.data-table tbody tr.data-table__total-row:hover {
+  background: var(--color-row-total);
+}
+
+/* Budget totals sit in the narrower right-hand column: two tiles a row. */
+.google-analytics-summary.budget-summary {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+/* Budget purchases: one card per category, three a row. */
+.budget-purchase-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+/* Every purchase row on a card the same height, with or without the
+   edit/delete buttons (Meta rows have none), so the cards line up. */
+[data-budget-card] .data-table td {
+  height: 44px;
+}
+
+/* From a seventh card on (a third row of cards), the rows tighten so the
+   Purchases panel takes less of the screen. */
+.budget-purchase-grid:has(> .budget-purchase-card:nth-child(7)) .data-table td {
+  height: 30px;
+  padding-top: 2px;
+  padding-bottom: 2px;
+}
+
+.budget-purchase-grid:has(> .budget-purchase-card:nth-child(7)) .data-table .button-remove {
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+.budget-purchase-card {
+  min-width: 0;
+  padding: 12px;
+}
+
+/* A card opens its full list in the right-hand column. */
+.budget-purchase-grid .budget-purchase-card {
+  cursor: pointer;
+}
+
+/* Layout classes set display, so hidden needs saying. */
+[data-budget-fragment][hidden],
+[data-budget-category][hidden],
+[data-budget-cancel][hidden] {
+  display: none;
 }
 
 /* --- Enrolment Quality: trend lines (colours from theme tokens only) --- */

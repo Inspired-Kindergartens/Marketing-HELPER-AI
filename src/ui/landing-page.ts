@@ -90,6 +90,28 @@ function renderAiModelReminderItem(reminder: AiModelReminder): string {
   `;
 }
 
+export type BudgetReminder = {
+  month: string; // YYYY-MM the reminder is for
+  monthLabel: string; // "November"
+  lastAddedAt: string | null; // "12 November 2026, 1:42 pm"
+};
+
+// No expense added for a month: from its 3rd-to-last day until one is added
+// for it or it is dismissed (that month only).
+function renderBudgetReminderItem(reminder: BudgetReminder): string {
+  return `
+    <div class="landing-reminder flex flex-col gap-4 text-body" data-budget-reminder="${escapeHtml(reminder.month)}">
+      <span class="landing-reminder__due label-case text-muted">Budget</span>
+      <span class="landing-reminder__title font-strong text-strong">No expenses added for ${escapeHtml(reminder.monthLabel)}</span>
+      <span class="landing-reminder__meta text-muted">${reminder.lastAddedAt ? `Last expense added ${escapeHtml(reminder.lastAddedAt)}` : "No expenses added yet"}</span>
+      <span class="flex flex-wrap gap-8">
+        <form action="/budget" method="get"><input type="hidden" name="panel" value="budget-purchases" /><button type="submit">Add expense</button></form>
+        <button type="button" data-dismiss-budget-reminder="${escapeHtml(reminder.month)}">Dismiss</button>
+      </span>
+    </div>
+  `;
+}
+
 export type KtcaReminder = {
   expired: boolean;
   daysUntilExpiry: number;
@@ -132,6 +154,7 @@ export function renderReminders(
   reminders: TaskReminderFeed | undefined,
   ktcaReminder?: KtcaReminder | null,
   aiModelReminder?: AiModelReminder | null,
+  budgetReminder?: BudgetReminder | null,
 ): string {
   const taskItems = reminders
     ? [
@@ -141,16 +164,17 @@ export function renderReminders(
     : [];
   const items = [
     ...(aiModelReminder ? [renderAiModelReminderItem(aiModelReminder)] : []),
+    ...(budgetReminder ? [renderBudgetReminderItem(budgetReminder)] : []),
     ...(ktcaReminder ? [renderKtcaReminderItem(ktcaReminder)] : []),
     ...taskItems,
   ].join("");
-  const total = (reminders?.total ?? 0) + (ktcaReminder ? 1 : 0) + (aiModelReminder ? 1 : 0);
+  const total = (reminders?.total ?? 0) + (ktcaReminder ? 1 : 0) + (aiModelReminder ? 1 : 0) + (budgetReminder ? 1 : 0);
   if (total === 0) return "";
   const overdueCount = (reminders?.overdue.length ?? 0) + (ktcaReminder ? 1 : 0);
   const heading =
     overdueCount > 0
       ? `${overdueCount} overdue · ${total} need attention`
-      : aiModelReminder
+      : aiModelReminder || budgetReminder
         ? `${total} need${total === 1 ? "s" : ""} attention`
         : `${total} due soon`;
   return `
@@ -286,6 +310,7 @@ export type LandingPageOptions = {
   intelligenceFeed?: LandingIntelligenceFeed;
   ktcaReminder?: KtcaReminder | null;
   aiModelReminder?: AiModelReminder | null;
+  budgetReminder?: BudgetReminder | null;
   postmarkAlert?: PostmarkAlert | null;
 };
 
@@ -296,22 +321,23 @@ export function renderLandingPage(options: LandingPageOptions = {}) {
     { label: "General Chat", description: "General help with saved conversations", href: "/chat", primary: true },
     { label: "Communications", description: "Postmark, Mailchimp & Formstack", href: "/comms", primary: false },
     { label: "Job Descriptions", description: "AI blurbs & PDF job descriptions", href: "/jd", primary: false },
-    { label: "Things To Know", description: "Marketing wiki wired into AI chat", href: "/wiki", primary: false },
+    { label: "Budget", description: "Subscriptions, purchases & future spends", href: "/budget", primary: false },
   ];
 
   const secondaryTiles = [
     { label: "Read Me", href: "/readme", external: false },
-    { label: "Open Upscalar", href: "upscalar://open", external: false },
+    { label: "Upscalar", href: "upscalar://open", external: false },
     { label: "SharePoint", href: "https://ikindergartens.sharepoint.com/", external: true },
     { label: "Website", href: "https://inspiredkindergartens.nz/admin/", external: true },
-    { label: "Code Snippets", href: "/snippets", external: false },
+    { label: "Code", href: "/snippets", external: false },
     { label: "Links", href: "/subscriptions", external: false },
     { label: "Sector Insight", href: "/sector", external: false },
+    { label: "WIKI", href: "/wiki", external: false },
   ];
 
   const placeholderTiles: string[] = [];
 
-  const remindersHtml = renderReminders(options.reminders, options.ktcaReminder, options.aiModelReminder);
+  const remindersHtml = renderReminders(options.reminders, options.ktcaReminder, options.aiModelReminder, options.budgetReminder);
 
   const secondaryTileRow = secondaryTiles
     .map(
@@ -575,6 +601,30 @@ export function renderLandingPage(options: LandingPageOptions = {}) {
         }
         buttons.forEach(function (button) { button.addEventListener("click", startUpdate); });
       })();
+      document.addEventListener("click", function (event) {
+        var dismiss = event.target.closest("[data-dismiss-budget-reminder]");
+        if (!dismiss) return;
+        dismiss.disabled = true;
+        fetch("/actions/dismiss-budget-reminder", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ month: dismiss.getAttribute("data-dismiss-budget-reminder") }),
+        })
+          .then(function (res) { return res.json(); })
+          .then(function (payload) {
+            if (!payload.ok) throw new Error("Dismiss failed");
+            var strip = document.querySelector("[data-reminders-strip]");
+            if (!strip) return;
+            var wrapper = document.createElement("div");
+            wrapper.innerHTML = payload.html;
+            if (wrapper.firstElementChild) strip.replaceWith(wrapper.firstElementChild);
+            else strip.remove();
+          })
+          .catch(function () {
+            dismiss.disabled = false;
+            dismiss.textContent = "Dismiss failed";
+          });
+      });
       document.addEventListener("click", function (event) {
         var dismiss = event.target.closest("[data-dismiss-ai-recommendation]");
         if (!dismiss) return;

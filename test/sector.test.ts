@@ -392,7 +392,10 @@ test("Sector Insight page: competitors only, promotion filter on by default, cha
   assert.doesNotMatch(html, /Also show/);
   assert.match(html, /Updated 22 Oct 2026/);
   assert.match(html, /50% off for 4 months/);
-  assert.match(html, /href="\/api\/sector\/export\.csv"/);
+  // Print (PDF of the centres shown) and Update now: icons only, no text.
+  assert.match(html, /class="panel-action-button action-print" href="\/api\/sector\/pdf" download data-sector-print/);
+  assert.match(html, /class="panel-action-button action-refresh" type="button" data-sector-sync/);
+  assert.doesNotMatch(html, /export\.csv|Update now<\/span>/);
   assert.match(html, /<th>Opened<\/th>/);
   assert.match(html, /<td data-sector-opened><span title="BestStart Greerton opened in August 2018\.">Aug 2018<\/span><\/td>/);
   assert.match(html, /colspan="8"/, "the empty row spans every column");

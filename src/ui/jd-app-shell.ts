@@ -1,4 +1,5 @@
 import { renderLayout } from "./layout.js";
+import { renderPrintAction } from "./action-buttons.js";
 import { renderJdListPanel, type JdListPanelOptions } from "./jd/jd-list-panel.js";
 import { renderJdEditorPanel, type JdEditorPanelOptions } from "./jd/jd-editor-panel.js";
 import { renderJdBlurbPanel, type JdBlurbPanelOptions } from "./jd/jd-blurb-panel.js";
@@ -75,7 +76,7 @@ function renderPanelActions(panelId: string, options: JdAppShellOptions): string
         data-approval-subject="${escapeHtml(JD_APPROVAL_EMAIL_SUBJECT)}"
         data-approval-body="${escapeHtml(buildJdApprovalEmailText(contact?.headTeacher ?? "", contact?.keySeniorTeacher ?? "", jd.blurbHtml ?? ""))}"
       ><i class="bi bi-envelope-plus ui-icon" aria-hidden="true"></i><span>Generate Email</span></a>
-      <button type="button" class="panel-action-button" data-jd-action="pdf" data-jd-id="${jd.id}"><i class="bi bi-file-earmark-pdf ui-icon" aria-hidden="true"></i><span>Download PDF</span></button>
+      ${renderPrintAction({ label: "Download this job description as a PDF to print", attributes: `data-jd-action="pdf" data-jd-id="${jd.id}"` })}
       <button type="submit" class="panel-action-button" form="jd-edit-${jd.id}"><i class="bi bi-save ui-icon" aria-hidden="true"></i><span>Save</span></button>
     `;
   }
@@ -618,6 +619,7 @@ export function renderJdAppShell(options: JdAppShellOptions): string {
       <a class="nav-rail__item inline-flex items-center justify-center text-muted" href="/comms" aria-label="Online Communications dashboard" title="Online Communications"><i class="bi bi-envelope-paper" aria-hidden="true"></i></a>
       <a class="nav-rail__item inline-flex items-center justify-center text-muted nav-rail__item--current" href="/jd" aria-label="Job Descriptions" title="Job Descriptions" aria-current="page"><i class="bi bi-file-earmark-person" aria-hidden="true"></i></a>
       <a class="nav-rail__item inline-flex items-center justify-center text-muted" href="/wiki" aria-label="Things To Know" title="Things To Know"><i class="bi bi-journal-bookmark" aria-hidden="true"></i></a>
+      <a class="nav-rail__item inline-flex items-center justify-center text-muted" href="/budget" aria-label="Budget" title="Budget"><i class="bi bi-piggy-bank" aria-hidden="true"></i></a>
     </aside>
     ${layout}
     ${renderJdScript()}

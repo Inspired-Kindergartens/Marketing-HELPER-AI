@@ -1,88 +1,110 @@
-# PLAN — Enrolment Quality panel
+# PLAN — Budget Calculator
 
 ## Goal
-A new accordion panel, **Enrolment Quality**, directly below **Infocare Analytics**
-on `/app`. It shows each centre's **% full roll** month by month, so a trend
-(a centre doing well, then slipping) is easy to see. It replaces the busy
-"Roll Returns" PDF (`docs/20261110090648858.pdf`), where trends had to be marked
-by hand with highlighter and smiley faces. The app shows the numbers and does
-not explain them (e.g. a new head teacher).
+A **Budget** page (`/budget`) that replaces the yearly `Budget Calculator 20xx-xx.xlsx` workbooks
+(`D:\iK\Documents\`). It records subscriptions, purchases and future spends per financial year
+(1 July - 30 June) in Postgres, so year-over-year changes in ongoing costs can be seen.
+The landing page reminds the user near the end of each month if no expense has been added that month.
 
-## Definitions (agreed 2026-11-10)
-- **Placements** = children booked in each open day's busier session (am or pm), averaged over the month
-  (changed 2026-11-10 from distinct children per day: a morning-only and an afternoon-only child share a place).
-  Children on part weeks share a place: Kimmy (Tue, Wed, Fri) + Joe (Mon, Thu) = one placement.
-- **% full roll** = placements / **operating capacity**. Over 100% is possible and expected.
-- **Operating capacity** = the places a centre actually runs at (can be below its licence;
-  Arataki: licence 45, runs at 40). Set by the user per centre with an "effective from" month;
-  the licence is used before the first entry or when there is none.
-- **Staffing suggestion** = staff on `Contact` duty at 10:00 on a typical open day (job `Other` excluded)
-  × 10 (× 15 when sessional), capped at the licence. A suggestion only; the user's figure wins.
-- **Avg am / pm** = children booked starting before 12:00 / ending after 13:00, per open day.
-- **Open day** = licence `max_children` > 0 and at least one booking.
-- Nothing to do with Finance; no financial-year logic.
+## Agreed (2026-11-11)
+- **Landing:** a **Budget** tile replaces **Things To Know** in the main button row. **Things To Know** moves
+  to the secondary row, next to **Sector Insight**.
+- **Reminder:** shows from the 3rd-to-last day of a month when no expense was *added* that month
+  (by its `createdAt` timestamp). It stays into the next month until an expense is added for that month
+  or the user presses **Dismiss**. A dismissal is stored with its timestamp and covers that month only.
+  It uses the same `landing-reminder` card as the task and AI model reminders.
+- **Meta spend:** filled in automatically from the stored Meta results (read-only), one row per month.
+  Imported figures stay the record for months up to the import; Meta fills later months only, so
+  nothing is counted twice.
+- **GST:** matches the sheet exactly. Subscription yearly totals ÷ 1.15; purchases and future spends used as entered.
+- **History:** 2024-25, 2025-26 and 2026-27 are imported as-is, including the 2026-27 Purchases tab.
+- **User-defined per year:** operating budget, threshold % (default 2%), year notes (the "Subscriptions /
+  Purchases / Future Spends / Budget" summary), future spends. Next year's budget is never calculated,
+  only typed in. Nothing else is user-defined (confirmed 2026-11-11).
+- **AI chat:** Beep Beep (dashboard chat) and General Chat can see the budget through the existing
+  `extraGrounding` seam. No new model or AI calls.
 
-## Data (tested 2026-11-10)
-- Read-only Infocare modes added: `get_attendance_list` (a whole centre's bookings per date range,
-  one call per centre-month instead of one per child), `get_roster_list`, `get_staff_list`.
-- Infocare keeps these back to at least Nov 2021, so 5 years is fetched.
+## Calculations (from the workbook)
+- **Subscription yearly cost** = amount × {week 52, fortnight 26, month 12, quarter 4, year 1}; total ÷ 1.15.
+- **Inc %** = this year's yearly cost vs the same subscription last year. This is calculated, where the sheet typed it in by hand.
+- **Ended subscriptions** = amount × payments made (tally). Shown, not included in totals.
+- **Actual spend** = subscriptions (yearly, ÷1.15) + purchases YTD.
+- **Remaining** = budget − actual spend; also shown as % of the budget.
+- **Predicted purchases** = YTD + YTD ÷ months elapsed × months remaining. Months are counted inside
+  *that* financial year, which fixes the sheet's bug where a closed year predicted $203k because it used `TODAY()`.
+- **Predicted spend** = subscriptions + predicted purchases + future spends;
+  **deficit/surplus** = budget − predicted; flagged when beyond the threshold %.
 
 ## Build order
 
-- [x] 0. Staffing data check: `get_staff_list` and `get_roster_list` exist (read-only); `get_attendance_list` found as well
-- [x] 1. Monthly roll calculation (`src/analytics/enrolment-quality.ts`)
-  - [x] licence days + attendance + roster → open days, avg placements, avg am/pm, avg licence, contact staff, sessional
-  - [x] reuses `parseTimeToMinutes` from `src/infocare/extraction.ts` (exported, not copied)
-  - [x] tests (`test/enrolment-quality.test.ts`): Kimmy + Joe = 1, am/pm split, closed days, mid-month licence change, over 100%, staffing, capacity by month, sort/flags, grounding, panel HTML, trend gaps
-- [x] 2. Storage
-  - [x] `CentreMonthlyRoll` and `CentreOperatingCapacity` (migration `20261110010000_add_enrolment_quality`, applied)
-  - [x] `src/storage/enrolment-quality-store.ts`; both tables are in the pg_dump backup; no new env vars, so the transfer check is unchanged
-- [x] 3. Fetching from Infocare (`src/infocare/roll-history.ts`)
-  - [x] per centre: staff list once, licence per year, attendance + roster per month; 650 ms spacing; raw replies captured
-  - [x] resumable: complete months skipped; newest month first; failed months retried next run
-  - [x] current month refetched each run and shown "to date"
-  - [x] first 5-year fetch finished 2026-11-10: 1,560/1,560 centre-months, none failed (Dec 2021 - Nov 2026)
-- [x] 4. Scheduling: server loop 3 minutes after startup, then daily (`startRollHistorySyncLoop`); the launcher starts the server, so no extra task. "Update from Infocare" button with progress
-- [x] 5. Panel (`src/ui/enrolment-quality-panel.ts`, `PANEL_DEFINITIONS` entry after `analytics`)
-  - [x] `3M` · `6M` · `12M` (default) · `2Y` · `3Y` · `5Y` buttons in the Infocare Analytics style; kept in the URL (`rollWindow`)
-  - [x] sort: Worst change (default, by Change, biggest fall first) · A-Z · Z-A (`rollSort`)
-  - [x] row: centre · trend (arrow + line coloured rise/fall/steady, scaled per centre, dashed 100%) · start · latest · change (%) · am/pm · capacity
-  - [x] click a row: month table + operating capacity editor (history, remove, staffing suggestion with "Use")
-  - [x] months with no data break the trend line instead of being invented
-  - [x] fragment swapped in place (no reload); checked in headless Chrome in Default, Light and Dark
-  - [x] "Worst latest" sort; Start/Latest/monthly % banded (90%+ green, 80-89% grey, <80% red); Capacity shows the number only, with a pencil that opens the editor
-  - [x] no explanatory text in the panel or editor (user request 2026-11-10)
-  - [x] PDF button: A4, summary table + change chart + one chart per centre for the selected period and order; capacity as `operating {licence}` with a note
-  - [x] padding fix for the capacity card
-  - [x] under-2 centres (OPEYS, Maunganui All Day, Tai o Fenua): % stays combined; operating capacity has a second "Under-2" field; staffing suggestion counts under-2s at 1:5 (2026-11-10)
-- [x] 6. Highlighting: colour and arrow by direction (steady within 3%) replace the highlighter and smileys; Flag column removed at the user's request (2026-11-10)
-- [ ] 7. Check against the PDF
-  - [x] all 25 PDF centres, Jan-Jul 2026: am within ±1 for 172/175 centre-months, pm 166/175 (Katikati pm is ~16 vs the PDF's 20)
-  - [x] placements changed to the busier session per day (Wairakei had afternoon-only children); 1,560 months rebuilt from the stored replies
-  - [x] user confirms each centre's implied operating capacity before any is entered (approved 2026-11-10; see 12)
-- [x] 8. AI grounding: roll/enrolment/capacity/trend questions add the 10 most concerning centres (+ the selected one), last 6 months, to `extraGrounding`; fail soft; `AI_CHAT_MODEL` only
-- [x] 9. Docs: `docs/USER-GUIDE.md` and `README.md` (Enrolment Quality section, data sources, development map)
-- [x] 10. Beep Beep opening summary: one roll sentence for the selected centre (latest %, band, capacity, change over the panel's period) (2026-11-10)
-- [x] 11. Infocare Analytics priority order (user approved 2026-11-10)
-  - [x] urgency score: uncovered leavers 40, empty places from last month's % full roll 35 (licence fallback), year-on-year roll fall 10, no waitlist 15; bands unchanged
-  - [x] roll figures attached at read time (`withRollSignals`) for the table, bands, opening summary and both dashboard chats
-  - [x] opening summary reasons: low roll, falling roll; licence-based over-2 gap dropped where roll data exists
-  - [x] help article `knowledge/infocare/dashboard-infocare-metrics.md` updated
-- [x] 12. Operating capacities from the PDF entered as user-defined operating capacities (user approved 2026-11-10): 15 centres from Jan-26, Maarawaewae 40 from Jun-26 and 44 from Jul-26, Matua 40 from Jul-26
-- [x] 13. "All kindergartens" row pinned at the top of the Enrolment Quality table (all columns, month table, no editor); first in the PDF and the AI grounding; shaded with `--color-row-total` (2026-11-10)
-- [x] 14. "Update from Infocare" keeps the download icon, the same as every other data-pull button (refresh icon tried and reverted at the user's request, 2026-11-10)
-- [x] 15. Automatic Enrolment Quality fetch once a month: finished months only, no Infocare calls mid-month; the button still fetches the month to date (2026-11-10)
-
-# PLAN — Meta advert reviews (2026-11-10)
-
-Goal: after a Meta advert, add a note to the kindergarten gauging its effect on % full roll and the waitlist; over time the Beep Beep intro says whether the kindergarten responds well to Meta adverts.
-
-- [x] 1. Review logic (`src/analytics/meta-advert-review.ts`): ad sets → per-centre runs, roll lift against the other kindergartens, waitlist before/after, verdict (incl. held-full), centre summary and sentence
-- [x] 2. Storage: `MetaAdvertReview` + migration; note and notification written into the existing Meta notes
-- [x] 3. Runner and schedule (`src/meta/advert-review.ts`): startup, after Meta refresh, `/app` every 6 h
-- [x] 4. Intro: sentence in `renderSelectedCentreNarrative`
-- [x] 5. AI grounding through `extraGrounding` (both dashboard chat endpoints)
-- [x] 6. Tests (`test/meta-advert-review.test.ts`)
-- [x] 7. Readmes
-- [x] 8. Backfill checked on live data: 10 runs reviewed (Brookfield 2025 +19 pts against the network; Otamarakau and Pāpāmoa Coast held full)
-- [ ] 9. Revisit once Maunganui, OPEYS and Whakamārama (ended Oct 2026) are reviewed, around 8 Dec 2026
+- [x] 1. Storage (migration `20261112010000_add_budget` applied, `src/storage/budget-store.ts`, `test/budget-store.test.ts`; checked against the live database 2026-11-12)
+  - [x] `BudgetYear`: `startYear` (unique, 2026 = 2026-27), `operatingBudget`, `thresholdPercent` (2), `notes`, timestamps
+  - [x] `BudgetSubscription`: one subscription across years (`name`, `category`), so renames like
+        "OpenAI Chatgpt" → "Anthropic Claude" and "Enlighten Blacksheep" → "Blacksheep" stay linked
+  - [x] `BudgetSubscriptionYear`: subscription × year → `amount`, `frequency`, `status` (active/ended), `tally`, `note`, `createdAt`
+  - [x] `BudgetExpense`: year, `supplier`, `group` (Facebook, Kale Print, MediaWorks, Office Signage…, replaces the side tallies),
+        `amount`, `note`, `spentOn` (null for imported history, which has no dates), `source` (manual/import/meta), `createdAt`
+  - [x] Meta rows unique per (`source`, month), so a refresh updates rather than duplicates
+  - [x] `BudgetFutureSpend`: year, `project`, `supplier`, `amount`, `qty`, `note`, `status` (planned/TBC/bought)
+  - [x] `BudgetReminderDismissal`: `month` (YYYY-MM, unique), `dismissedAt`
+  - [x] confirm the new tables are in the pg_dump backup; no new env vars, so the transfer check is unchanged
+- [x] 2. Calculations (`src/analytics/budget.ts`), pure functions + tests (`test/budget.test.ts`, 13 tests)
+  - [x] yearly cost per frequency, ÷1.15, inc % vs last year, ended totals
+  - [x] actual / remaining / predicted / deficit-surplus / threshold flag, checked against each workbook's own figures
+        (2026-27 predicted spend 60,634.93 and -1.05% match the sheet exactly; status = on track within ±threshold, else surplus / deficit)
+  - [x] closed-year prediction uses 12 months elapsed (regression test for the $203k bug)
+- [x] 3. History import (applied to the live database 2026-11-12; a second run changes nothing)
+  - [x] extract the three workbooks once into `data/budget-history.json` (openpyxl, run once outside the app; no xlsx library added)
+  - [x] `scripts/budget-import.ts`: idempotent; dry-run prints per-year totals to compare with each Totals sheet before saving
+  - [x] 2024-25: Prints tab → expenses in group "Kale Print"; Future Savings (negative) and Future Projects (Photography $6,000) → future spends
+  - [x] sub-tallies (Facebook, Kale Print, MediaWorks, Mailchimp, Office Signage, Warehouse Stationery) → one expense each, by group
+  - [x] year notes (+ the Subscriptions sheet note), budgets ($24k, $30k, $60k) and ended subscriptions imported
+  - [x] subscriptions, purchases, future spends, ended totals match all three workbooks. Known difference: 2024-25 actual spend
+        16,336.17 vs the sheet's 18,896.17, because that sheet counted ended subscriptions (Unbound 2,560); the plan leaves them out
+  - [x] Google Ads listed as active $0 and ended in 2025-26 / 2026-27 → one ended row (totals unchanged)
+- [x] 4. Meta spend sync (`src/budget/meta-sync.ts`): campaign-level daily results, newest pull per day, summed by month
+      for months after `BUDGET_IMPORTED_THROUGH` = 2026-09 (the 2026-27 workbook was last saved 1 Oct 2026);
+      runs after both Meta refreshes and at startup. Live: Oct 2026 $810.97, Nov 2026 $278.85 (to date)
+- [x] 5. Budget page (`/budget`, `src/ui/budget-app-shell.ts`, routes in `src/server.ts`)
+  - [x] year picker + **New year** button (copies active subscriptions forward); `?panel=` opens a panel
+  - [x] Totals panel (right-hand column): budget, actual, remaining, predicted, deficit/surplus, threshold, year notes (editable)
+  - [x] Subscriptions panel: add / edit / end / delete; yearly cost and inc % columns; ended list underneath;
+        adding a name used in another year links to it (renames stay linked); duplicate in the same year refused
+  - [x] Purchases panel: add / edit / delete, grouped with group subtotals and % of spend; Meta rows read-only;
+        a purchase goes in the financial year of its date
+  - [x] Future Spends panel: add / edit / delete; **Bought** turns it into a purchase (amount × qty)
+  - [x] Year-over-year panel: totals, each subscription's yearly cost and purchase groups by year with % change
+  - [x] fragments swapped in place (no reload); standard buttons; only CSS added: `.data-table__total-row`
+        (existing `--color-row-total` token) and a 2-column tile grid; deficit/surplus reuse the Enrolment Quality band colours
+  - [x] Budget added to every nav rail after Things To Know
+  - [x] print icon downloads a PDF (`src/ui/budget-pdf.ts`) — returns 200, 159 KB
+  - [x] PDF read page by page (2026-11-13): ended-only subscriptions (META & Google Ads Provider, Unbound) showed as
+        empty year-over-year rows → left out (page and PDF, test added); PDF year over year now matches the page
+        (Remaining, Ended subscriptions, purchase groups by year)
+  - [x] checked in headless Chrome: Default on the live server; Light and Dark from a saved copy (icons can't load from a copy)
+  - [x] API checked end to end on the live server (add / edit / delete purchase, duplicate subscription refused, Bought); test rows removed
+- [x] 6. Landing page (`src/ui/landing-page.ts`)
+  - [x] Budget tile replaces Things To Know; Things To Know added to the secondary row after Sector Insight
+  - [x] reminder card: "No expenses added for <month>", last expense added (date + time), **Add expense** (opens Purchases) and **Dismiss**
+  - [x] `readLandingReminders` includes it (fails soft); the heading counts it
+  - [x] `POST /actions/dismiss-budget-reminder` stores the dismissal with its timestamp and returns the strip HTML
+  - [x] tests: last 3 days only, carries into the next month, hides after dismiss or an expense added in / dated in that month; tile order
+  - [x] live now: shows "No expenses added for October" (no expense was typed in by hand in October); Dismiss clears it
+- [x] 7. AI chat grounding
+  - [x] `buildBudgetGrounding`: current year totals, subscriptions with inc %, group totals, future spends, year notes, every year's totals and subscription costs by year
+  - [x] `findBudgetGrounding(prompt)` in `src/server.ts`, only for budget-shaped prompts, fails soft
+  - [x] passed through `joinGrounding` in `/api/ai/chat`, `/api/ai/chat/stream` and the General Chat stream
+  - [x] tests (`test/budget-page.test.ts`): grounding text from fixed data; a non-budget prompt adds nothing; no model named
+- [x] 8. Docs: `docs/USER-GUIDE.md` (Budget section, landing buttons and reminder) and `README.md`
+      (Main Pages, Budget: calculations, routes, Meta spend, import script, reminder, AI chat; PDF reports list)
+- [x] 9. Build, restart the server (kill :3000), check `/budget` and the landing strip — done 2026-11-12; full suite 439/439 before the page tests were added, the 7 page tests pass on their own
+  - [x] re-run `npm test` after the CSS fixes and the PDF fix: 447/447 (2026-11-13); rebuilt and restarted, new PDF checked live
+- [x] 10. Report and additional budget (2026-11-13)
+  - [x] migration `20261113020000_budget_report_additional` applied: `BudgetYear.report`, `BudgetAdditional`; 2024-25 and 2025-26 notes copied in as their reports
+  - [x] `buildBudgetReport` (`src/analytics/budget.ts`): written from the figures, no AI
+  - [x] additional budget: part of the year's budget, tied to a purchase category, a one-off (not carried forward in the prediction, left out of next year)
+  - [x] page: Year notes box removed; **Generate report** opens the report for editing (Save / Generate again); **Additional budget** on a purchase category
+  - [x] PDF: named `Marketing Budget <year>`; saved report, or one generated when printing
+  - [x] tests (`test/budget.test.ts`, `test/budget-page.test.ts`): 461/461; both readmes updated
+  - [ ] the user sets $20,000 additional budget on Office Signage for 2026-27
+- [x] 11. Commit and push (2026-11-13; build clean, 464/464 tests)

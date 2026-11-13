@@ -1,3 +1,4 @@
+import { REFRESH_ICON, renderPrintAction, renderRefreshAction, SPINNER_CLASS } from "./action-buttons.js";
 import type {
   CentreSnapshotHistoryEntry,
   LatestSnapshotSet,
@@ -26,6 +27,7 @@ import {
   estimateShortPlusTypicalWaitlistCount,
 } from "../analytics/waitlist-profile.js";
 import { calculateUrgencyScore, determineUrgencyBand } from "../analytics/compute.js";
+import { filterBySlt, listSltNames, resolveSlt } from "../analytics/slt-filter.js";
 import { renderLayout } from "./layout.js";
 import { THEME_HEAD_SCRIPT } from "./theme.js";
 import { formatAnalyticsServiceDisplayName } from "./centre-name.js";
@@ -106,6 +108,8 @@ type AppShellOptions = {
   selectedCentreKey?: number | null;
   selectedWindowKey?: string | null;
   serviceSort?: string | null;
+  // Infocare Analytics' SLT filter (a name from the contact list).
+  slt?: string | null;
   focusPanelId?: string | null;
   centreHistory?: CentreSnapshotHistoryEntry[];
   annualHistory?: CentreSnapshotHistoryEntry[];
@@ -1247,10 +1251,7 @@ function renderThresholdChart(
           <span>Very long-running wait: 538+ days</span>
         </div>
       </div>
-      <a class="panel-action-button waitlist-threshold-state__action" href="${escapeHtml(renderThresholdRefreshHref(selectedCentreKey, selectedWindowKey, serviceSort))}" aria-label="Refresh analytics and waitlist report" title="Refresh analytics and waitlist report">
-        <i class="bi bi-download ui-icon" aria-hidden="true"></i>
-        <span>Refresh source data</span>
-      </a>
+      ${renderRefreshAction({ label: "Refresh analytics and waitlist report", href: renderThresholdRefreshHref(selectedCentreKey, selectedWindowKey, serviceSort), className: "waitlist-threshold-state__action" })}
     </div>
   `;
 }
@@ -1653,6 +1654,8 @@ function buildQueryString(
   serviceSort: ServiceSort,
   focusPanelId?: string | null,
   googleAnalyticsRange?: GoogleAnalyticsRangeSelection,
+  // Infocare Analytics' SLT filter.
+  slt?: string | null,
 ) {
   const params = new URLSearchParams();
 
@@ -1664,6 +1667,10 @@ function buildQueryString(
 
   if (serviceSort !== "critical") {
     params.set("sort", serviceSort);
+  }
+
+  if (slt) {
+    params.set("slt", slt);
   }
 
   if (focusPanelId) {
@@ -1683,16 +1690,32 @@ function buildQueryString(
   return params.toString();
 }
 
-function renderAnalyticsToolbarActions(
+// The filter row at the top of the Infocare Analytics body (below the panel
+// title, as in Enrolment Quality): window, sort, then the SLT filter.
+function renderAnalyticsToolbar(
   selectedCentreKey: number | null | undefined,
   selectedWindowKey: WindowKey,
   serviceSort: ServiceSort,
+  slt: string | null,
+  sltOptions: readonly string[],
 ) {
   const selectedCentreValue = selectedCentreKey == null ? null : selectedCentreKey;
-  const ascSortHref = `/app?${buildQueryString(selectedCentreValue, selectedWindowKey, "asc")}`;
-  const descSortHref = `/app?${buildQueryString(selectedCentreValue, selectedWindowKey, "desc")}`;
+  const href = (windowKey: WindowKey, sort: ServiceSort) =>
+    `/app?${escapeHtml(buildQueryString(selectedCentreValue, windowKey, sort, null, undefined, slt))}`;
+  // Choosing an SLT drops the selected centre, so the first of that SLT's
+  // centres is selected instead of one that is no longer listed.
+  const sltLink = (name: string | null, label: string) =>
+    `<a class="analytics-toolbar__window${(name ?? null) === slt ? " analytics-toolbar__window--active" : ""}" href="/app?${escapeHtml(buildQueryString(name ? null : selectedCentreValue, selectedWindowKey, serviceSort, null, undefined, name))}"${(name ?? null) === slt ? ' aria-current="true"' : ""}>${escapeHtml(label)}</a>`;
+  const sltFilter = sltOptions.length
+    ? `
+    <div class="analytics-toolbar__actions flex flex-wrap gap-4 items-center" data-slt-filter>
+      ${sltLink(null, "All SLT")}
+      ${sltOptions.map((name) => sltLink(name, name)).join("")}
+    </div>`
+    : "";
 
   return `
+    <div class="analytics-toolbar">
     <div class="analytics-toolbar__actions flex flex-wrap gap-4 items-center">
       <a
         class="analytics-toolbar__icon-action"
@@ -1706,10 +1729,11 @@ function renderAnalyticsToolbarActions(
             ? "analytics-toolbar__window analytics-toolbar__window--active"
             : "analytics-toolbar__window";
 
-        return `<a class="${className}" href="/app?${buildQueryString(selectedCentreValue, option.key, serviceSort)}">${option.label}</a>`;
+        return `<a class="${className}" href="${href(option.key, serviceSort)}">${option.label}</a>`;
       }).join("")}
-      <a class="analytics-toolbar__window${serviceSort === "asc" ? " analytics-toolbar__window--active" : ""}" href="${ascSortHref}" aria-label="Sort service A to Z">&uarr;</a>
-      <a class="analytics-toolbar__window${serviceSort === "desc" ? " analytics-toolbar__window--active" : ""}" href="${descSortHref}" aria-label="Sort service Z to A">&darr;</a>
+      <a class="analytics-toolbar__window${serviceSort === "asc" ? " analytics-toolbar__window--active" : ""}" href="${href(selectedWindowKey, "asc")}" aria-label="Sort service A to Z">&uarr;</a>
+      <a class="analytics-toolbar__window${serviceSort === "desc" ? " analytics-toolbar__window--active" : ""}" href="${href(selectedWindowKey, "desc")}" aria-label="Sort service Z to A">&darr;</a>
+    </div>${sltFilter}
     </div>
   `;
 }
@@ -1721,21 +1745,25 @@ function renderAnalyticsRefreshButton(
   const href = `/actions/refresh-snapshot?${buildQueryString(selectedCentreKey, "3M", "critical")}`;
 
   if (snapshotRefreshStatus === "in-progress") {
-    return `<span class="panel-action-button panel-action-button--disabled" data-snapshot-refresh-button data-snapshot-refresh-status="in-progress" aria-label="Downloading latest Infocare analytics snapshot" title="Downloading latest Infocare analytics snapshot" role="img"><i class="bi bi-arrow-repeat ui-icon panel-action-button__spinner" aria-hidden="true"></i></span>`;
+    return renderRefreshAction({ label: "Refreshing the Infocare analytics snapshot", attributes: `data-snapshot-refresh-button data-snapshot-refresh-status="in-progress" data-refresh-href="${escapeHtml(href)}"`, running: true });
   }
 
-  const pulsateClass = snapshotRefreshStatus === "ready" ? " panel-action-button--pulsate" : "";
   const label =
     snapshotRefreshStatus === "ready"
       ? "Refresh dashboard with latest Infocare snapshot"
-      : "Download latest Infocare analytics snapshot";
+      : "Refresh the Infocare analytics snapshot";
 
-  return `<a class="panel-action-button${pulsateClass}" data-snapshot-refresh-button data-snapshot-refresh-status="${snapshotRefreshStatus}" href="${href}" aria-label="${label}" title="${label}"><i class="bi bi-download ui-icon" aria-hidden="true"></i></a>`;
+  return renderRefreshAction({
+    label,
+    href,
+    attributes: `data-snapshot-refresh-button data-snapshot-refresh-status="${snapshotRefreshStatus}"`,
+    className: snapshotRefreshStatus === "ready" ? "panel-action-button--pulsate" : undefined,
+  });
 }
 
 // The print icon that downloads a panel's PDF report (see report-pdf.ts).
 function renderPdfPrintAction(href: string, label: string) {
-  return `<a class="panel-action-button" href="${escapeHtml(href)}" download aria-label="${label}" title="${label}"><i class="bi bi-printer ui-icon" aria-hidden="true"></i></a>`;
+  return renderPrintAction({ href, label });
 }
 
 function buildPanelActions(
@@ -1748,21 +1776,19 @@ function buildPanelActions(
   snapshotRefreshStatus: "idle" | "in-progress" | "ready" | "error" = "idle",
   // Panel-specific icon buttons rendered by the panel's own module.
   panelOwnActions = "",
+  // Infocare Analytics' SLT filter, kept when its window is opened or closed.
+  slt: string | null = null,
 ) {
   if (panelId === "chat") {
-    return `<button class="panel-action-button" type="button" data-print-mode="chat" aria-label="Print AI Chat" title="Print AI Chat"><i class="bi bi-printer ui-icon" aria-hidden="true"></i></button>`;
+    return renderPrintAction({ label: "Print AI Chat", attributes: `data-print-mode="chat"` });
   }
 
-  const analyticsViewActions =
-    panelId === "analytics"
-      ? renderAnalyticsToolbarActions(selectedCentreKey, selectedWindowKey, serviceSort)
-      : "";
   // A panel with its own PDF print button (Enrolment Quality, Infocare
   // Analytics, Waitlist Quality) shows that instead of the browser print.
-  const hasPdfPrint = panelOwnActions.includes("bi-printer");
+  const hasPdfPrint = panelOwnActions.includes("action-print");
   const dashboardPrintAction =
     !focusPanelId && panelId === "analytics" && !hasPdfPrint
-      ? `<button class="panel-action-button" type="button" data-print-mode="dashboard" aria-label="Print console" title="Print console"><i class="bi bi-printer ui-icon" aria-hidden="true"></i></button>`
+      ? renderPrintAction({ label: "Print console", attributes: `data-print-mode="dashboard"` })
       : "";
   const analyticsRefreshAction =
     panelId === "analytics"
@@ -1770,23 +1796,23 @@ function buildPanelActions(
       : "";
   const metaRefreshAction =
     panelId === "meta-ads"
-      ? `<a class="panel-action-button" href="/actions/refresh-meta-ads?${buildQueryString(selectedCentreKey, selectedWindowKey, serviceSort)}" aria-label="Download latest Meta Ads data" title="Download latest Meta Ads data"><i class="bi bi-download ui-icon" aria-hidden="true"></i></a>`
+      ? renderRefreshAction({ label: "Refresh Meta Ads data", href: `/actions/refresh-meta-ads?${buildQueryString(selectedCentreKey, selectedWindowKey, serviceSort)}` })
       : "";
   const googleAnalyticsRefreshAction =
     panelId === "google-analytics"
-      ? `<a class="panel-action-button" href="/actions/refresh-google-analytics?${buildQueryString(selectedCentreKey, selectedWindowKey, serviceSort, null, googleAnalyticsRange)}" aria-label="Download latest Google Analytics data" title="Download latest Google Analytics data"><i class="bi bi-download ui-icon" aria-hidden="true"></i></a>`
+      ? renderRefreshAction({ label: "Refresh Google Analytics data", href: `/actions/refresh-google-analytics?${buildQueryString(selectedCentreKey, selectedWindowKey, serviceSort, null, googleAnalyticsRange)}` })
       : "";
   const fullscreenAction = `<button class="panel-action-button" type="button" data-fullscreen-toggle aria-label="Enter fullscreen" title="Enter fullscreen"><i class="bi bi-fullscreen ui-icon" aria-hidden="true"></i></button>`;
-  const printAction = `<button class="panel-action-button" type="button" data-print-page aria-label="Print window" title="Print window"><i class="bi bi-printer ui-icon" aria-hidden="true"></i></button>`;
+  const printAction = renderPrintAction({ label: "Print window", attributes: "data-print-page" });
 
   if (focusPanelId === panelId) {
     const windowPrintAction = hasPdfPrint ? "" : printAction;
-    return `${analyticsViewActions}${analyticsRefreshAction}${metaRefreshAction}${googleAnalyticsRefreshAction}${panelOwnActions}${windowPrintAction}${fullscreenAction}<a class="panel-action-link" href="/app?${buildQueryString(selectedCentreKey, selectedWindowKey, serviceSort, null, googleAnalyticsRange)}"><i class="bi bi-arrow-left-short ui-icon" aria-hidden="true"></i><span>Return to dashboard</span></a>`;
+    return `${analyticsRefreshAction}${metaRefreshAction}${googleAnalyticsRefreshAction}${panelOwnActions}${windowPrintAction}${fullscreenAction}<a class="panel-action-link" href="/app?${escapeHtml(buildQueryString(selectedCentreKey, selectedWindowKey, serviceSort, null, googleAnalyticsRange, slt))}"><i class="bi bi-arrow-left-short ui-icon" aria-hidden="true"></i><span>Return to dashboard</span></a>`;
   }
 
-  const popupQuery = buildQueryString(selectedCentreKey, selectedWindowKey, serviceSort, panelId, googleAnalyticsRange);
+  const popupQuery = escapeHtml(buildQueryString(selectedCentreKey, selectedWindowKey, serviceSort, panelId, googleAnalyticsRange, slt));
 
-  return `${analyticsViewActions}${dashboardPrintAction}${analyticsRefreshAction}${metaRefreshAction}${googleAnalyticsRefreshAction}${panelOwnActions}${fullscreenAction}<button class="panel-action-button" type="button" data-open-panel="${panelId}" data-panel-query="${popupQuery}" aria-label="Open window" title="Open window"><i class="bi bi-box-arrow-up-right ui-icon" aria-hidden="true"></i></button>`;
+  return `${dashboardPrintAction}${analyticsRefreshAction}${metaRefreshAction}${googleAnalyticsRefreshAction}${panelOwnActions}${fullscreenAction}<button class="panel-action-button" type="button" data-open-panel="${panelId}" data-panel-query="${popupQuery}" aria-label="Open window" title="Open window"><i class="bi bi-box-arrow-up-right ui-icon" aria-hidden="true"></i></button>`;
 }
 
 function formatDocumentTitleTimestamp(date = new Date()) {
@@ -1986,12 +2012,21 @@ function renderAnalyticsTable(
   serviceSort: ServiceSort,
   centreContacts: CentreContact[] = [],
   metaAdsDashboardData?: MetaAdsDashboardData | null,
+  // The chosen SLT: only that SLT's centres are listed.
+  slt: string | null = null,
 ) {
-  const analyticsRows = sortAnalyticsRows(snapshotSet?.snapshots ?? [], serviceSort, selectedWindowKey);
+  const analyticsRows = filterBySlt(
+    sortAnalyticsRows(snapshotSet?.snapshots ?? [], serviceSort, selectedWindowKey),
+    (row) => row.serviceName,
+    slt,
+    centreContacts,
+  );
   const selectedCentreValue = selectedCentreKey == null ? null : selectedCentreKey;
-  const criticalSortHref = `/app?${buildQueryString(selectedCentreValue, selectedWindowKey, "critical")}`;
-  const ascSortHref = `/app?${buildQueryString(selectedCentreValue, selectedWindowKey, "asc")}`;
-  const descSortHref = `/app?${buildQueryString(selectedCentreValue, selectedWindowKey, "desc")}`;
+  const sortHref = (sort: ServiceSort) =>
+    `/app?${escapeHtml(buildQueryString(selectedCentreValue, selectedWindowKey, sort, null, undefined, slt))}`;
+  const criticalSortHref = sortHref("critical");
+  const ascSortHref = sortHref("asc");
+  const descSortHref = sortHref("desc");
   const coverage = getMetaCoverageByCentre(metaAdsDashboardData);
   const rows = analyticsRows
     .map(
@@ -2010,7 +2045,7 @@ function renderAnalyticsTable(
         const noteAction = `<button type="button" class="analytics-table__note-action inline-flex items-center justify-center" data-analytics-meta-note data-notification-id="${escapeHtml(notificationId)}" data-centre-key="${row.centreKey}" data-window-key="${escapeHtml(selectedWindowKey)}" data-meta-history-heading="${escapeHtml(recommendation)}" data-meta-history-message="${escapeHtml(metaMessage)}" data-centre-name="${escapeHtml(row.serviceName)}" data-open-places="${openPlaces}" data-actionable-waitlist="${actionableWaitlist}" data-waitlist-count="${row.waitlistCount}" data-replacement-pressure="${replacementPressure}" data-active-campaign-count="${centreCoverage?.activeCampaignCount ?? 0}" data-spend-30d="${centreCoverage?.spend30d ?? 0}" title="Add Meta Ads note" aria-label="Add Meta Ads note for ${escapeHtml(row.serviceName)}"><i class="bi bi-journal-plus ui-icon" aria-hidden="true"></i></button>`;
 
         return `
-        <tr class="${row.centreKey === selectedCentreKey ? "analytics-table__row--selected analytics-table__row--clickable" : "analytics-table__row--clickable"}" data-row-href="/app?${buildQueryString(row.centreKey, selectedWindowKey, serviceSort)}">
+        <tr class="${row.centreKey === selectedCentreKey ? "analytics-table__row--selected analytics-table__row--clickable" : "analytics-table__row--clickable"}" data-row-href="/app?${escapeHtml(buildQueryString(row.centreKey, selectedWindowKey, serviceSort, null, undefined, slt))}">
           <td class="analytics-table__service text-strong nowrap">
             <span title="${escapeHtml(row.serviceName)}">${escapeHtml(formatAnalyticsServiceDisplayName(row.serviceName))}</span>
           </td>
@@ -2038,7 +2073,8 @@ function renderAnalyticsTable(
     `;
 
   return `
-    <div class="analytics-table-shell grid gap-12">
+    <div class="analytics-table-shell grid gap-10">
+      ${renderAnalyticsToolbar(selectedCentreKey, selectedWindowKey, serviceSort, slt, listSltNames(centreContacts))}
       <div class="analytics-table-wrap table-frame table-frame--scroll">
         <table class="analytics-table data-table">
           <thead>
@@ -3729,33 +3765,33 @@ function renderSnapshotRefreshScript() {
           const current = button.getAttribute("data-snapshot-refresh-status");
           if (current === status) return;
 
-          if (status === "in-progress") {
-            const span = document.createElement("span");
-            span.className = "panel-action-button panel-action-button--disabled";
-            span.setAttribute("data-snapshot-refresh-button", "");
-            span.setAttribute("data-snapshot-refresh-status", "in-progress");
-            span.setAttribute("aria-label", "Downloading latest Infocare analytics snapshot");
-            span.setAttribute("title", "Downloading latest Infocare analytics snapshot");
-            span.setAttribute("role", "img");
-            span.innerHTML = '<i class="bi bi-arrow-repeat ui-icon panel-action-button__spinner" aria-hidden="true"></i>';
-            button.replaceWith(span);
+          // The same markup as renderRefreshAction (action-buttons.ts).
+          const href = button.getAttribute("href")
+            || (button.dataset && button.dataset.refreshHref)
+            || "/actions/refresh-snapshot";
+          const running = status === "in-progress";
+          const next = document.createElement(running ? "button" : "a");
+          next.className = "panel-action-button action-refresh"
+            + (running ? " panel-action-button--disabled" : "")
+            + (status === "ready" ? " panel-action-button--pulsate" : "");
+          next.setAttribute("data-snapshot-refresh-button", "");
+          next.setAttribute("data-snapshot-refresh-status", status);
+          if (running) {
+            next.setAttribute("type", "button");
+            next.setAttribute("disabled", "");
+            next.dataset.refreshHref = href;
           } else {
-            const anchor = document.createElement("a");
-            anchor.className = "panel-action-button" + (status === "ready" ? " panel-action-button--pulsate" : "");
-            anchor.setAttribute("data-snapshot-refresh-button", "");
-            anchor.setAttribute("data-snapshot-refresh-status", status);
-            const href = button.getAttribute("href")
-              || (button.dataset && button.dataset.refreshHref)
-              || "/actions/refresh-snapshot";
-            anchor.setAttribute("href", href);
-            const label = status === "ready"
-              ? "Refresh dashboard with latest Infocare snapshot"
-              : "Download latest Infocare analytics snapshot";
-            anchor.setAttribute("aria-label", label);
-            anchor.setAttribute("title", label);
-            anchor.innerHTML = '<i class="bi bi-download ui-icon" aria-hidden="true"></i>';
-            button.replaceWith(anchor);
+            next.setAttribute("href", href);
           }
+          const label = running
+            ? "Refreshing the Infocare analytics snapshot"
+            : status === "ready"
+              ? "Refresh dashboard with latest Infocare snapshot"
+              : "Refresh the Infocare analytics snapshot";
+          next.setAttribute("aria-label", label);
+          next.setAttribute("title", label);
+          next.innerHTML = '<i class="bi ${REFRESH_ICON} ui-icon' + (running ? " ${SPINNER_CLASS}" : "") + '" aria-hidden="true"></i>';
+          button.replaceWith(next);
         }
 
         async function poll() {
@@ -5601,6 +5637,7 @@ export function renderAppShell(
   const selectedWindowKey = resolveWindowKey(options.selectedWindowKey);
   const serviceSort = resolveServiceSort(options.serviceSort);
   const selectedCentreKey = options.selectedCentreKey ?? null;
+  const slt = resolveSlt(options.slt, options.centreContacts ?? []);
   const focusPanelId = options.focusPanelId ?? null;
   const centreHistory = options.centreHistory ?? [];
   const annualHistory = options.annualHistory ?? [];
@@ -5634,10 +5671,11 @@ export function renderAppShell(
       panel.id === "enrolment-quality" && options.enrolmentQuality
         ? renderEnrolmentQualityHeaderActions(options.enrolmentQuality)
         : panel.id === "analytics" && snapshotSet?.snapshots.length
-          ? renderPdfPrintAction(`/api/analytics/pdf?${new URLSearchParams({ window: selectedWindowKey, sort: serviceSort }).toString()}`, "Download Infocare Analytics as a PDF to print")
+          ? renderPdfPrintAction(`/api/analytics/pdf?${new URLSearchParams({ window: selectedWindowKey, sort: serviceSort, ...(slt ? { slt } : {}) }).toString()}`, "Download Infocare Analytics as a PDF to print")
           : panel.id === "waitlist" && waitlistReport
             ? renderPdfPrintAction("/api/waitlist/pdf", "Download Waitlist Quality as a PDF to print")
             : "",
+      panel.id === "analytics" ? slt : null,
     ),
     meta:
       panel.id === "analytics"
@@ -5658,7 +5696,7 @@ export function renderAppShell(
               : "",
     children:
       panel.id === "analytics"
-        ? renderAnalyticsTable(snapshotSet, selectedCentreKey, selectedWindowKey, serviceSort, options.centreContacts ?? [], options.metaAdsDashboardData)
+        ? renderAnalyticsTable(snapshotSet, selectedCentreKey, selectedWindowKey, serviceSort, options.centreContacts ?? [], options.metaAdsDashboardData, slt)
         : panel.id === "enrolment-quality"
           ? options.enrolmentQuality
             ? renderEnrolmentQualityBody(options.enrolmentQuality)
@@ -5736,6 +5774,7 @@ export function renderAppShell(
       <a class="nav-rail__item inline-flex items-center justify-center text-muted" href="/comms" aria-label="Online Communications dashboard" title="Online Communications"><i class="bi bi-envelope-paper" aria-hidden="true"></i></a>
       <a class="nav-rail__item inline-flex items-center justify-center text-muted" href="/jd" aria-label="Job Descriptions" title="Job Descriptions"><i class="bi bi-file-earmark-person" aria-hidden="true"></i></a>
       <a class="nav-rail__item inline-flex items-center justify-center text-muted" href="/wiki" aria-label="Things To Know" title="Things To Know"><i class="bi bi-journal-bookmark" aria-hidden="true"></i></a>
+      <a class="nav-rail__item inline-flex items-center justify-center text-muted" href="/budget" aria-label="Budget" title="Budget"><i class="bi bi-piggy-bank" aria-hidden="true"></i></a>
     </aside>
     ${renderSnapshotOutcomeBanner(options.snapshotRefreshOutcome ?? null)}
     ${renderIntegrationErrorBanner(options.integrationError ?? null)}

@@ -83,6 +83,7 @@ import {
   rollSignalForRow,
   ROLL_HISTORY_MONTHS,
   sortEnrolmentQualityRows,
+  withOperatingCapacity,
   type RollSort,
   type RollWindowKey,
 } from "./analytics/enrolment-quality.js";
@@ -96,9 +97,11 @@ import {
 import { getRollHistoryProgress, runRollHistorySync } from "./infocare/roll-history.js";
 import { renderEnrolmentQualityBody, type EnrolmentQualityView } from "./ui/enrolment-quality-panel.js";
 import { enrolmentQualityPdfFilename, generateEnrolmentQualityPdfBuffer } from "./ui/enrolment-quality-pdf.js";
+import { generateSectorPdfBuffer, sectorPdfFilename, selectSectorPrintCentres } from "./ui/sector-pdf.js";
 import { analyticsPdfFilename, generateAnalyticsPdfBuffer } from "./ui/analytics-pdf.js";
 import { generateWaitlistPdfBuffer, waitlistPdfFilename } from "./ui/waitlist-pdf.js";
 import { matchCentreContact, readCentreContactList, readCentreContactListStats } from "./storage/centre-contact-store.js";
+import { filterBySlt, listSltNames, resolveSlt, sltTotalName } from "./analytics/slt-filter.js";
 import {
   addGeneralChatMessage,
   buildGeneralChatMemory,
@@ -309,6 +312,41 @@ import {
   type HelpKbConfig,
 } from "./storage/help-kb-store.js";
 import { renderSectorAppShell } from "./ui/sector-app-shell.js";
+import { syncBudgetMetaSpend } from "./budget/meta-sync.js";
+import { buildBudgetGrounding, buildBudgetReport, budgetReminderMonth, financialYearOf, isBudgetPrompt, monthName, nzMonthOf } from "./analytics/budget.js";
+import { nzDateTime } from "./ui/report-pdf.js";
+import { renderBudgetAppShell, renderBudgetFragments, type BudgetPageData } from "./ui/budget-app-shell.js";
+import { budgetPdfFilename, renderBudgetPdf } from "./ui/budget-pdf.js";
+import {
+  copyActiveBudgetSubscriptions,
+  createBudgetExpense,
+  createBudgetFutureSpend,
+  createBudgetSubscription,
+  deleteBudgetExpense,
+  deleteBudgetExpenseCategory,
+  deleteBudgetFutureCategory,
+  deleteBudgetFutureSpend,
+  deleteBudgetSubscription,
+  dismissBudgetReminder,
+  endBudgetSubscription,
+  ensureBudgetYear,
+  findBudgetSubscriptionIdByName,
+  markBudgetFutureSpendBought,
+  readAllBudgetYearData,
+  readBudgetReminderDismissals,
+  readBudgetSubscriptionNames,
+  readBudgetYearData,
+  readBudgetYears,
+  readLatestManualBudgetExpenseAddedAt,
+  readManualBudgetExpensesAddedSince,
+  renameBudgetExpenseCategory,
+  renameBudgetFutureCategory,
+  setBudgetAdditional,
+  updateBudgetExpense,
+  updateBudgetFutureSpend,
+  updateBudgetSubscription,
+  updateBudgetYearSettings,
+} from "./storage/budget-store.js";
 import { renderSectorCentrePromotions } from "./ui/sector/sector-centre-panel.js";
 import {
   addSectorPromotion,
@@ -317,7 +355,6 @@ import {
   getSectorCentre,
   listSectorCentres,
   listSectorCrawlRuns,
-  sectorCentresToCsv,
   updateSectorCentre,
 } from "./storage/sector-store.js";
 import {
@@ -663,18 +700,38 @@ async function readAiModelReminder() {
     : null;
 }
 
+// "No expenses added for <month>" on the landing page (budgetReminderMonth
+// decides when). Fails soft: the landing page must still render.
+async function readBudgetReminder() {
+  try {
+    const now = new Date();
+    const since = new Date(now.getTime() - 70 * 24 * 60 * 60 * 1000);
+    const [expenses, lastAdded] = await Promise.all([readManualBudgetExpensesAddedSince(since), readLatestManualBudgetExpenseAddedAt()]);
+    const thisMonth = nzMonthOf(now);
+    const lastMonth = nzMonthOf(new Date(Date.UTC(Number(thisMonth.slice(0, 4)), Number(thisMonth.slice(5, 7)) - 2, 15)));
+    const dismissedMonths = await readBudgetReminderDismissals([lastMonth, thisMonth]);
+    const month = budgetReminderMonth({ now, expenses, dismissedMonths });
+    if (!month) return null;
+    return { month, monthLabel: monthName(month), lastAddedAt: lastAdded ? nzDateTime(lastAdded) : null };
+  } catch (error) {
+    app.log.error({ error }, "Budget reminder check failed");
+    return null;
+  }
+}
+
 async function readLandingReminders() {
-  const [reminders, agreementStatus, aiModelReminder] = await Promise.all([
+  const [reminders, agreementStatus, aiModelReminder, budgetReminder] = await Promise.all([
     getDueAndOverdueTasks(),
     getAgreementStatus(),
     readAiModelReminder(),
+    readBudgetReminder(),
   ]);
   const ktcaReminder =
     agreementStatus.expired || agreementStatus.expiringSoon
       ? { expired: agreementStatus.expired, daysUntilExpiry: agreementStatus.daysUntilExpiry ?? 0 }
       : null;
 
-  return { reminders, ktcaReminder, aiModelReminder };
+  return { reminders, ktcaReminder, aiModelReminder, budgetReminder };
 }
 
 async function rollbackAiModel() {
@@ -730,6 +787,7 @@ async function refreshMetaAdsIfConfigured() {
     const result = await refreshMetaAds(metaConfig);
 
     app.log.info(result, "Meta Ads auto-refresh completed");
+    void syncBudgetMetaSpend(app.log);
     // New delivery data can end an advert run, so review straight away.
     void tickMetaAdvertReviews(app.log, { force: true });
   } catch (error) {
@@ -1636,7 +1694,7 @@ app.post<{ Params: { id: string }; Body: { prompt?: string } }>(
 
       await announceModelLoad(writeEvent);
       const wiki = streamInput.hasDocument ? null : await findHelpGrounding(prompt, undefined, GENERAL_CHAT_HELP_OPTIONS);
-      const messages = await buildGeneralChatMessages(conversationId, centreReferences, joinGrounding(liveGrounding, wiki?.text));
+      const messages = await buildGeneralChatMessages(conversationId, centreReferences, joinGrounding(liveGrounding, await findBudgetGrounding(prompt), wiki?.text));
 
       for await (const chunk of streamLocalChat(aiConfig, messages)) {
         answer += chunk;
@@ -1668,7 +1726,7 @@ app.post<{ Params: { id: string }; Body: { prompt?: string } }>(
   },
 );
 
-app.get<{ Querystring: { centre?: string; window?: string; panel?: string; sort?: string; rollWindow?: string; rollSort?: string; rollOpen?: string; waitlistSection?: string; googleAnalyticsSection?: string; gaRange?: string; gaFrom?: string; gaTo?: string; gaFromMonth?: string; gaFromYear?: string; gaToMonth?: string; gaToYear?: string; metaRefreshed?: string; integrationError?: string } }>("/app", async (request, reply) => {
+app.get<{ Querystring: { centre?: string; window?: string; panel?: string; sort?: string; slt?: string; rollWindow?: string; rollSort?: string; rollOpen?: string; rollSlt?: string; waitlistSection?: string; googleAnalyticsSection?: string; gaRange?: string; gaFrom?: string; gaTo?: string; gaFromMonth?: string; gaFromYear?: string; gaToMonth?: string; gaToYear?: string; metaRefreshed?: string; integrationError?: string } }>("/app", async (request, reply) => {
   void tickWeeklySnapshotRefresh(app.log);
   void tickMetaAdvertReviews(app.log);
   // Most visits here don't use Beep Beep, so leave the model unloaded.
@@ -1685,20 +1743,31 @@ app.get<{ Querystring: { centre?: string; window?: string; panel?: string; sort?
   const latestRunDate = latestSnapshotSet ? new Date(latestSnapshotSet.runDate) : new Date();
   const windowStartDate = resolveWindowStartDate(latestRunDate, selectedWindowKey);
   const snapshotSet = latestSnapshotSet;
+  const centreContacts = await readCentreContactList();
+  // Infocare Analytics' SLT filter: with no centre chosen, the first of that
+  // SLT's centres is the selected one.
+  const slt = resolveSlt(request.query?.slt, centreContacts);
   const resolvedSelectedCentreKey =
     selectedCentreKey ??
+    (slt && snapshotSet
+      ? resolveDefaultAnalyticsCentreKey(
+          { ...snapshotSet, snapshots: filterBySlt(snapshotSet.snapshots, (row) => row.serviceName, slt, centreContacts) },
+          selectedWindowKey,
+          serviceSort,
+        )
+      : null) ??
     resolveDefaultAnalyticsCentreKey(snapshotSet, selectedWindowKey, serviceSort);
   const centreHistory =
     resolvedSelectedCentreKey == null
       ? []
-      : await readCentreSnapshotHistory(resolvedSelectedCentreKey, {
+      : await readCentreAnalyticsHistory(resolvedSelectedCentreKey, {
           fromDate: windowStartDate,
           toDate: latestRunDate,
         });
   const annualHistory =
     resolvedSelectedCentreKey == null
       ? []
-      : await readCentreSnapshotHistory(resolvedSelectedCentreKey, {
+      : await readCentreAnalyticsHistory(resolvedSelectedCentreKey, {
           fromDate: resolveWindowStartDate(latestRunDate, "12M"),
           toDate: latestRunDate,
         });
@@ -1812,12 +1881,12 @@ app.get<{ Querystring: { centre?: string; window?: string; panel?: string; sort?
             app.log.warn({ error }, "Meta advert reviews unavailable");
             return null;
           });
-  const centreContacts = await readCentreContactList();
   const snapshotRefreshState = getSnapshotRefreshState();
   const enrolmentQuality = await loadEnrolmentQualityView(
     resolveRollWindowKey(request.query?.rollWindow),
     resolveRollSort(request.query?.rollSort),
     parseRollOpen(request.query?.rollOpen),
+    request.query?.rollSlt ?? null,
   ).catch((error: unknown) => {
     app.log.warn({ error }, "Enrolment Quality unavailable");
     return null;
@@ -1831,6 +1900,7 @@ app.get<{ Querystring: { centre?: string; window?: string; panel?: string; sort?
         selectedCentreKey: resolvedSelectedCentreKey,
         selectedWindowKey,
         serviceSort,
+        slt,
         focusPanelId,
         centreHistory,
         annualHistory,
@@ -2990,14 +3060,26 @@ app.get<{ Querystring: { centre?: string } }>("/sector", async (request, reply) 
   return renderSectorAppShell({ centres, runs, lastCompletedAt, progress: getSectorSyncProgress(), openCentre });
 });
 
-app.get("/api/sector/export.csv", async (_request, reply) => {
-  const csv = sectorCentresToCsv(await listSectorCentres());
-  const date = new Date().toISOString().slice(0, 10);
-  reply
-    .type("text/csv; charset=utf-8")
-    .header("Content-Disposition", `attachment; filename="Sector_Insight_${date}.csv"`);
-  // A BOM so Excel reads the macrons as UTF-8.
-  return `﻿${csv}`;
+// Sector Insight's print button: the centres shown in the list (ids sent by
+// the page, in list order) as a PDF, with the filters named in the header.
+app.get<{ Querystring: { ids?: string; filters?: string } }>("/api/sector/pdf", async (request, reply) => {
+  const rawIds = request.query?.ids;
+  const ids =
+    rawIds == null
+      ? null
+      : new Set(
+          String(rawIds)
+            .split(",")
+            .map((id) => parsePositiveInt(id))
+            .filter((id): id is number => id != null),
+        );
+  const filters = String(request.query?.filters ?? "").slice(0, 300);
+  const centres = selectSectorPrintCentres(await listSectorCentres(), ids);
+  const buffer = await generateSectorPdfBuffer(centres, filters);
+  return reply
+    .type("application/pdf")
+    .header("Content-Disposition", attachmentDownloadHeader(sectorPdfFilename()))
+    .send(buffer);
 });
 
 app.post("/api/sector/sync", async (_request, reply) => {
@@ -3060,6 +3142,248 @@ for (const action of ["end", "delete"] as const) {
     return { ok: true, html: await sectorPromotionsFragment(promotion.centreId) };
   });
 }
+
+// --- Budget ----------------------------------------------------------------
+// Replaces the yearly Budget Calculator workbooks. Every change answers with
+// the page's panel bodies (renderBudgetFragments), which it swaps in place.
+
+function parseBudgetYear(value: unknown): number | null {
+  const year = Number.parseInt(String(value ?? ""), 10);
+  return Number.isInteger(year) && year >= 2000 && year <= 2100 ? year : null;
+}
+
+async function readBudgetPageData(startYear: number): Promise<BudgetPageData> {
+  const now = new Date();
+  // The current financial year always exists, so the page opens on it.
+  // The current year is created by itself on 1 July: subscriptions that have
+  // not ended carry over from the latest year before it, as with New year.
+  const currentYear = financialYearOf(now);
+  const existingYears = (await readBudgetYears()).map((year) => year.startYear);
+  if (!existingYears.includes(currentYear)) {
+    const earlier = existingYears.filter((year) => year < currentYear);
+    if (earlier.length) await copyActiveBudgetSubscriptions(Math.max(...earlier), currentYear);
+  }
+  await ensureBudgetYear(currentYear);
+  const selected = await readBudgetYearData(startYear);
+  const [years, all, subscriptionNames] = await Promise.all([readBudgetYears(), readAllBudgetYearData(), readBudgetSubscriptionNames()]);
+  const previous = all.find((data) => data.year.startYear === startYear - 1) ?? null;
+  return { years, selected, previous, all, subscriptionNames, now };
+}
+
+async function budgetFragmentsReply(body: { year?: unknown } | undefined) {
+  const year = parseBudgetYear(body?.year) ?? financialYearOf(new Date());
+  return { ok: true, fragments: renderBudgetFragments(await readBudgetPageData(year)) };
+}
+
+app.get<{ Querystring: { year?: string; panel?: string } }>("/budget", async (request, reply) => {
+  const year = parseBudgetYear(request.query?.year) ?? financialYearOf(new Date());
+  reply.type("text/html; charset=utf-8");
+  return renderBudgetAppShell(await readBudgetPageData(year), request.query?.panel ?? null);
+});
+
+app.get<{ Querystring: { year?: string } }>("/fragments/budget", async (request) => budgetFragmentsReply({ year: request.query?.year }));
+
+app.get<{ Querystring: { year?: string } }>("/api/budget/pdf", async (request, reply) => {
+  const year = parseBudgetYear(request.query?.year) ?? financialYearOf(new Date());
+  const data = await readBudgetPageData(year);
+  const buffer = await renderBudgetPdf(data.selected, data.previous, data.all, data.now);
+  return reply.type("application/pdf").header("Content-Disposition", attachmentDownloadHeader(budgetPdfFilename(year))).send(buffer);
+});
+
+app.post<{ Params: { year: string }; Body: Record<string, unknown> }>("/api/budget/years/:year/settings", async (request, reply) => {
+  const year = parseBudgetYear(request.params.year);
+  if (year == null) {
+    reply.code(400);
+    return { ok: false, error: "Valid financial year is required." };
+  }
+  const body = request.body ?? {};
+  // The threshold is worked out (budgetThresholdPercent), never set from here.
+  await updateBudgetYearSettings(year, { operatingBudget: body.operatingBudget, report: body.report });
+  return budgetFragmentsReply({ year });
+});
+
+// The year's report for the Generate report window: the saved one, or one
+// written from the figures now (fresh=1 writes it again regardless). Nothing
+// is stored here; Save goes through the settings route above.
+app.get<{ Params: { year: string }; Querystring: { fresh?: string } }>("/api/budget/years/:year/report", async (request, reply) => {
+  const year = parseBudgetYear(request.params.year);
+  if (year == null) {
+    reply.code(400);
+    return { ok: false, error: "Valid financial year is required." };
+  }
+  const data = await readBudgetPageData(year);
+  const saved = data.selected.year.report.trim();
+  return { ok: true, report: saved && request.query?.fresh !== "1" ? saved : buildBudgetReport(data.selected, data.previous, data.now) };
+});
+
+// Additional budget for a purchase category in the selected year (a one-off,
+// part of the year's budget). A blank or zero amount removes it.
+app.post<{ Body: Record<string, unknown> }>("/api/budget/additional", async (request, reply) => {
+  const body = request.body ?? {};
+  const year = parseBudgetYear(body.year) ?? financialYearOf(new Date());
+  if (!(await setBudgetAdditional(year, body.category, body.amount))) {
+    reply.code(400);
+    return { ok: false, error: "Enter the additional budget as an amount, or leave it blank to remove it." };
+  }
+  return budgetFragmentsReply(body);
+});
+
+// New year: the year after the latest, with the latest year's active subscriptions.
+app.post("/api/budget/years/new", async () => {
+  const years = await readBudgetYears();
+  const latest = years.length ? Math.max(...years.map((year) => year.startYear)) : financialYearOf(new Date()) - 1;
+  await copyActiveBudgetSubscriptions(latest, latest + 1);
+  return { ok: true, startYear: latest + 1 };
+});
+
+app.post<{ Body: Record<string, unknown> }>("/api/budget/subscriptions", async (request, reply) => {
+  const body = request.body ?? {};
+  const year = parseBudgetYear(body.year) ?? financialYearOf(new Date());
+  const budgetYear = await ensureBudgetYear(year);
+  const existingId = await findBudgetSubscriptionIdByName(body.name);
+  if (existingId != null && (await prisma.budgetSubscriptionYear.count({ where: { subscriptionId: existingId, budgetYearId: budgetYear.id } })) > 0) {
+    reply.code(400);
+    return { ok: false, error: `${String(body.name ?? "").trim()} is already in ${budgetYear.label}. Edit it there instead.` };
+  }
+  if (!(await createBudgetSubscription(budgetYear.id, body, existingId ?? undefined))) {
+    reply.code(400);
+    return { ok: false, error: "Enter the subscription's name and amount." };
+  }
+  return budgetFragmentsReply(body);
+});
+
+app.post<{ Params: { id: string }; Body: Record<string, unknown> }>("/api/budget/subscriptions/:id", async (request, reply) => {
+  const id = parsePositiveInt(request.params.id);
+  if (id == null || !(await updateBudgetSubscription(id, request.body ?? {}))) {
+    reply.code(400);
+    return { ok: false, error: "That subscription could not be saved. Check the amount." };
+  }
+  return budgetFragmentsReply(request.body);
+});
+
+app.post<{ Params: { id: string }; Body: Record<string, unknown> }>("/api/budget/subscriptions/:id/end", async (request, reply) => {
+  const id = parsePositiveInt(request.params.id);
+  if (id == null || !(await endBudgetSubscription(id, request.body?.tally))) {
+    reply.code(404);
+    return { ok: false, error: "That subscription no longer exists." };
+  }
+  return budgetFragmentsReply(request.body);
+});
+
+app.post<{ Params: { id: string }; Body: Record<string, unknown> }>("/api/budget/subscriptions/:id/delete", async (request) => {
+  const id = parsePositiveInt(request.params.id);
+  if (id != null) await deleteBudgetSubscription(id);
+  return budgetFragmentsReply(request.body);
+});
+
+app.post<{ Body: Record<string, unknown> }>("/api/budget/expenses", async (request, reply) => {
+  const body = request.body ?? {};
+  const year = parseBudgetYear(body.year) ?? financialYearOf(new Date());
+  if (!(await createBudgetExpense(year, body))) {
+    reply.code(400);
+    return { ok: false, error: "Enter the supplier and amount." };
+  }
+  return budgetFragmentsReply(body);
+});
+
+app.post<{ Params: { id: string }; Body: Record<string, unknown> }>("/api/budget/expenses/:id", async (request, reply) => {
+  const id = parsePositiveInt(request.params.id);
+  if (id == null || !(await updateBudgetExpense(id, request.body ?? {}))) {
+    reply.code(400);
+    return { ok: false, error: "That purchase could not be saved." };
+  }
+  return budgetFragmentsReply(request.body);
+});
+
+app.post<{ Params: { id: string }; Body: Record<string, unknown> }>("/api/budget/expenses/:id/delete", async (request, reply) => {
+  const id = parsePositiveInt(request.params.id);
+  if (id == null || !(await deleteBudgetExpense(id))) {
+    reply.code(400);
+    return { ok: false, error: "That purchase could not be deleted." };
+  }
+  return budgetFragmentsReply(request.body);
+});
+
+// A purchase category is the group its purchases share. Renaming applies to
+// every year; deleting removes its purchases in the selected year. Both are
+// refused for a category holding Meta rows (read-only).
+app.post<{ Body: Record<string, unknown> }>("/api/budget/categories/rename", async (request, reply) => {
+  const body = request.body ?? {};
+  if (!(await renameBudgetExpenseCategory(body.from, body.to))) {
+    reply.code(400);
+    return { ok: false, error: "That category could not be renamed." };
+  }
+  return budgetFragmentsReply(body);
+});
+
+app.post<{ Body: Record<string, unknown> }>("/api/budget/categories/delete", async (request, reply) => {
+  const body = request.body ?? {};
+  const year = parseBudgetYear(body.year) ?? financialYearOf(new Date());
+  if (!(await deleteBudgetExpenseCategory(year, body.category))) {
+    reply.code(400);
+    return { ok: false, error: "That category could not be deleted." };
+  }
+  return budgetFragmentsReply(body);
+});
+
+// A future spend category is the project its spends share, in the selected
+// year. Deleting removes only the spends still to buy.
+app.post<{ Body: Record<string, unknown> }>("/api/budget/future-categories/rename", async (request, reply) => {
+  const body = request.body ?? {};
+  const year = parseBudgetYear(body.year) ?? financialYearOf(new Date());
+  if (!(await renameBudgetFutureCategory(year, body.from, body.to))) {
+    reply.code(400);
+    return { ok: false, error: "That category could not be renamed." };
+  }
+  return budgetFragmentsReply(body);
+});
+
+app.post<{ Body: Record<string, unknown> }>("/api/budget/future-categories/delete", async (request, reply) => {
+  const body = request.body ?? {};
+  const year = parseBudgetYear(body.year) ?? financialYearOf(new Date());
+  if (!(await deleteBudgetFutureCategory(year, body.category))) {
+    reply.code(400);
+    return { ok: false, error: "That category could not be deleted." };
+  }
+  return budgetFragmentsReply(body);
+});
+
+app.post<{ Body: Record<string, unknown> }>("/api/budget/future", async (request, reply) => {
+  const body = request.body ?? {};
+  const year = await ensureBudgetYear(parseBudgetYear(body.year) ?? financialYearOf(new Date()));
+  if (!(await createBudgetFutureSpend(year.id, body))) {
+    reply.code(400);
+    return { ok: false, error: "Enter the project and amount." };
+  }
+  return budgetFragmentsReply(body);
+});
+
+app.post<{ Params: { id: string }; Body: Record<string, unknown> }>("/api/budget/future/:id", async (request, reply) => {
+  const id = parsePositiveInt(request.params.id);
+  if (id == null || !(await updateBudgetFutureSpend(id, request.body ?? {}))) {
+    reply.code(400);
+    return { ok: false, error: "That future spend could not be saved." };
+  }
+  return budgetFragmentsReply(request.body);
+});
+
+app.post<{ Params: { id: string }; Body: Record<string, unknown> }>("/api/budget/future/:id/delete", async (request, reply) => {
+  const id = parsePositiveInt(request.params.id);
+  if (id == null || !(await deleteBudgetFutureSpend(id))) {
+    reply.code(400);
+    return { ok: false, error: "That future spend could not be deleted." };
+  }
+  return budgetFragmentsReply(request.body);
+});
+
+app.post<{ Params: { id: string }; Body: Record<string, unknown> }>("/api/budget/future/:id/bought", async (request, reply) => {
+  const id = parsePositiveInt(request.params.id);
+  if (id == null || !(await markBudgetFutureSpendBought(id, { spentOn: request.body?.spentOn }))) {
+    reply.code(400);
+    return { ok: false, error: "That future spend is already bought or no longer exists." };
+  }
+  return budgetFragmentsReply(request.body);
+});
 
 // Same SSE shape as the other chats, plus a "results" event first: the exact
 // centres the question matches, which the page lists under the reply.
@@ -3131,27 +3455,42 @@ function parseRollOpen(value: unknown): number | null {
   return String(value ?? "") === String(ORGANISATION_ROW_KEY) ? ORGANISATION_ROW_KEY : parsePositiveInt(value);
 }
 
+// sltFilter is the panel's SLT filter value (rollSlt). Left out by callers
+// that need every centre (urgency scores, chat grounding): they get no filter
+// and the contact list is not read.
 async function loadEnrolmentQualityView(
   windowKey: RollWindowKey,
   sort: RollSort,
   openCentreKey: number | null = null,
+  sltFilter?: string | null,
 ): Promise<EnrolmentQualityView> {
   const currentMonth = monthKey(new Date());
-  const [centres, months, capacities] = await Promise.all([
+  const [centres, months, capacities, contacts] = await Promise.all([
     readOpenCentreReferences(),
     readCentreMonthlyRolls(addMonths(currentMonth, -(ROLL_HISTORY_MONTHS - 1)), currentMonth),
     readOperatingCapacities(),
+    sltFilter === undefined ? [] : readCentreContactList(),
   ]);
-  const rows = buildEnrolmentQualityRows({ centres, months, capacities, windowKey, currentMonth });
+  const slt = resolveSlt(sltFilter, contacts);
+  const rows = filterBySlt(
+    buildEnrolmentQualityRows({ centres, months, capacities, windowKey, currentMonth }),
+    (row) => row.name,
+    slt,
+    contacts,
+  );
+  // Under a filter the total row adds up that SLT's centres only.
+  const organisation = buildOrganisationRollRow(rows);
 
   return {
     rows: sortEnrolmentQualityRows(rows, sort),
-    organisation: buildOrganisationRollRow(rows),
+    organisation: organisation && slt ? { ...organisation, name: sltTotalName(slt) } : organisation,
     windowKey,
     sort,
     currentMonth,
     progress: getRollHistoryProgress(),
     openCentreKey,
+    slt,
+    sltOptions: listSltNames(contacts),
   };
 }
 
@@ -3159,19 +3498,39 @@ async function loadEnrolmentQualityView(
 // complete month, and a year before). Attached at read time so the table,
 // bands and Beep Beep all score the same way; without roll data a centre is
 // scored on enrolled children against its licence, as before.
+// The capacity edited in Enrolment Quality replaces the licence here too
+// (read time, so a save shows at once; stored Infocare figures are untouched).
 async function withRollSignals(set: LatestSnapshotSet | null): Promise<LatestSnapshotSet | null> {
   if (!set) return set;
   try {
     const view = await loadEnrolmentQualityView("2Y", "asc");
     const signals = new Map(view.rows.map((row) => [row.centreKey, rollSignalForRow(row)]));
+    const capacities = new Map(view.rows.map((row) => [row.centreKey, row.capacities]));
     return {
       ...set,
-      snapshots: set.snapshots.map((snapshot) => ({ ...snapshot, ...(signals.get(snapshot.centreKey) ?? {}) })),
+      snapshots: set.snapshots.map((snapshot) => ({
+        ...withOperatingCapacity(snapshot, capacities.get(snapshot.centreKey) ?? []),
+        ...(signals.get(snapshot.centreKey) ?? {}),
+      })),
     };
   } catch (error) {
     app.log.warn({ error }, "Roll figures unavailable for the urgency score");
     return set;
   }
+}
+
+// A centre's Infocare Analytics history, each week on the capacity in force
+// that month (the same Enrolment Quality figures as above).
+async function readCentreAnalyticsHistory(centreKey: number, options: { fromDate: Date; toDate: Date }) {
+  const [history, capacities] = await Promise.all([
+    readCentreSnapshotHistory(centreKey, options),
+    readOperatingCapacities().catch((error: unknown) => {
+      app.log.warn({ error }, "Enrolment Quality capacities unavailable for the analytics history");
+      return [];
+    }),
+  ]);
+  const centreCapacities = capacities.filter((entry) => entry.centreKey === centreKey);
+  return history.map((entry) => ({ ...entry, snapshot: withOperatingCapacity(entry.snapshot, centreCapacities) }));
 }
 
 // Dashboard chat grounding: only for questions about roll, enrolment levels
@@ -3202,6 +3561,18 @@ async function findEnrolmentQualityGrounding(prompt: string, selectedCentreKey: 
   }
 }
 
+// The Budget page's figures for budget-shaped prompts (Beep Beep and General
+// Chat), through the shared extraGrounding seam. Fails soft; no AI call.
+async function findBudgetGrounding(prompt: string): Promise<string | null> {
+  if (!isBudgetPrompt(prompt)) return null;
+  try {
+    return buildBudgetGrounding(await readAllBudgetYearData(), new Date()) || null;
+  } catch (error) {
+    app.log.warn({ error }, "Budget grounding unavailable");
+    return null;
+  }
+}
+
 // Beep Beep's opening messages for one centre, swapped into the chat when a
 // centre is opened in another panel (Enrolment Quality) without reloading /app.
 app.get<{ Querystring: { centre?: string; window?: string; sort?: string } }>("/fragments/ai-chat", async (request, reply) => {
@@ -3213,8 +3584,8 @@ app.get<{ Querystring: { centre?: string; window?: string; sort?: string } }>("/
   const windowKey = resolveWindowKey(request.query?.window);
   const latestRunDate = snapshotSet ? new Date(snapshotSet.runDate) : new Date();
   const [centreHistory, annualHistory, notes, metaResponseSummary, enrolmentQuality] = await Promise.all([
-    readCentreSnapshotHistory(centreKey, { fromDate: resolveWindowStartDate(latestRunDate, windowKey), toDate: latestRunDate }),
-    readCentreSnapshotHistory(centreKey, { fromDate: resolveWindowStartDate(latestRunDate, "12M"), toDate: latestRunDate }),
+    readCentreAnalyticsHistory(centreKey, { fromDate: resolveWindowStartDate(latestRunDate, windowKey), toDate: latestRunDate }),
+    readCentreAnalyticsHistory(centreKey, { fromDate: resolveWindowStartDate(latestRunDate, "12M"), toDate: latestRunDate }),
     readLatestMetaRecommendationNotesForCentre(centreKey, 3),
     readMetaResponseSummaries()
       .then(({ summaries }) => summaries.get(centreKey) ?? null)
@@ -3244,13 +3615,14 @@ app.get<{ Querystring: { centre?: string; window?: string; sort?: string } }>("/
     );
 });
 
-app.get<{ Querystring: { rollWindow?: string; rollSort?: string; rollOpen?: string } }>(
+app.get<{ Querystring: { rollWindow?: string; rollSort?: string; rollOpen?: string; rollSlt?: string } }>(
   "/fragments/enrolment-quality",
   async (request, reply) => {
     const view = await loadEnrolmentQualityView(
       resolveRollWindowKey(request.query?.rollWindow),
       resolveRollSort(request.query?.rollSort),
       parseRollOpen(request.query?.rollOpen),
+      request.query?.rollSlt ?? null,
     );
     return reply.type("text/html; charset=utf-8").send(renderEnrolmentQualityBody(view));
   },
@@ -3268,10 +3640,12 @@ app.post("/api/enrolment-quality/sync", async (_request, reply) => {
 app.get("/api/enrolment-quality/sync/status", async () => getRollHistoryProgress());
 
 // The panel's PDF button: the same period and order as on screen.
-app.get<{ Querystring: { rollWindow?: string; rollSort?: string } }>("/api/enrolment-quality/pdf", async (request, reply) => {
+app.get<{ Querystring: { rollWindow?: string; rollSort?: string; rollSlt?: string } }>("/api/enrolment-quality/pdf", async (request, reply) => {
   const view = await loadEnrolmentQualityView(
     resolveRollWindowKey(request.query?.rollWindow),
     resolveRollSort(request.query?.rollSort),
+    null,
+    request.query?.rollSlt ?? null,
   );
   const buffer = await generateEnrolmentQualityPdfBuffer(view);
   return reply
@@ -3281,16 +3655,24 @@ app.get<{ Querystring: { rollWindow?: string; rollSort?: string } }>("/api/enrol
 });
 
 // Infocare Analytics' print button: the same window and order as on screen.
-app.get<{ Querystring: { window?: string; sort?: string } }>("/api/analytics/pdf", async (request, reply) => {
+app.get<{ Querystring: { window?: string; sort?: string; slt?: string } }>("/api/analytics/pdf", async (request, reply) => {
   const snapshotSet = await withRollSignals(await readLatestAnalyticsSnapshotSet());
   if (!snapshotSet?.snapshots.length) {
     return reply.code(404).send({ error: "No Infocare analytics snapshot yet." });
   }
   const windowKey = resolveWindowKey(request.query?.window);
-  const buffer = await generateAnalyticsPdfBuffer(snapshotSet, windowKey, resolveServiceSort(request.query?.sort));
+  const contacts = request.query?.slt ? await readCentreContactList() : [];
+  const slt = resolveSlt(request.query?.slt, contacts);
+  const buffer = await generateAnalyticsPdfBuffer(
+    { ...snapshotSet, snapshots: filterBySlt(snapshotSet.snapshots, (row) => row.serviceName, slt, contacts) },
+    windowKey,
+    resolveServiceSort(request.query?.sort),
+    new Date(),
+    slt,
+  );
   return reply
     .type("application/pdf")
-    .header("Content-Disposition", attachmentDownloadHeader(analyticsPdfFilename(windowKey)))
+    .header("Content-Disposition", attachmentDownloadHeader(analyticsPdfFilename(windowKey, new Date(), slt)))
     .send(buffer);
 });
 
@@ -4845,7 +5227,7 @@ app.post<{
         prompt,
         request.body?.messages,
         memory,
-        joinGrounding(liveGrounding, await findEnrolmentQualityGrounding(prompt, memorySelectedCentreKey), await findMetaResponseGroundingSafely(prompt, memorySelectedCentreKey), help?.text),
+        joinGrounding(liveGrounding, await findEnrolmentQualityGrounding(prompt, memorySelectedCentreKey), await findMetaResponseGroundingSafely(prompt, memorySelectedCentreKey), await findBudgetGrounding(prompt), help?.text),
       ),
     );
 
@@ -5010,7 +5392,7 @@ app.post<{
       prompt,
       request.body?.messages,
       memory,
-      joinGrounding(liveGrounding, await findEnrolmentQualityGrounding(prompt, memorySelectedCentreKey), await findMetaResponseGroundingSafely(prompt, memorySelectedCentreKey), help?.text),
+      joinGrounding(liveGrounding, await findEnrolmentQualityGrounding(prompt, memorySelectedCentreKey), await findMetaResponseGroundingSafely(prompt, memorySelectedCentreKey), await findBudgetGrounding(prompt), help?.text),
     );
 
     return { help, context, messages, deterministicAnswer: buildDeterministicChatAnswer(context, prompt) };
@@ -5119,6 +5501,7 @@ app.get<{ Querystring: { centre?: string; window?: string; sort?: string } }>("/
     const result = await refreshMetaAds(metaConfig);
 
     app.log.info(result, "Meta Ads refresh completed");
+    await syncBudgetMetaSpend(app.log);
   } catch (error) {
     app.log.error(
       {
@@ -5416,11 +5799,25 @@ app.post("/actions/dismiss-ai-recommendation", async (_request, reply) => {
 
   await setDotenvValue(AI_RECOMMENDATION_DISMISSED_KEY, aiModel.recommendedModel);
   process.env[AI_RECOMMENDATION_DISMISSED_KEY] = aiModel.recommendedModel;
-  const { reminders, ktcaReminder, aiModelReminder } = await readLandingReminders();
+  const { reminders, ktcaReminder, aiModelReminder, budgetReminder } = await readLandingReminders();
 
   return reply
     .type("application/json; charset=utf-8")
-    .send({ ok: true, html: renderReminders(reminders, ktcaReminder, aiModelReminder) });
+    .send({ ok: true, html: renderReminders(reminders, ktcaReminder, aiModelReminder, budgetReminder) });
+});
+
+// Dismisses the budget reminder for that month only, stored with its time.
+app.post<{ Body: { month?: unknown } }>("/actions/dismiss-budget-reminder", async (request, reply) => {
+  const month = String(request.body?.month ?? "");
+  if (!/^d{4}-(0[1-9]|1[0-2])$/.test(month)) {
+    reply.code(400);
+    return reply.type("application/json; charset=utf-8").send({ ok: false, error: "Valid month is required." });
+  }
+  await dismissBudgetReminder(month);
+  const { reminders, ktcaReminder, aiModelReminder, budgetReminder } = await readLandingReminders();
+  return reply
+    .type("application/json; charset=utf-8")
+    .send({ ok: true, html: renderReminders(reminders, ktcaReminder, aiModelReminder, budgetReminder) });
 });
 
 app.post("/actions/rollback-ai-model", async (_request, reply) => {
@@ -5727,6 +6124,7 @@ async function start() {
   startSectorSyncLoop();
   startRollHistorySyncLoop();
   void tickMetaAdvertReviews(app.log, { force: true });
+  void syncBudgetMetaSpend(app.log);
   void logJdAgreementStatusOnStartup();
 
   if (mailchimpConfigStatus.isConfigured) {

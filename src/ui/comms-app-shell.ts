@@ -6,6 +6,7 @@ import type { FormstackDashboardData } from "../storage/formstack-store.js";
 import type { MailchimpDashboardData } from "../storage/mailchimp-store.js";
 import type { PostmarkDashboardData } from "../storage/postmark-store.js";
 import { renderLayout } from "./layout.js";
+import { renderRefreshAction } from "./action-buttons.js";
 import { renderCommsFunnelPanel } from "./comms/funnel-panel.js";
 import { renderFormstackPanel } from "./comms/formstack-panel.js";
 import { renderMailchimpPanel } from "./comms/mailchimp-panel.js";
@@ -110,7 +111,7 @@ function renderWebmailWindowActions(
       }).join("")}
       <a class="analytics-toolbar__window${metaAdsFilter === "all" ? " analytics-toolbar__window--active" : ""}" href="${allHref}">All emails</a>
       <a class="analytics-toolbar__window${metaAdsFilter === "active-recent" ? " analytics-toolbar__window--active" : ""}" href="${activeRecentHref}">${activeRecentLabel}</a>
-      <a class="panel-action-button" href="${checkHref}" aria-label="Check latest Webmail webhook activity" title="Check latest Webmail webhook activity"><i class="bi bi-arrow-repeat ui-icon" aria-hidden="true"></i></a>
+      ${renderRefreshAction({ label: "Check latest Webmail webhook activity", href: checkHref })}
     </div>
   `;
 }
@@ -428,9 +429,9 @@ export function renderCommsAppShell(options: CommsAppShellOptions = {}) {
     meta: panel.id === "comms-postmark"
       ? `<span class="comms-panel-source nowrap">Source: Postmark webhook + stored export | Latest activity: ${escapeHtml(postmarkReceivedAt)}</span>`
       : panel.id === "comms-mailchimp"
-      ? `<span class="comms-panel-source nowrap">Source: Mailchimp | Last pulled: ${escapeHtml(mailchimpPulledAt)}</span><a class="panel-action-button" href="/actions/refresh-mailchimp" aria-label="Download latest Panui data from Mailchimp" title="Download latest Panui data from Mailchimp"><i class="bi bi-download ui-icon" aria-hidden="true"></i></a>`
+      ? `<span class="comms-panel-source nowrap">Source: Mailchimp | Last pulled: ${escapeHtml(mailchimpPulledAt)}</span>${renderRefreshAction({ label: "Refresh Panui data from Mailchimp", href: "/actions/refresh-mailchimp" })}`
       : panel.id === "comms-formstack"
-        ? `<span class="comms-panel-source nowrap">Source: Formstack | Last pulled: ${escapeHtml(formstackPulledAt)}</span><a class="panel-action-button" href="/actions/refresh-formstack" aria-label="Download latest Online Forms data from Formstack" title="Download latest Online Forms data from Formstack"><i class="bi bi-download ui-icon" aria-hidden="true"></i></a>`
+        ? `<span class="comms-panel-source nowrap">Source: Formstack | Last pulled: ${escapeHtml(formstackPulledAt)}</span>${renderRefreshAction({ label: "Refresh Online Forms data from Formstack", href: "/actions/refresh-formstack" })}`
         : panel.id === "comms-funnel"
           ? `<span class="comms-panel-source nowrap">Sources: Postmark + Formstack | Latest activity: ${escapeHtml(combinedPulledAt)}</span>`
           : undefined,
@@ -461,6 +462,7 @@ export function renderCommsAppShell(options: CommsAppShellOptions = {}) {
       <a class="nav-rail__item inline-flex items-center justify-center text-muted nav-rail__item--current" href="/comms" aria-label="Online Communications dashboard" title="Online Communications" aria-current="page"><i class="bi bi-envelope-paper" aria-hidden="true"></i></a>
       <a class="nav-rail__item inline-flex items-center justify-center text-muted" href="/jd" aria-label="Job Descriptions" title="Job Descriptions"><i class="bi bi-file-earmark-person" aria-hidden="true"></i></a>
       <a class="nav-rail__item inline-flex items-center justify-center text-muted" href="/wiki" aria-label="Things To Know" title="Things To Know"><i class="bi bi-journal-bookmark" aria-hidden="true"></i></a>
+      <a class="nav-rail__item inline-flex items-center justify-center text-muted" href="/budget" aria-label="Budget" title="Budget"><i class="bi bi-piggy-bank" aria-hidden="true"></i></a>
     </aside>
     ${renderRefreshOutcome(options)}
     ${layout}

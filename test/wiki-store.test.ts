@@ -16,6 +16,7 @@ import { renderLandingPage } from "../src/ui/landing-page.js";
 import { ensureAiRunning, isAiReady } from "../src/ai/runtime.js";
 import { renderWikiRichText } from "../src/ui/wiki/wiki-rich-text.js";
 import { sanitizeJdBlurbHtml } from "../src/storage/jd-sanitize-html.js";
+import { normaliseWikiParagraphs } from "../src/storage/wiki-paragraphs.js";
 import { readFileSync } from "node:fs";
 import {
   DEFAULT_WIKI_CATEGORIES,
@@ -87,11 +88,11 @@ test("the wiki is a knowledge base source the chats can search", () => {
   assert.equal(HELP_SOURCES.wiki.crawl, undefined);
 });
 
-test("landing page offers Things To Know next to Job Descriptions", () => {
+test("landing page offers the wiki as WIKI", () => {
   const html = renderLandingPage({});
 
   assert.match(html, /href="\/wiki"/);
-  assert.match(html, /Things To Know/);
+  assert.match(html, />WIKI</);
 });
 
 test("list panel groups articles by category with no pin control", () => {
@@ -319,7 +320,9 @@ test("the rich text editor is one shared component, not per-flow variants", () =
 test("an empty article still gets an editable paragraph to type into", () => {
   const html = renderWikiRichText({ contentAttribute: "data-wiki-content", html: "" });
 
-  assert.match(html, /contenteditable="true"><p><\/p>/);
+  // The <br> lets the caret sit inside the paragraph, so the first text typed
+  // is a paragraph rather than loose text with no paragraph spacing.
+  assert.match(html, /contenteditable="true"><p><br><\/p><\/div>/);
 });
 
 // --- Add is a modal, not a form on the page ---------------------------------
@@ -676,12 +679,40 @@ test("emphasis normalising is idempotent across repeated saves", () => {
   assert.equal(sanitizeJdBlurbHtml(once), once);
 });
 
-test("the editor offers bold, italic and underline controls", () => {
+test("the editor offers bold, italic, underline and strikethrough controls", () => {
   const html = renderWikiRichText({ contentAttribute: "data-wiki-content", html: "<p></p>" });
 
   assert.match(html, /data-wiki-cmd="bold"/);
   assert.match(html, /data-wiki-cmd="italic"/);
   assert.match(html, /data-wiki-cmd="underline"/);
+  assert.match(html, /data-wiki-cmd="strikeThrough"/);
+});
+
+test("text typed before the first Enter becomes a paragraph", () => {
+  assert.equal(
+    normaliseWikiParagraphs("We run <strong>ads</strong> on Meta.<p><br></p><p>Second.</p>"),
+    "<p>We run <strong>ads</strong> on Meta.</p><p>Second.</p>",
+  );
+});
+
+test("empty paragraphs from double Enter or deleted text are dropped", () => {
+  assert.equal(
+    normaliseWikiParagraphs("<p>One</p><p><br></p><p></p><p> <br><br> </p><p>Two</p><h2></h2><ul><li>A</li></ul><p></p>"),
+    "<p>One</p><p>Two</p><ul><li>A</li></ul>",
+  );
+});
+
+test("paragraph normalising leaves lists, links and line breaks inside paragraphs alone", () => {
+  const html = '<h2>Head</h2><p>Line one<br>line two <a href="https://x.nz" rel="noopener noreferrer">link</a></p><ul><li>A<ul><li>B</li></ul></li></ul>';
+  assert.equal(normaliseWikiParagraphs(html), html);
+  assert.equal(normaliseWikiParagraphs(normaliseWikiParagraphs("Loose<p></p>")), "<p>Loose</p>");
+});
+
+test("strikethrough from the editor is stored as <s>", () => {
+  // Chrome's strikeThrough command emits <strike>; other browsers <s> or <del>.
+  for (const tag of ["s", "strike", "del"]) {
+    assert.equal(sanitizeJdBlurbHtml(`<p><${tag}>Old</${tag}> new</p>`), "<p><s>Old</s> new</p>");
+  }
 });
 
 test("bold is given a visible weight rather than inheriting the reset", () => {

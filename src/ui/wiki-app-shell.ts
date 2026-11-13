@@ -216,11 +216,6 @@ function renderWikiScript(): string {
             var trimmed = typeof value === "string" ? value.trim() : value;
             if (includeEmpty || trimmed !== "") data[key] = trimmed;
           });
-          // An unchecked checkbox is absent from FormData, so send it explicitly
-          // or unpinning would never save.
-          form.querySelectorAll('input[type="checkbox"]').forEach(function(box) {
-            data[box.name] = box.checked;
-          });
           return data;
         }
 
@@ -525,6 +520,21 @@ function renderWikiScript(): string {
           // Tab nests a bullet under the one above it, the way every other
           // editor behaves. Without this Tab moves focus out of the editor and
           // there is no way to make a sub-bullet at all.
+          // One Enter ends a paragraph and the paragraph margin gives the gap.
+          // A second Enter would only add an empty paragraph (a blank line plus
+          // another margin, far too much), so on an empty paragraph it does
+          // nothing. Inside lists Enter keeps its usual job of leaving the list.
+          content.addEventListener("keydown", function(event) {
+            if (event.key !== "Enter" || event.shiftKey) return;
+            var selection = window.getSelection();
+            var node = selection && selection.anchorNode;
+            var element = node && node.nodeType === Node.ELEMENT_NODE ? node : node && node.parentElement;
+            var paragraph = element && element.closest("p");
+            if (!paragraph || !content.contains(paragraph) || paragraph.closest("li")) return;
+            if (paragraph.textContent.trim() !== "") return;
+            event.preventDefault();
+          });
+
           content.addEventListener("keydown", function(event) {
             if (event.key !== "Tab") return;
             var selection = window.getSelection();
@@ -824,13 +834,13 @@ function renderWikiScript(): string {
           }
 
           var field = event.target.closest("[data-wiki-edit] input");
-          if (!field || field.type === "checkbox") return;
+          if (!field) return;
           saveArticle(true);
         }, true);
 
         document.addEventListener("change", function(event) {
           var field = event.target instanceof Element
-            ? event.target.closest('[data-wiki-edit] input[type="checkbox"], [data-wiki-edit] select')
+            ? event.target.closest("[data-wiki-edit] select")
             : null;
           if (!field) return;
           saveArticle(true);
@@ -1008,6 +1018,7 @@ export function renderWikiAppShell(options: WikiAppShellOptions): string {
       <a class="nav-rail__item inline-flex items-center justify-center text-muted" href="/comms" aria-label="Online Communications dashboard" title="Online Communications"><i class="bi bi-envelope-paper" aria-hidden="true"></i></a>
       <a class="nav-rail__item inline-flex items-center justify-center text-muted" href="/jd" aria-label="Job Descriptions" title="Job Descriptions"><i class="bi bi-file-earmark-person" aria-hidden="true"></i></a>
       <a class="nav-rail__item inline-flex items-center justify-center text-muted nav-rail__item--current" href="/wiki" aria-label="Things To Know" title="Things To Know" aria-current="page"><i class="bi bi-journal-bookmark" aria-hidden="true"></i></a>
+      <a class="nav-rail__item inline-flex items-center justify-center text-muted" href="/budget" aria-label="Budget" title="Budget"><i class="bi bi-piggy-bank" aria-hidden="true"></i></a>
     </aside>
     ${layout}
     ${renderWikiScript()}

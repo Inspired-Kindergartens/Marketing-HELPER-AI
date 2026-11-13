@@ -182,6 +182,7 @@ export async function generateWaitlistPdfBuffer(report: WaitlistDiscoveryReport,
   return renderReportPdf(
     {
       title: "Waitlist Quality",
+      coverKicker: "Marketing",
       coverLabel: "INFOCARE SNAPSHOT",
       subtitle: `Waitlist report ${reportAt}`,
       subject: `Waitlist report ${reportAt}`,

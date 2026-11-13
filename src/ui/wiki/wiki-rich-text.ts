@@ -20,6 +20,7 @@ export function renderWikiRichText(options: WikiRichTextOptions): string {
       <button type="button" data-wiki-cmd="bold" title="Bold"><i class="bi bi-type-bold ui-icon" aria-hidden="true"></i></button>
       <button type="button" data-wiki-cmd="italic" title="Italic"><i class="bi bi-type-italic ui-icon" aria-hidden="true"></i></button>
       <button type="button" data-wiki-cmd="underline" title="Underline"><i class="bi bi-type-underline ui-icon" aria-hidden="true"></i></button>
+      <button type="button" data-wiki-cmd="strikeThrough" title="Strikethrough"><i class="bi bi-type-strikethrough ui-icon" aria-hidden="true"></i></button>
       <button type="button" data-wiki-cmd="insertUnorderedList" title="Bullet list"><i class="bi bi-list-ul ui-icon" aria-hidden="true"></i></button>
       <button type="button" data-wiki-cmd="insertOrderedList" title="Numbered list"><i class="bi bi-list-ol ui-icon" aria-hidden="true"></i></button>
       <button type="button" data-wiki-cmd="outdent" title="Outdent (Shift+Tab)"><i class="bi bi-text-indent-right ui-icon" aria-hidden="true"></i></button>
@@ -27,6 +28,6 @@ export function renderWikiRichText(options: WikiRichTextOptions): string {
       <button type="button" data-wiki-cmd="createLink" title="Hyperlink"><i class="bi bi-link-45deg ui-icon" aria-hidden="true"></i></button>
       ${options.trailingButtons ?? ""}
     </div>
-    <div class="wiki-editor__content text-body rich-text rich-text--editable" ${options.contentAttribute} contenteditable="true">${options.html || "<p></p>"}</div>
+    <div class="wiki-editor__content text-body rich-text rich-text--editable" ${options.contentAttribute} contenteditable="true">${options.html || "<p><br></p>"}</div>
   `;
 }
