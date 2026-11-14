@@ -1219,6 +1219,8 @@ model BudgetYear {
   thresholdPercent  Decimal                  @default(2) @db.Decimal(5, 2)
   notes             String                   @default("")
   report            String                   @default("")
+  // The type of year, chosen by the user: "bullish", "bearish" or "" (not set).
+  outlook           String                   @default("")
   createdAt         DateTime                 @default(now())
   updatedAt         DateTime                 @updatedAt
   subscriptions     BudgetSubscriptionYear[]
@@ -1241,6 +1243,16 @@ model BudgetAdditional {
   budgetYear   BudgetYear @relation(fields: [budgetYearId], references: [id], onDelete: Cascade)
 
   @@index([budgetYearId])
+}
+
+// A purchase category the user ticked "In predictions": its purchases carry
+// on at the same monthly rate in the predicted spend. Opt-in, so a category
+// not listed here counts only what was spent. By name, for every year (a
+// category is renamed in every year too).
+model BudgetProjectedCategory {
+  id        Int      @id @default(autoincrement())
+  category  String   @unique
+  createdAt DateTime @default(now())
 }
 
 // One subscription across years, so a rename ("OpenAI Chatgpt" -> "Anthropic

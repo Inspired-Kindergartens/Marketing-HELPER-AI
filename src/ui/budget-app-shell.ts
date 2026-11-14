@@ -3,20 +3,23 @@ import { renderPrintAction } from "./action-buttons.js";
 import { THEME_HEAD_SCRIPT } from "./theme.js";
 import {
   buildSubscriptionRows,
-  buildYearOverYear,
+  buildYearComparison,
   computeBudgetTotals,
   futureSpendTotal,
   groupPurchases,
   expenseGroup,
+  monthName,
   percentChange,
+  type BudgetOutcomeMonth,
   type BudgetStatus,
   type BudgetTotals,
   type BudgetYearData,
+  type YearComparison,
 } from "../analytics/budget.js";
 import { BUDGET_FREQUENCIES, financialYearLabel, type BudgetYearView } from "../storage/budget-store.js";
 
 // Budget: replaces the yearly Budget Calculator workbooks. Totals stay in the
-// right-hand column; subscriptions, purchases, future spends and the
+// right-hand column; subscriptions, purchases, desire spends and the
 // year-over-year view are the accordion. Every change swaps the panel bodies
 // in place (data-budget-fragment) from the JSON the API returns.
 
@@ -100,7 +103,7 @@ export function renderBudgetTotals(data: BudgetYearData, now: Date): string {
           <tr><td>Subscriptions (yearly, excl. GST)</td><td class="${NUMERIC}">${formatMoney(totals.subscriptions)}</td></tr>
           <tr><td>Purchases to date</td><td class="${NUMERIC}">${formatMoney(totals.purchases)}</td></tr>
           <tr><td>Predicted purchases</td><td class="${NUMERIC}">${formatMoney(totals.predictedPurchases)}</td></tr>
-          <tr><td>Future spends</td><td class="${NUMERIC}">${formatMoney(totals.futureSpends)}</td></tr>
+          <tr><td>Desire spends (not in predicted spend)</td><td class="${NUMERIC}">${formatMoney(totals.futureSpends)}</td></tr>
           <tr><td>Ended subscriptions (not in totals)</td><td class="${NUMERIC}">${formatMoney(totals.endedSubscriptions)}</td></tr>
         </tbody>
       </table>
@@ -178,15 +181,18 @@ function purchaseParts(data: BudgetYearData) {
   const items = (group: string) => [...(byGroup.get(group) ?? [])].sort((a, b) => (b.spentOn ?? "").localeCompare(a.spentOn ?? "") || b.id - a.id);
   // Additional budget given for the category this year (0 = none).
   const additional = (group: string) => data.additionalBudgets.filter((entry) => entry.category === group).reduce((sum, entry) => sum + entry.amount, 0);
+  // In predictions: opt-in. Ticked, the category's purchases carry on at the
+  // same monthly rate in the predicted spend; unticked, they count as spent.
+  const projected = new Set(data.projectedCategories);
   const header = (group: (typeof groups)[number]) => `
       ${categoryTitleRow("expense", group.group, group.total)}
-      <div class="text-muted text-small">${group.count} item${group.count === 1 ? "" : "s"} · ${group.percentOfPurchases.toFixed(1)}% of spend${additional(group.group) > 0 ? ` · additional budget ${formatMoney(additional(group.group))}` : ""}</div>`;
+      <div class="flex justify-between items-center gap-8 text-muted text-small"><span>${group.count} item${group.count === 1 ? "" : "s"} · ${group.percentOfPurchases.toFixed(1)}% of spend${additional(group.group) > 0 ? ` · additional budget ${formatMoney(additional(group.group))}` : ""}</span><label class="budget-predict flex items-center gap-6"><input type="checkbox" data-budget-predict="${escapeHtml(group.group)}"${projected.has(group.group) ? " checked" : ""} /><span>In predictions</span></label></div>`;
   // A category holding Meta rows is read-only, like the rows themselves.
   const locked = (group: string) => (byGroup.get(group) ?? []).some((expense) => expense.source === "meta");
   return { groups, items, header, table, locked, additional };
 }
 
-// Purchases and Future Spends share one design: a grid of category cards
+// Purchases and Desire Spends share one design: a grid of category cards
 // (three a row), each with a running total, an Add button and its last three
 // rows; clicking a card lists all of its rows in the right-hand column.
 type CardKind = "expense" | "future";
@@ -235,12 +241,12 @@ function categoryManage(category: string, deleteConfirm: string): string {
   }`;
 }
 
-// An add/edit modal (purchases, future spends). The Add button opens it
+// An add/edit modal (purchases, desire spends). The Add button opens it
 // empty (purchases: that card's category and today's date); the pencil on a
 // row opens it with that row. kind is the data-budget-form kind it saves as.
-// "bought" is the date asked for when a future spend is bought: its title
+// "bought" is the date asked for when a desire spend is bought: its title
 // and button are fixed (submitLabel) rather than Add/Edit.
-function renderBudgetDialog(kind: "expense" | "future" | "bought" | "budget" | "subscription" | "additional" | "report", noun: string, fields: string, submitLabel = "", wide = false): string {
+function renderBudgetDialog(kind: "expense" | "future" | "bought" | "budget" | "subscription" | "additional" | "report" | "outlook", noun: string, fields: string, submitLabel = "", wide = false): string {
   return `
     <dialog class="wiki-modal${wide ? " wiki-modal--wide" : ""} text-body" data-budget-dialog="${kind}" data-noun="${escapeHtml(noun)}"${submitLabel ? ` data-submit="${escapeHtml(submitLabel)}"` : ""} aria-label="${escapeHtml(noun)}">
       <form class="wiki-modal__form flex flex-col gap-12" data-budget-form="${kind}">
@@ -325,9 +331,11 @@ export function renderBudgetCategories(data: BudgetYearData): string {
     .join("");
 }
 
-// ---- Future spends ------------------------------------------------------------
+// ---- Desire spends ("future" in the code and routes) ----------------------------
+// The wish list: shown, and weighed against the predicted surplus in Year
+// Over Year, but never part of the budget / spend / predicted figures until bought.
 
-// A future spend's category is its project (what a bought one becomes the
+// A desire spend's category is its project (what a bought one becomes the
 // purchase category of). Totals count what is still to buy, not bought ones.
 function futureParts(data: BudgetYearData) {
   const byCategory = new Map<string, BudgetYearData["futureSpends"]>();
@@ -393,7 +401,7 @@ export function renderBudgetFutureCategories(data: BudgetYearData): string {
       categorySide(
         "future",
         group.category,
-        categoryManage(group.category, group.openCount ? `Delete ${group.category} and its ${group.openCount} future spend${group.openCount === 1 ? "" : "s"} still to buy in ${data.year.label}? This can't be undone.` : ""),
+        categoryManage(group.category, group.openCount ? `Delete ${group.category} and its ${group.openCount} desire spend${group.openCount === 1 ? "" : "s"} still to buy in ${data.year.label}? This can't be undone.` : ""),
         `
       ${header(group)}
       ${table(items(group.category), true)}`,
@@ -412,55 +420,166 @@ const FUTURE_DIALOG_FIELDS = `
 
 // ---- Year over year -------------------------------------------------------------
 
-function changeCell(from: number | null | undefined, to: number | null | undefined): string {
-  const change = percentChange(from, to);
-  return change == null ? "" : `<span>${escapeHtml(formatPercent(change))}</span>`;
+// Whole-year figures only (no subscriptions or purchase categories): the two
+// latest finished years compared, and the current year tracked against them.
+// A finished year's spend and surplus are what happened; the current year's
+// are the predicted ones, so every column is a full year. Desire spends are
+// weighed against the predicted surplus and are in none of the other figures.
+
+// The year's spend and what it leaves of the budget: predicted for the
+// current year (the same as the actual figures once a year is finished).
+export type ComparisonRow = { key?: "outlook"; label: string; cells: Array<{ value: string; note: string; band: string }> };
+
+export const OUTLOOK_LABEL = { "": "", bullish: "Bullish", bearish: "Bearish" } as const;
+
+// "+$5,000.00 (+20.0%)" from one column to the next; "" when either is missing.
+function changeNote(from: number | null | undefined, to: number | null | undefined, format: (value: number) => string = formatMoney): string {
+  const percent = percentChange(from, to);
+  if (from == null || to == null || percent == null) return "";
+  const difference = to - from;
+  return `${difference > 0 ? "+" : ""}${format(difference)} (${formatPercent(percent)})`;
 }
 
-export function renderBudgetYearOverYear(all: BudgetYearData[], now: Date): string {
-  const yoy = buildYearOverYear(all, now);
-  if (yoy.years.length === 0) return `<p class="google-analytics-panel__empty">No years yet</p>`;
-  const head = `<th></th>${yoy.years.map((year) => `<th class="${NUMERIC}">${financialYearLabel(year)}</th>`).join("")}`;
-  const totalsRow = (label: string, pick: (totals: BudgetTotals) => number | null) =>
-    `<tr><td><strong>${escapeHtml(label)}</strong></td>${yoy.totals
-      .map((totals, index) => `<td class="${NUMERIC}">${formatMoney(pick(totals))}${index > 0 ? changeCell(pick(yoy.totals[index - 1]), pick(totals)) : ""}</td>`)
-      .join("")}</tr>`;
-  const seriesCell = (values: Record<number, number | null>, index: number) => {
-    const year = yoy.years[index];
-    const value = values[year];
-    if (value == null) return `<td class="${NUMERIC}"></td>`;
-    return `<td class="${NUMERIC}">${formatMoney(value)}${index > 0 ? changeCell(values[yoy.years[index - 1]], value) : ""}</td>`;
-  };
-  return `
+export function yearComparisonRows(comparison: YearComparison): ComparisonRow[] {
+  const columns = [...comparison.completed, ...(comparison.tracking ? [comparison.tracking] : [])];
+  const moneyRow = (label: string, pick: (totals: BudgetTotals) => number | null, empty = ""): ComparisonRow => ({
+    label,
+    cells: columns.map((totals, index) => ({ value: formatMoney(pick(totals)) || empty, note: index > 0 ? changeNote(pick(columns[index - 1]), pick(totals)) : "", band: "" })),
+  });
+  const rows: ComparisonRow[] = [
+    // The type of year, chosen by the user (the renderer adds its pencil).
+    { key: "outlook", label: "Year type", cells: columns.map((totals) => ({ value: OUTLOOK_LABEL[totals.outlook], note: "", band: "" })) },
+    moneyRow("Budget", (totals) => totals.operatingBudget, "Not set"),
+  ];
+  // Like for like: only when a year was given additional (one-off) budget.
+  const oneOffs = columns.some((totals) => totals.additionalBudget > 0);
+  if (oneOffs) rows.push(moneyRow("Budget without one-offs", (totals) => totals.baseBudget));
+  rows.push(moneyRow("Spend", (totals) => totals.predictedSpend));
+  if (oneOffs) rows.push(moneyRow("Spend without one-offs", (totals) => totals.basePredictedSpend));
+  rows.push({
+    label: "Surplus / deficit",
+    cells: columns.map((totals) => ({
+      value: formatMoney(totals.predictedDifference),
+      note: totals.operatingBudget && totals.predictedDifference != null ? `${formatPercent((totals.predictedDifference / totals.operatingBudget) * 100)} of budget` : "",
+      band: statusBandClass(totals.status),
+    })),
+  });
+  rows.push({
+    label: "Subscriptions share of budget",
+    cells: columns.map((totals) => ({ value: totals.subscriptionsPercent == null ? "" : `${totals.subscriptionsPercent.toFixed(1)}%`, note: formatMoney(totals.subscriptions), band: "" })),
+  });
+  const samePoint = comparison.samePoint;
+  if (samePoint) {
+    const at = (index: number) => samePoint.purchases[columns[index].startYear] ?? null;
+    rows.push({
+      label: `Purchases to end of ${monthName(samePoint.month)}`,
+      cells: columns.map((_, index) => ({ value: at(index) == null ? "—" : formatMoney(at(index)), note: index > 0 ? changeNote(at(index - 1), at(index)) : "", band: "" })),
+    });
+  }
+  rows.push({
+    label: "Desire Spends bought",
+    cells: columns.map((totals) => ({
+      value: totals.desireListedCount ? `${formatMoney(totals.desireBought)} of ${formatMoney(totals.desireListed)}` : "",
+      note: totals.desireListedCount ? `${totals.desireBoughtCount} of ${totals.desireListedCount}` : "",
+      band: "",
+    })),
+  });
+  return rows;
+}
+
+// What the spend achieved: children enrolled (the Infocare roll) and the Meta
+// adverts' results. The current year's column is the year so far, so its
+// running totals carry no change note; the per-child and per-result costs do.
+export function yearMarketingRows(comparison: YearComparison): ComparisonRow[] {
+  const columns = [...comparison.completed, ...(comparison.tracking ? [comparison.tracking] : [])];
+  const outcomes = columns.map((totals) => comparison.outcomes[totals.startYear]);
+  if (!outcomes.some((year) => year && (year.roll != null || year.metaSpend > 0))) return [];
+  const isTracking = (index: number) => columns[index] === comparison.tracking;
+  const count = (value: number) => value.toLocaleString("en-NZ", { maximumFractionDigits: 1 });
+  type Pick = (index: number) => number | null;
+  const row = (label: string, pick: Pick, format: (value: number) => string, options: { runningTotal?: boolean; note?: (index: number) => string } = {}): ComparisonRow => ({
+    label,
+    cells: columns.map((_, index) => {
+      const value = pick(index);
+      const change = index > 0 && !(options.runningTotal && isTracking(index)) ? changeNote(pick(index - 1), value, format) : "";
+      return { value: value == null ? "" : format(value), note: [change, options.note?.(index) ?? ""].filter(Boolean).join(" · "), band: "" };
+    }),
+  });
+  const roll: Pick = (index) => outcomes[index]?.roll ?? null;
+  const perChild: Pick = (index) => (roll(index) ? Math.round((columns[index].predictedSpend / roll(index)!) * 100) / 100 : null);
+  const positive = (value: number | undefined) => (value ? value : null);
+  return [
+    row("Children enrolled", roll, count, { note: (index) => (isTracking(index) && outcomes[index]?.rollMonths ? `${outcomes[index].rollMonths} month${outcomes[index].rollMonths === 1 ? "" : "s"}` : "") }),
+    row("Budget spend per child", perChild, formatMoney),
+    row("Meta ad spend", (index) => positive(outcomes[index]?.metaSpend), formatMoney, { runningTotal: true }),
+    row("Meta landing page views", (index) => positive(outcomes[index]?.metaLandingViews), count, { runningTotal: true }),
+    row("Cost per landing page view", (index) => outcomes[index]?.costPerLandingView ?? null, formatMoney),
+    row("Meta leads", (index) => positive(outcomes[index]?.metaLeads), count, { runningTotal: true }),
+    row("Cost per lead", (index) => outcomes[index]?.costPerLead ?? null, formatMoney),
+  ];
+}
+
+export function renderBudgetYearOverYear(all: BudgetYearData[], now: Date, outcomes: readonly BudgetOutcomeMonth[] = []): string {
+  const comparison = buildYearComparison(all, now, outcomes);
+  const { completed, tracking } = comparison;
+  if (completed.length === 0 && !tracking) return `<div class="google-analytics-panel__empty">No years yet</div>`;
+  const tile = (label: string, value: string, note: string, band = "", attribute = "") =>
+    `<div class="google-analytics-summary__item card stat-tile"${attribute}><span>${escapeHtml(label)}</span><strong class="${band}">${escapeHtml(value)}</strong>${note ? `<small class="text-small ${band || "text-muted"}">${escapeHtml(note)}</small>` : ""}</div>`;
+  const tiles: string[] = [];
+  if (tracking) {
+    const last = completed[completed.length - 1];
+    const budgetChange = last ? percentChange(last.operatingBudget, tracking.operatingBudget) : null;
+    if (last && budgetChange != null) {
+      const difference = tracking.operatingBudget! - last.operatingBudget!;
+      tiles.push(tile(`Budget vs ${last.label}`, formatPercent(budgetChange), `${difference > 0 ? "+" : ""}${formatMoney(difference)}`));
+    }
+    const band = statusBandClass(tracking.status);
+    const deficit = tracking.predictedDifference != null && tracking.predictedDifference < 0;
+    tiles.push(tile("Spent to date", formatMoney(tracking.actualSpend), tracking.spentPercent == null ? "" : `${tracking.spentPercent.toFixed(1)}% of budget · ${tracking.monthsElapsed} of 12 months`));
+    tiles.push(tile("Predicted spend", formatMoney(tracking.predictedSpend), tracking.operatingBudget ? `${((tracking.predictedSpend / tracking.operatingBudget) * 100).toFixed(1)}% of budget` : ""));
+    if (tracking.predictedDifference != null) tiles.push(tile(deficit ? "Predicted deficit" : "Predicted surplus", formatMoney(Math.abs(tracking.predictedDifference)), statusLabel(tracking.status), band));
+    // How the finished years ended, to set this year's prediction against.
+    if (comparison.usualSurplusPercent != null)
+      tiles.push(tile(comparison.usualSurplusPercent < 0 ? "Usual deficit" : "Usual surplus", `${Math.abs(comparison.usualSurplusPercent).toFixed(1)}% of budget`, completed.map((totals) => totals.label).join(" · "), "", " data-budget-usual-surplus"));
+    if (tracking.desireLikelihood != null) {
+      const left = tracking.desireRemaining ?? 0;
+      // Likely / even / unlikely, in the same three bands as the status.
+      const likelihoodBand = tracking.desireLikelihood >= 75 ? "enrolment-quality__band--good" : tracking.desireLikelihood >= 40 ? "enrolment-quality__band--watch" : "enrolment-quality__band--low";
+      tiles.push(tile("Desire Spends", formatMoney(tracking.futureSpends), left >= 0 ? `${formatMoney(left)} left after` : `${formatMoney(-left)} short`));
+      tiles.push(tile("Desire Spend likelihood", `${tracking.desireLikelihood.toFixed(0)}%`, "", likelihoodBand, " data-budget-desire-likelihood"));
+    }
+  }
+  const columns = [...completed, ...(tracking ? [tracking] : [])];
+  const head = (first: string, trackingSuffix: string) => `<th>${first}</th>${columns.map((totals) => `<th class="${NUMERIC}">${escapeHtml(totals.label)}${totals === tracking ? trackingSuffix : ""}</th>`).join("")}`;
+  // Year type: the user's own call on each year, set from its pencil.
+  const outlookCell = (totals: BudgetTotals) =>
+    `<td class="${NUMERIC}">${totals.outlook ? `<span><i class="bi ${totals.outlook === "bullish" ? "bi-graph-up-arrow" : "bi-graph-down-arrow"}" aria-hidden="true"></i> ${OUTLOOK_LABEL[totals.outlook]}</span>` : ""}<button type="button" class="button-remove" data-budget-edit="outlook" data-title="Year type ${escapeHtml(totals.label)}" data-values="${dataAttribute({ targetYear: totals.startYear, outlook: totals.outlook })}" aria-label="Set the year type for ${escapeHtml(totals.label)}" title="Edit"><i class="bi bi-pencil" aria-hidden="true"></i></button></td>`;
+  const body = (rows: ComparisonRow[]) =>
+    rows
+      .map(
+        (row) =>
+          `<tr><td><strong>${escapeHtml(row.label)}</strong></td>${row.cells
+            .map((cell, index) =>
+              row.key === "outlook" ? outlookCell(columns[index]) : `<td class="${NUMERIC}"><span class="${cell.band}">${escapeHtml(cell.value)}</span>${cell.note ? `<div class="text-muted text-small">${escapeHtml(cell.note)}</div>` : ""}</td>`,
+            )
+            .join("")}</tr>`,
+      )
+      .join("");
+  const marketing = yearMarketingRows(comparison);
+  return `${tiles.length ? `
+    <div class="google-analytics-summary budget-tracker grid gap-8" data-budget-tracker>${tiles.join("")}</div>` : ""}
     <div class="google-analytics-table-wrap table-frame table-frame--scroll">
       <table class="google-analytics-table data-table" data-budget-yoy-totals>
-        <thead><tr>${head}</tr></thead>
-        <tbody>
-          ${totalsRow("Budget", (totals) => totals.operatingBudget)}
-          ${totalsRow("Subscriptions (excl. GST)", (totals) => totals.subscriptions)}
-          ${totalsRow("Purchases", (totals) => totals.purchases)}
-          ${totalsRow("Actual spend", (totals) => totals.actualSpend)}
-          ${totalsRow("Remaining", (totals) => totals.remaining)}
-          ${totalsRow("Ended subscriptions", (totals) => totals.endedSubscriptions)}
-        </tbody>
+        <thead><tr>${head("", " predicted")}</tr></thead>
+        <tbody>${body(yearComparisonRows(comparison))}</tbody>
       </table>
-    </div>
+    </div>${marketing.length ? `
     <div class="google-analytics-table-wrap table-frame table-frame--scroll">
-      <table class="google-analytics-table data-table" data-budget-yoy-subscriptions>
-        <thead><tr>${head.replace("<th></th>", "<th>Subscription (yearly cost)</th>")}</tr></thead>
-        <tbody>
-          ${yoy.subscriptions.map((entry) => `<tr><td><strong>${escapeHtml(entry.name)}</strong></td>${yoy.years.map((_, index) => seriesCell(entry.costs, index)).join("")}</tr>`).join("")}
-        </tbody>
+      <table class="google-analytics-table data-table" data-budget-yoy-marketing>
+        <thead><tr>${head("Marketing results", " to date")}</tr></thead>
+        <tbody>${body(marketing)}</tbody>
       </table>
-    </div>
-    <div class="google-analytics-table-wrap table-frame table-frame--scroll">
-      <table class="google-analytics-table data-table" data-budget-yoy-groups>
-        <thead><tr>${head.replace("<th></th>", "<th>Purchase group</th>")}</tr></thead>
-        <tbody>
-          ${yoy.groups.map((entry) => `<tr><td><strong>${escapeHtml(entry.group)}</strong></td>${yoy.years.map((_, index) => seriesCell(entry.totals, index)).join("")}</tr>`).join("")}
-        </tbody>
-      </table>
-    </div>
+    </div>` : ""}
   `;
 }
 
@@ -472,6 +591,8 @@ export type BudgetPageData = {
   previous: BudgetYearData | null;
   all: BudgetYearData[];
   subscriptionNames: string[];
+  // The roll and Meta results by month (budget/outcomes.ts); none = no Marketing results table.
+  outcomes?: BudgetOutcomeMonth[];
   now: Date;
 };
 
@@ -492,7 +613,7 @@ export function renderBudgetFragments(data: BudgetPageData): BudgetFragments {
     subscriptions: renderBudgetSubscriptions(data.selected, data.previous, data.subscriptionNames),
     purchases: renderBudgetPurchases(data.selected),
     future: renderBudgetFutureSpends(data.selected),
-    history: renderBudgetYearOverYear(data.all, data.now),
+    history: renderBudgetYearOverYear(data.all, data.now, data.outcomes ?? []),
   };
 }
 
@@ -591,6 +712,7 @@ function renderBudgetScript(startYear: number): string {
           var payload = {};
           new FormData(form).forEach(function(value, key) { payload[key] = value; });
           var url = kind === "budget" || kind === "report" ? "/api/budget/years/" + YEAR + "/settings"
+            : kind === "outlook" ? "/api/budget/years/" + payload.targetYear + "/settings"
             : kind === "bought" ? "/api/budget/future/" + payload.id + "/bought"
             : ROUTES[kind] + (payload.id ? "/" + payload.id : "");
           delete payload.id;
@@ -677,6 +799,13 @@ function renderBudgetScript(startYear: number): string {
           if (text instanceof HTMLInputElement) text.value = picker.value;
         });
 
+        // In predictions: ticking a purchase category saves straight away.
+        document.addEventListener("change", function(event) {
+          var box = event.target instanceof Element ? event.target.closest("[data-budget-predict]") : null;
+          if (!(box instanceof HTMLInputElement)) return;
+          post("/api/budget/categories/predict", { category: box.getAttribute("data-budget-predict"), on: box.checked }).then(swap).catch(function(error) { box.checked = !box.checked; fail(error); });
+        });
+
         document.addEventListener("reset", function(event) {
           var form = event.target instanceof Element ? event.target.closest("[data-budget-form]") : null;
           if (!form) return;
@@ -698,8 +827,12 @@ function renderBudgetScript(startYear: number): string {
           var newYear = target.closest("[data-budget-new-year]");
           if (edit) {
             var kind = edit.getAttribute("data-budget-edit");
-            // Purchases and future spends edit in their modal; the rest in the panel's form.
-            if (openDialog(kind, JSON.parse(edit.getAttribute("data-values") || "{}"), edit.getAttribute("data-id"))) return;
+            // Purchases and desire spends edit in their modal; the rest in the panel's form.
+            if (openDialog(kind, JSON.parse(edit.getAttribute("data-values") || "{}"), edit.getAttribute("data-id"))) {
+              // A title of its own (Year type 2025-26) rather than Add / Edit.
+              if (edit.getAttribute("data-title")) document.querySelector('[data-budget-dialog="' + kind + '"] [data-budget-dialog-title]').textContent = edit.getAttribute("data-title");
+              return;
+            }
             var form = document.querySelector('[data-budget-form="' + kind + '"]');
             if (!form) return;
             form.reset();
@@ -733,7 +866,7 @@ function renderBudgetScript(startYear: number): string {
             var add = target.closest("[data-budget-add-item]");
             var title = add.getAttribute("data-category");
             // A purchase: the card's title fills in the supplier and the category,
-            // and the date is today. A future spend: the category.
+            // and the date is today. A desire spend: the category.
             if (add.getAttribute("data-budget-add-item") === "expense") openDialog("expense", { supplier: title, group: title, spentOn: new Date().toLocaleDateString("en-CA") });
             else openDialog("future", { project: title });
           } else if (target.closest("[data-budget-report]")) {
@@ -807,7 +940,7 @@ export function renderBudgetAppShell(data: BudgetPageData, openPanelId: string |
   const panels = [
     { id: "budget-purchases", title: "Purchases", className: "panel--budget-purchases", meta: titleTotal("purchasesTotal"), actions: purchasesActions, children: fragment("purchases", fragments.purchases) },
     { id: "budget-subscriptions", title: "Subscriptions", className: "panel--budget-subscriptions", meta: titleTotal("subscriptionsTotal"), actions: subscriptionsActions, children: fragment("subscriptions", fragments.subscriptions) },
-    { id: "budget-future", title: "Future Spends", className: "panel--budget-future", actions: futureActions, children: fragment("future", fragments.future) },
+    { id: "budget-future", title: "Desire Spends", className: "panel--budget-future", actions: futureActions, children: fragment("future", fragments.future) },
     { id: "budget-history", title: "Year Over Year", className: "panel--budget-history", children: fragment("history", fragments.history) },
     { id: "budget-totals", title: `Totals ${data.selected.year.label}`, className: "panel--budget-totals", sidePanel: true, meta: yearSelect, actions: totalsActions, children: fragment("categories", fragments.categories) + fragment("futureCategories", fragments.futureCategories) + fragment("totals", fragments.totals) },
   ];
@@ -837,11 +970,14 @@ export function renderBudgetAppShell(data: BudgetPageData, openPanelId: string |
     </aside>
     ${layout}
     ${renderBudgetDialog("expense", "purchase", PURCHASE_DIALOG_FIELDS)}
-    ${renderBudgetDialog("future", "future spend", FUTURE_DIALOG_FIELDS)}
+    ${renderBudgetDialog("future", "desire spend", FUTURE_DIALOG_FIELDS)}
     ${renderBudgetDialog("subscription", "subscription", SUBSCRIPTION_DIALOG_FIELDS)}
     ${renderBudgetDialog("bought", "Bought", DATE_FIELD, "Bought")}
     ${renderBudgetDialog("budget", `Budget ${data.selected.year.label}`, `
         <label class="wiki-modal__field field-label"><span>Budget</span><input class="form-control" type="text" inputmode="decimal" name="operatingBudget" autocomplete="off" /></label>`, "Save")}
+    ${renderBudgetDialog("outlook", "Year type", `
+        <input type="hidden" name="targetYear" value="" />
+        <label class="wiki-modal__field field-label"><span>Year type</span><select class="form-control" name="outlook"><option value="">Not set</option><option value="bullish">Bullish</option><option value="bearish">Bearish</option></select></label>`, "Save")}
     ${renderBudgetDialog("additional", "Additional budget", `
         <input type="hidden" name="category" value="" />
         <label class="wiki-modal__field field-label"><span>Amount</span><input class="form-control" type="text" inputmode="decimal" name="amount" autocomplete="off" /></label>`, "Save")}

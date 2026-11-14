@@ -16,6 +16,10 @@ export type BudgetExpenseSource = (typeof BUDGET_EXPENSE_SOURCES)[number];
 export const BUDGET_FUTURE_STATUSES = ["planned", "tbc", "bought"] as const;
 export type BudgetFutureStatus = (typeof BUDGET_FUTURE_STATUSES)[number];
 
+// The type of financial year, chosen by the user ("" = not set).
+export const BUDGET_OUTLOOKS = ["", "bullish", "bearish"] as const;
+export type BudgetOutlook = (typeof BUDGET_OUTLOOKS)[number];
+
 export const BUDGET_DEFAULT_THRESHOLD_PERCENT = 2;
 export const META_EXPENSE_SUPPLIER = "Meta";
 export const META_EXPENSE_GROUP = "Facebook";
@@ -43,6 +47,7 @@ export const resolveBudgetFrequency = (value: unknown) => pick(BUDGET_FREQUENCIE
 export const resolveBudgetSubscriptionStatus = (value: unknown) => pick(BUDGET_SUBSCRIPTION_STATUSES, value, "active");
 export const resolveBudgetExpenseSource = (value: unknown) => pick(BUDGET_EXPENSE_SOURCES, value, "manual");
 export const resolveBudgetFutureStatus = (value: unknown) => pick(BUDGET_FUTURE_STATUSES, value, "planned");
+export const resolveBudgetOutlook = (value: unknown) => pick(BUDGET_OUTLOOKS, value, "");
 
 // "$1,234.50", "1234.5" and 1234.5 all read as 1234.5. Blank or unreadable is null.
 export function parseBudgetMoney(value: unknown): number | null {
@@ -98,6 +103,7 @@ export type BudgetYearView = {
   notes: string;
   // The saved year-end report; "" = not saved, generate it when asked for.
   report: string;
+  outlook: BudgetOutlook;
   updatedAt: string;
 };
 
@@ -161,6 +167,7 @@ function yearView(record: {
   thresholdPercent: DecimalLike;
   notes: string;
   report: string;
+  outlook: string;
   updatedAt: Date;
 }): BudgetYearView {
   return {
@@ -171,6 +178,7 @@ function yearView(record: {
     thresholdPercent: toNumber(record.thresholdPercent),
     notes: record.notes,
     report: record.report,
+    outlook: resolveBudgetOutlook(record.outlook),
     updatedAt: record.updatedAt.toISOString(),
   };
 }
@@ -275,12 +283,14 @@ export type BudgetYearSettingsInput = {
   thresholdPercent?: unknown;
   notes?: unknown;
   report?: unknown;
+  outlook?: unknown;
 };
 
 // Only the user's own figures: the budget is typed in, never calculated.
 // report is the year-end report as the user saved it ("" = generate it).
 export async function updateBudgetYearSettings(startYear: number, input: BudgetYearSettingsInput): Promise<BudgetYearView> {
-  const data: { operatingBudget?: number | null; thresholdPercent?: number; notes?: string; report?: string } = {};
+  const data: { operatingBudget?: number | null; thresholdPercent?: number; notes?: string; report?: string; outlook?: string } = {};
+  if (input.outlook !== undefined) data.outlook = resolveBudgetOutlook(input.outlook);
   if (input.operatingBudget !== undefined) data.operatingBudget = parseBudgetMoney(input.operatingBudget);
   if (input.thresholdPercent !== undefined) {
     const threshold = parseBudgetMoney(input.thresholdPercent);
@@ -534,11 +544,31 @@ export async function renameBudgetExpenseCategory(from: unknown, to: unknown): P
   const records = await db.budgetExpense.findMany({ select: { id: true, group: true, supplier: true, source: true } });
   const matches = records.filter((record) => categoryOf(record) === from);
   if (matches.length === 0 || matches.some((record) => record.source === "meta")) return false;
+  const projected = (await db.budgetProjectedCategory.count({ where: { category: from } })) > 0;
   await db.$transaction([
     db.budgetExpense.updateMany({ where: { id: { in: matches.map((record) => record.id) } }, data: { group: name } }),
-    // Its additional budget follows the category.
+    // Its additional budget and its "In predictions" tick follow the category.
     db.budgetAdditional.updateMany({ where: { category: from }, data: { category: name } }),
+    db.budgetProjectedCategory.deleteMany({ where: { category: from } }),
+    ...(projected ? [db.budgetProjectedCategory.upsert({ where: { category: name }, create: { category: name }, update: {} })] : []),
   ]);
+  return true;
+}
+
+// ---- Categories in predictions ----------------------------------------------
+// Opt-in: only a ticked category's purchases carry on at the same monthly
+// rate in the predicted spend (analytics/budget.ts). By name, for every year.
+
+export async function readBudgetProjectedCategories(): Promise<string[]> {
+  const records = await db.budgetProjectedCategory.findMany({ select: { category: true }, orderBy: { category: "asc" } });
+  return records.map((record) => record.category);
+}
+
+export async function setBudgetCategoryProjected(categoryInput: unknown, on: boolean): Promise<boolean> {
+  const category = cleanText(categoryInput, 100);
+  if (!category) return false;
+  if (on) await db.budgetProjectedCategory.upsert({ where: { category }, create: { category }, update: {} });
+  else await db.budgetProjectedCategory.deleteMany({ where: { category } });
   return true;
 }
 
@@ -623,13 +653,14 @@ export async function readBudgetReminderDismissals(months: readonly string[]): P
 // One year with everything in it, created empty if it is not there yet.
 export async function readBudgetYearData(startYear: number) {
   const year = await ensureBudgetYear(startYear);
-  const [subscriptions, expenses, futureSpends, additionalBudgets] = await Promise.all([
+  const [subscriptions, expenses, futureSpends, additionalBudgets, projectedCategories] = await Promise.all([
     readBudgetSubscriptionsForYear(year.id),
     readBudgetExpensesForYear(year.id),
     readBudgetFutureSpendsForYear(year.id),
     readBudgetAdditionalForYear(year.id),
+    readBudgetProjectedCategories(),
   ]);
-  return { year, subscriptions, expenses, futureSpends, additionalBudgets };
+  return { year, subscriptions, expenses, futureSpends, additionalBudgets, projectedCategories };
 }
 
 // Every stored year with its rows, oldest first (no years are created).

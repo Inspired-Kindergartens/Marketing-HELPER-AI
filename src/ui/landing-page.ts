@@ -321,7 +321,7 @@ export function renderLandingPage(options: LandingPageOptions = {}) {
     { label: "General Chat", description: "General help with saved conversations", href: "/chat", primary: true },
     { label: "Communications", description: "Postmark, Mailchimp & Formstack", href: "/comms", primary: false },
     { label: "Job Descriptions", description: "AI blurbs & PDF job descriptions", href: "/jd", primary: false },
-    { label: "Budget", description: "Subscriptions, purchases & future spends", href: "/budget", primary: false },
+    { label: "Budget", description: "Subscriptions, purchases & desire spends", href: "/budget", primary: false },
   ];
 
   const secondaryTiles = [

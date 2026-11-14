@@ -22,7 +22,7 @@ export const BUDGET_IMPORTED_THROUGH = "2026-09";
 export const PAYMENTS_PER_YEAR: Record<BudgetFrequency, number> = { week: 52, fortnight: 26, month: 12, quarter: 4, year: 1 };
 
 // The workbooks take GST off the subscriptions' yearly total only; purchases
-// and future spends are used as entered.
+// and desire spends are used as entered.
 export const GST_DIVISOR = 1.15;
 
 const round2 = (value: number) => Math.round(value * 100) / 100;
@@ -64,54 +64,69 @@ export function budgetStatus(difference: number, base: number, thresholdPercent:
   return "on-track";
 }
 
-// ---- Threshold ---------------------------------------------------------------
-// How far the predicted spend may sit from the budget and still be "on
-// track". It is worked out, never typed in and never shown: it is the amount
-// the prediction itself could reasonably be off by, as a % of the predicted
-// spend, kept between 2% (the workbook's fixed figure) and 10%.
-//
+// ---- Prediction error and threshold -------------------------------------------
 // The only guessed part of the prediction is the purchases for the months
-// still to come (the monthly average so far x months left), so the band is
-// one standard error of that guess:
-//   - sd = how much the monthly purchase totals have swung so far
+// still to come in the categories ticked "In predictions" (their monthly
+// average so far x months left). predictionError is one standard error of
+// that guess, in dollars:
+//   - sd = how much those categories' monthly totals have swung so far
 //   - error = sd x sqrt(left x (1 + left / elapsed))
 //     (the months left each vary by sd, and the average itself is only as
 //     good as the months it was taken from)
 //   - with under 3 months there is no swing to measure: half the guess
-//   - plus half of the future spends still marked TBC
 // So it is widest early in the year or when spending is lumpy, narrows as
-// the months fill in, and is 2% for a finished year.
+// the months fill in, and is 0 for a finished year or when nothing is ticked.
+export function budgetPredictionError(data: BudgetYearData, monthsElapsed: number, carried: number, predictedCarried: number): number {
+  const left = 12 - monthsElapsed;
+  if (left <= 0 || monthsElapsed <= 0) return 0;
+  if (monthsElapsed < 3) return (predictedCarried - carried) / 2;
+  // Purchases per month of the year so far (July = 0). Undated purchases
+  // can't be placed in a month, so they add nothing to the swing.
+  const projected = new Set(data.projectedCategories);
+  const monthly = new Array<number>(monthsElapsed).fill(0);
+  for (const expense of data.expenses) {
+    if (!projected.has(expenseGroup(expense))) continue;
+    if (!expense.spentOn || financialYearOfMonth(expense.spentOn.slice(0, 7)) !== data.year.startYear) continue;
+    const month = Number(expense.spentOn.slice(5, 7));
+    const index = month >= 7 ? month - 7 : month + 5;
+    if (index < monthsElapsed) monthly[index] += expense.amount;
+  }
+  const mean = monthly.reduce((sum, value) => sum + value, 0) / monthsElapsed;
+  const sd = Math.sqrt(monthly.reduce((sum, value) => sum + (value - mean) ** 2, 0) / (monthsElapsed - 1));
+  return sd * Math.sqrt(left * (1 + left / monthsElapsed));
+}
+
+// How far the predicted spend may sit from the budget and still be "on
+// track". Worked out, never typed in and never shown: the prediction error
+// as a % of the predicted spend, kept between 2% (the workbook's fixed
+// figure) and 10%.
 export const BUDGET_THRESHOLD_MIN_PERCENT = 2;
 export const BUDGET_THRESHOLD_MAX_PERCENT = 10;
 
-export function budgetThresholdPercent(data: BudgetYearData, monthsElapsed: number, purchases: number, predictedPurchases: number, predictedSpend: number): number {
+export function budgetThresholdPercent(predictionError: number, predictedSpend: number): number {
   if (predictedSpend <= 0) return BUDGET_THRESHOLD_MIN_PERCENT;
-  const left = 12 - monthsElapsed;
-  let error = 0;
-  if (left > 0 && monthsElapsed > 0) {
-    if (monthsElapsed < 3) {
-      error = (predictedPurchases - purchases) / 2;
-    } else {
-      // Purchases per month of the year so far (July = 0). Undated purchases
-      // can't be placed in a month, so they add nothing to the swing.
-      // One-off purchases are not carried forward, so they are not part of the guess.
-      const oneOff = oneOffCategories(data);
-      const monthly = new Array<number>(monthsElapsed).fill(0);
-      for (const expense of data.expenses) {
-        if (oneOff.has(expenseGroup(expense))) continue;
-        if (!expense.spentOn || financialYearOfMonth(expense.spentOn.slice(0, 7)) !== data.year.startYear) continue;
-        const month = Number(expense.spentOn.slice(5, 7));
-        const index = month >= 7 ? month - 7 : month + 5;
-        if (index < monthsElapsed) monthly[index] += expense.amount;
-      }
-      const mean = monthly.reduce((sum, value) => sum + value, 0) / monthsElapsed;
-      const sd = Math.sqrt(monthly.reduce((sum, value) => sum + (value - mean) ** 2, 0) / (monthsElapsed - 1));
-      error = sd * Math.sqrt(left * (1 + left / monthsElapsed));
-    }
-  }
-  const tbc = data.futureSpends.filter((spend) => spend.status === "tbc").reduce((sum, spend) => sum + futureSpendTotal(spend), 0);
-  const percent = ((error + tbc / 2) / predictedSpend) * 100;
+  const percent = (predictionError / predictedSpend) * 100;
   return Math.round(Math.min(BUDGET_THRESHOLD_MAX_PERCENT, Math.max(BUDGET_THRESHOLD_MIN_PERCENT, percent)) * 10) / 10;
+}
+
+// ---- Desire spends ------------------------------------------------------------
+// Desire spends (the wish list) are never part of the predicted spend. Their
+// likelihood is the chance the predicted surplus covers all of them: the
+// surplus less their total, against how far off that could be (the
+// prediction error, plus half of the spends still marked TBC, whose price is
+// not settled). With nothing left to guess it is simply 100 or 0.
+function normalCdf(z: number): number {
+  // Abramowitz & Stegun 26.2.17 (accurate to 7.5e-8).
+  const t = 1 / (1 + 0.2316419 * Math.abs(z));
+  const tail = Math.exp(-(z * z) / 2) * 0.3989422804014327 * t * (0.31938153 + t * (-0.356563782 + t * (1.781477937 + t * (-1.821255978 + t * 1.330274429))));
+  return z >= 0 ? 1 - tail : tail;
+}
+
+export function desireSpendLikelihood(predictedSurplus: number, desireSpends: number, predictionError: number, tbc: number): number {
+  const margin = predictedSurplus - desireSpends;
+  const spread = Math.sqrt(predictionError ** 2 + (tbc / 2) ** 2);
+  if (spread <= 0) return margin >= 0 ? 100 : 0;
+  return normalCdf(margin / spread) * 100;
 }
 
 export type BudgetSubscriptionRow = BudgetSubscriptionYearView & {
@@ -135,7 +150,22 @@ export type BudgetTotals = {
   additionalBudget: number; // part of operatingBudget, one-off
   baseBudget: number | null; // operatingBudget - additionalBudget
   oneOffPurchases: number; // purchases in the additional budgets' categories
-  futureSpends: number; // not yet bought
+  futureSpends: number; // desire spends not yet bought; never in the predicted spend
+  // What the predicted surplus leaves once every desire spend is bought, and
+  // the chance (0-100) it covers them all; null with no budget or none to buy.
+  desireRemaining: number | null;
+  desireLikelihood: number | null;
+  // Follow-through: every desire spend listed in the year, and those bought.
+  desireListed: number;
+  desireBought: number;
+  desireListedCount: number;
+  desireBoughtCount: number;
+  // Like for like: the predicted spend without the one-off categories (the
+  // ones given additional budget), to set against baseBudget.
+  basePredictedSpend: number;
+  subscriptionsPercent: number | null; // of the budget: committed before the year starts
+  outlook: BudgetYearView["outlook"]; // the type of year the user chose
+  predictionError: number; // dollars the predicted spend could be off by
   endedSubscriptions: number; // shown, not totalled
   actualSpend: number;
   remaining: number | null;
@@ -155,11 +185,25 @@ export type BudgetYearData = {
   expenses: BudgetExpenseView[];
   futureSpends: BudgetFutureSpendView[];
   additionalBudgets: BudgetAdditionalView[];
+  // Purchase categories ticked "In predictions" (opt-in, the same for every year).
+  projectedCategories: string[];
 };
 
-// Purchase categories paid for by additional budget: one-offs. Their
-// purchases count as spent but are not carried forward at a monthly rate
-// (one $12k sign in September is not $12k every month), and are not expected
+// Purchases for the whole year: a category ticked "In predictions" carries
+// on at its monthly average for the months left; the rest count as spent.
+export function predictYearPurchases(expenses: BudgetExpenseView[], projectedCategories: readonly string[], monthsElapsed: number): { carried: number; predictedCarried: number; total: number } {
+  const projected = new Set(projectedCategories);
+  let carried = 0;
+  let fixed = 0;
+  for (const expense of expenses) {
+    if (projected.has(expenseGroup(expense))) carried += expense.amount;
+    else fixed += expense.amount;
+  }
+  const predictedCarried = predictPurchases(round2(carried), monthsElapsed);
+  return { carried: round2(carried), predictedCarried, total: round2(predictedCarried + fixed) };
+}
+
+// Purchase categories paid for by additional budget: one-offs, not expected
 // again the next year.
 export function oneOffCategories(data: Pick<BudgetYearData, "additionalBudgets">): Set<string> {
   return new Set(data.additionalBudgets.filter((additional) => additional.amount > 0).map((additional) => additional.category));
@@ -187,11 +231,18 @@ export function computeBudgetTotals(data: BudgetYearData, now: Date): BudgetTota
   const oneOff = oneOffCategories(data);
   const oneOffPurchases = round2(data.expenses.filter((expense) => oneOff.has(expenseGroup(expense))).reduce((sum, expense) => sum + expense.amount, 0));
   const additionalBudget = round2(data.additionalBudgets.reduce((sum, additional) => sum + additional.amount, 0));
-  // Only the everyday purchases carry on at the same rate; one-offs are added as spent.
-  const predictedPurchases = round2(predictPurchases(round2(purchases - oneOffPurchases), monthsElapsed) + oneOffPurchases);
-  const predictedSpend = round2(subscriptions + predictedPurchases + futureSpends);
+  // Only the categories ticked "In predictions" carry on at the same rate.
+  const predicted = predictYearPurchases(data.expenses, data.projectedCategories, monthsElapsed);
+  const predictedPurchases = predicted.total;
+  // Desire spends are kept out: the prediction is subscriptions and purchases only.
+  const predictedSpend = round2(subscriptions + predictedPurchases);
   const predictedDifference = budget == null ? null : round2(budget - predictedSpend);
-  const thresholdPercent = budgetThresholdPercent(data, monthsElapsed, purchases, predictedPurchases, predictedSpend);
+  const predictionError = budgetPredictionError(data, monthsElapsed, predicted.carried, predicted.predictedCarried);
+  const thresholdPercent = budgetThresholdPercent(predictionError, predictedSpend);
+  const tbc = data.futureSpends.filter((spend) => spend.status === "tbc").reduce((sum, spend) => sum + futureSpendTotal(spend), 0);
+  const hasDesire = data.futureSpends.some((spend) => spend.status !== "bought");
+  const bought = data.futureSpends.filter((spend) => spend.status === "bought");
+  const basePredictedSpend = round2(subscriptions + predictYearPurchases(data.expenses.filter((expense) => !oneOff.has(expenseGroup(expense))), data.projectedCategories, monthsElapsed).total);
   return {
     startYear: data.year.startYear,
     label: data.year.label,
@@ -204,6 +255,16 @@ export function computeBudgetTotals(data: BudgetYearData, now: Date): BudgetTota
     baseBudget: budget == null ? null : round2(budget - additionalBudget),
     oneOffPurchases,
     futureSpends,
+    desireRemaining: predictedDifference == null || !hasDesire ? null : round2(predictedDifference - futureSpends),
+    desireLikelihood: predictedDifference == null || !hasDesire ? null : desireSpendLikelihood(predictedDifference, futureSpends, predictionError, tbc),
+    predictionError: round2(predictionError),
+    desireListed: round2(data.futureSpends.reduce((sum, spend) => sum + futureSpendTotal(spend), 0)),
+    desireBought: round2(bought.reduce((sum, spend) => sum + futureSpendTotal(spend), 0)),
+    desireListedCount: data.futureSpends.length,
+    desireBoughtCount: bought.length,
+    basePredictedSpend,
+    subscriptionsPercent: budget ? (subscriptions / budget) * 100 : null,
+    outlook: data.year.outlook,
     endedSubscriptions,
     actualSpend,
     remaining: budget == null ? null : round2(budget - actualSpend),
@@ -306,6 +367,99 @@ export function buildYearOverYear(years: BudgetYearData[], now: Date): YearOverY
   };
 }
 
+// The Year Over Year panel: whole-year figures only. The two latest finished
+// financial years are compared with each other; the current year is tracked
+// against them (its spend and surplus are the predicted ones).
+export type YearComparison = {
+  completed: BudgetTotals[]; // oldest first, at most two
+  tracking: BudgetTotals | null;
+  // The finished years' average surplus (minus = deficit) as a % of their
+  // budgets: how these years usually end. Null with no finished year.
+  usualSurplusPercent: number | null;
+  // Purchases up to the same point of each year: the end of the last
+  // complete month of the current year. Null per year when its purchases
+  // can't be placed (no dates), and null altogether in the year's first month.
+  samePoint: { month: string; purchases: Record<number, number | null> } | null;
+  // What the money is spent to achieve, per column year.
+  outcomes: Record<number, YearOutcomes>;
+};
+
+// ---- Marketing results --------------------------------------------------------
+// One month of what the budget is spent to achieve (budget/outcomes.ts reads
+// them): children enrolled across every kindergarten (the Enrolment Quality
+// roll; null until the month is complete) and the Meta adverts' results.
+export type BudgetOutcomeMonth = { month: string; roll: number | null; metaSpend: number; metaLandingViews: number; metaLeads: number };
+
+export type YearOutcomes = {
+  startYear: number;
+  roll: number | null; // average children enrolled over the year's complete months
+  rollMonths: number;
+  metaSpend: number;
+  metaLandingViews: number;
+  metaLeads: number;
+  costPerLandingView: number | null;
+  costPerLead: number | null;
+};
+
+export function buildYearOutcomes(startYear: number, months: readonly BudgetOutcomeMonth[]): YearOutcomes {
+  const inYear = months.filter((entry) => financialYearOfMonth(entry.month) === startYear);
+  const rolls = inYear.filter((entry) => entry.roll != null).map((entry) => entry.roll!);
+  const metaSpend = round2(inYear.reduce((sum, entry) => sum + entry.metaSpend, 0));
+  const metaLandingViews = Math.round(inYear.reduce((sum, entry) => sum + entry.metaLandingViews, 0));
+  const metaLeads = Math.round(inYear.reduce((sum, entry) => sum + entry.metaLeads, 0));
+  return {
+    startYear,
+    roll: rolls.length ? Math.round((rolls.reduce((sum, value) => sum + value, 0) / rolls.length) * 10) / 10 : null,
+    rollMonths: rolls.length,
+    metaSpend,
+    metaLandingViews,
+    metaLeads,
+    costPerLandingView: metaLandingViews > 0 ? round2(metaSpend / metaLandingViews) : null,
+    costPerLead: metaLeads > 0 ? round2(metaSpend / metaLeads) : null,
+  };
+}
+
+// Purchases dated in the year's first `monthsComplete` months (July = 1).
+// The workbook purchases have no dates: the import year's are known to fall
+// on or before BUDGET_IMPORTED_THROUGH, so they count once the point reaches
+// it; any other undated purchase can't be placed, so the year has no figure.
+export function purchasesToPoint(data: BudgetYearData, monthsComplete: number): number | null {
+  const importedIndex = Number(BUDGET_IMPORTED_THROUGH.slice(5, 7)) >= 7 ? Number(BUDGET_IMPORTED_THROUGH.slice(5, 7)) - 6 : Number(BUDGET_IMPORTED_THROUGH.slice(5, 7)) + 6;
+  const placeable = data.year.startYear === financialYearOfMonth(BUDGET_IMPORTED_THROUGH) && monthsComplete >= importedIndex;
+  let total = 0;
+  for (const expense of data.expenses) {
+    if (!expense.spentOn) {
+      if (!placeable || expense.source !== "import") return null;
+      total += expense.amount;
+      continue;
+    }
+    const month = Number(expense.spentOn.slice(5, 7));
+    if ((month >= 7 ? month - 6 : month + 6) <= monthsComplete) total += expense.amount;
+  }
+  return round2(total);
+}
+
+export function buildYearComparison(years: BudgetYearData[], now: Date, outcomeMonths: readonly BudgetOutcomeMonth[] = []): YearComparison {
+  const current = financialYearOf(now);
+  const sorted = [...years].sort((a, b) => a.year.startYear - b.year.startYear);
+  const trackingData = sorted.find((data) => data.year.startYear === current);
+  const completedData = sorted.filter((data) => data.year.startYear < current).slice(-2);
+  const completed = completedData.map((data) => computeBudgetTotals(data, now));
+  const tracking = trackingData ? computeBudgetTotals(trackingData, now) : null;
+  const surpluses = completed.filter((totals) => totals.operatingBudget && totals.predictedDifference != null).map((totals) => (totals.predictedDifference! / totals.operatingBudget!) * 100);
+  const monthsComplete = tracking ? tracking.monthsElapsed - 1 : 0;
+  const columns = [...completedData, ...(trackingData ? [trackingData] : [])];
+  // The last complete month of the current year, as YYYY-MM (July = month 1).
+  const pointMonth = monthsComplete + 6 > 12 ? `${current + 1}-${String(monthsComplete - 6).padStart(2, "0")}` : `${current}-${String(monthsComplete + 6).padStart(2, "0")}`;
+  return {
+    completed,
+    tracking,
+    usualSurplusPercent: surpluses.length ? surpluses.reduce((sum, value) => sum + value, 0) / surpluses.length : null,
+    samePoint: monthsComplete >= 1 ? { month: pointMonth, purchases: Object.fromEntries(columns.map((data) => [data.year.startYear, purchasesToPoint(data, monthsComplete)])) } : null,
+    outcomes: Object.fromEntries(columns.map((data) => [data.year.startYear, buildYearOutcomes(data.year.startYear, outcomeMonths)])),
+  };
+}
+
 // ---- Landing reminder -----------------------------------------------------
 
 export const BUDGET_REMINDER_DAYS_BEFORE_MONTH_END = 3;
@@ -358,7 +512,7 @@ export function monthName(month: string): string {
 // ---- AI grounding ---------------------------------------------------------
 
 const BUDGET_PROMPT_PATTERN =
-  /\b(budget|budgets|spend|spent|spending|spends|cost|costs|costing|subscription|subscriptions|purchase|purchases|purchased|expense|expenses|forecast|predicted|deficit|surplus|overspend|underspend|financial year|invoice|invoices|money)\b/i;
+  /\b(budget|budgets|desire|spend|spent|spending|spends|cost|costs|costing|subscription|subscriptions|purchase|purchases|purchased|expense|expenses|forecast|predicted|deficit|surplus|overspend|underspend|financial year|invoice|invoices|money)\b/i;
 
 export function isBudgetPrompt(prompt: string): boolean {
   return BUDGET_PROMPT_PATTERN.test(prompt);
@@ -369,7 +523,7 @@ const percent = (value: number | null) => (value == null ? "n/a" : `${value >= 0
 
 // Everything Beep Beep and General Chat need to answer budget questions:
 // the current year in detail, and every year's totals for comparison.
-export function buildBudgetGrounding(years: BudgetYearData[], now: Date): string {
+export function buildBudgetGrounding(years: BudgetYearData[], now: Date, outcomeMonths: readonly BudgetOutcomeMonth[] = []): string {
   if (years.length === 0) return "";
   const sorted = [...years].sort((a, b) => a.year.startYear - b.year.startYear);
   const currentStart = financialYearOf(now);
@@ -380,9 +534,12 @@ export function buildBudgetGrounding(years: BudgetYearData[], now: Date): string
     `Marketing budget (Budget page, financial years 1 July - 30 June; subscriptions are yearly cost excluding GST, purchases as entered).`,
     `Current financial year ${totals.label} (${totals.monthsElapsed} of 12 months):`,
     `- Operating budget ${money(totals.operatingBudget)}; actual spend ${money(totals.actualSpend)} (subscriptions ${money(totals.subscriptions)} + purchases ${money(totals.purchases)}); remaining ${money(totals.remaining)}${totals.remainingPercent == null ? "" : ` (${totals.remainingPercent.toFixed(1)}% of the budget)`}.`,
-    `- Predicted spend ${money(totals.predictedSpend)} (subscriptions + predicted purchases ${money(totals.predictedPurchases)} + future spends ${money(totals.futureSpends)}); predicted ${totals.predictedDifference != null && totals.predictedDifference < 0 ? "deficit" : "surplus"} ${money(totals.predictedDifference == null ? null : Math.abs(totals.predictedDifference))} (${percent(totals.predictedPercent)}, ${totals.status ?? "no budget set"}).`,
+    `- Predicted spend ${money(totals.predictedSpend)} (subscriptions + predicted purchases ${money(totals.predictedPurchases)}; desire spends are not included); predicted ${totals.predictedDifference != null && totals.predictedDifference < 0 ? "deficit" : "surplus"} ${money(totals.predictedDifference == null ? null : Math.abs(totals.predictedDifference))} (${percent(totals.predictedPercent)}, ${totals.status ?? "no budget set"}).`,
+    `- Purchase categories carried on at the same monthly rate in the prediction: ${current.projectedCategories.filter((category) => current.expenses.some((expense) => expenseGroup(expense) === category)).join(", ") || "none"}; the rest count only what was spent.`,
     `- Ended subscriptions (not in totals): ${money(totals.endedSubscriptions)}.`,
   ];
+  if (totals.desireLikelihood != null)
+    lines.push(`- Desire spends (wish list, not in the predicted spend) ${money(totals.futureSpends)}; after buying all of them the predicted surplus would ${(totals.desireRemaining ?? 0) >= 0 ? `leave ${money(totals.desireRemaining)}` : `be ${money(-(totals.desireRemaining ?? 0))} short`}; likelihood all can be bought this financial year ${totals.desireLikelihood.toFixed(0)}%.`);
   if (totals.additionalBudget > 0)
     lines.push(
       `- Additional budget (a one-off, part of the operating budget, not expected next year): ${current.additionalBudgets.map((additional) => `${additional.category} ${money(additional.amount)}`).join("; ")}; budget without it ${money(totals.baseBudget)}.`,
@@ -398,13 +555,21 @@ export function buildBudgetGrounding(years: BudgetYearData[], now: Date): string
   const groups = groupPurchases(current.expenses);
   if (groups.length) lines.push(`Purchases ${totals.label} by group: ${groups.map((group) => `${group.group} ${money(group.total)} (${group.percentOfPurchases.toFixed(0)}%)`).join("; ")}.`);
   const future = current.futureSpends.filter((spend) => spend.status !== "bought");
-  if (future.length) lines.push(`Future spends ${totals.label}: ${future.map((spend) => `${spend.project}: ${spend.note || spend.supplier} ${money(futureSpendTotal(spend))}${spend.status === "tbc" ? " (TBC)" : ""}`).join("; ")}.`);
+  if (future.length) lines.push(`Desire spends ${totals.label}: ${future.map((spend) => `${spend.project}: ${spend.note || spend.supplier} ${money(futureSpendTotal(spend))}${spend.status === "tbc" ? " (TBC)" : ""}`).join("; ")}.`);
   const report = current.year.report.trim() || current.year.notes.trim();
   if (report) lines.push(`Year report ${totals.label}: ${report.replace(/\s+/g, " ").slice(0, 1500)}`);
   lines.push(`All years:`);
   for (const data of sorted) {
     const year = computeBudgetTotals(data, now);
-    lines.push(`- ${year.label}: budget ${money(year.operatingBudget)}, subscriptions ${money(year.subscriptions)}, purchases ${money(year.purchases)}, actual ${money(year.actualSpend)}, remaining ${money(year.remaining)}, ended subscriptions ${money(year.endedSubscriptions)}.`);
+    lines.push(`- ${year.label}: budget ${money(year.operatingBudget)}, subscriptions ${money(year.subscriptions)}, purchases ${money(year.purchases)}, actual ${money(year.actualSpend)}, remaining ${money(year.remaining)}, ended subscriptions ${money(year.endedSubscriptions)}${year.additionalBudget > 0 ? `, budget without one-offs ${money(year.baseBudget)}, spend without one-offs ${money(year.basePredictedSpend)}` : ""}${year.outlook ? `, marked by the user as a ${year.outlook} year` : ""}.`);
+  }
+  const results = sorted.map((data) => ({ label: data.year.label, current: data.year.startYear === currentStart, ...buildYearOutcomes(data.year.startYear, outcomeMonths) })).filter((year) => year.roll != null || year.metaSpend > 0);
+  if (results.length) {
+    lines.push(`Marketing results by financial year (children enrolled = average roll across all kindergartens from Infocare; Meta = Facebook/Instagram adverts):`);
+    for (const year of results)
+      lines.push(
+        `- ${year.label}${year.current ? " (so far)" : ""}: children enrolled ${year.roll == null ? "n/a" : year.roll.toFixed(1)}; Meta ad spend ${money(year.metaSpend)}, landing page views ${year.metaLandingViews} (${year.costPerLandingView == null ? "n/a" : money(year.costPerLandingView)} each), leads ${year.metaLeads} (${year.costPerLead == null ? "n/a" : money(year.costPerLead)} each).`,
+      );
   }
   const yoy = buildYearOverYear(sorted, now);
   if (yoy.years.length > 1) {
@@ -440,6 +605,7 @@ export function buildBudgetReport(data: BudgetYearData, previous: BudgetYearData
 
   // Budget
   const budget: string[] = [];
+  if (totals.outlook) budget.push(`This is marked as a ${totals.outlook} year.`);
   if (totals.operatingBudget == null) {
     budget.push("No budget has been set.");
   } else {
@@ -521,7 +687,7 @@ export function buildBudgetReport(data: BudgetYearData, previous: BudgetYearData
   }
   section("Purchases", purchases);
 
-  // Future spends still to buy
+  // Desire spends still to buy
   const open = data.futureSpends.filter((spend) => spend.status !== "bought");
   const future: string[] = [];
   if (open.length) {
@@ -535,20 +701,25 @@ export function buildBudgetReport(data: BudgetYearData, previous: BudgetYearData
     );
     const tbc = round2(open.filter((spend) => spend.status === "tbc").reduce((sum, spend) => sum + futureSpendTotal(spend), 0));
     if (tbc !== 0) future.push(`${money(tbc)} of that is still to be confirmed (TBC).`);
+    if (!closed && totals.desireLikelihood != null) {
+      const left = totals.desireRemaining ?? 0;
+      future.push(`Likelihood all can be bought this financial year: ${totals.desireLikelihood.toFixed(0)}% (the predicted surplus would ${left >= 0 ? `leave ${money(left)}` : `be ${money(-left)} short`}).`);
+    }
   }
-  section("Future Spends", future);
+  section("Desire Spends", future);
 
   // Next financial year: what the same activity would cost, one-offs left out.
   const nextStart = `${start + 1}-07-01`;
   const carried = active.filter((row) => !row.endedOn || row.endedOn >= nextStart);
   const nextSubscriptions = round2(carried.reduce((sum, row) => sum + row.yearlyCost, 0) / GST_DIVISOR);
-  const nextPurchases = predictPurchases(round2(totals.purchases - totals.oneOffPurchases), totals.monthsElapsed);
-  const oneOffNames = [...oneOffCategories(data)].join(", ");
+  const oneOff = oneOffCategories(data);
+  const nextPurchases = predictYearPurchases(data.expenses.filter((expense) => !oneOff.has(expenseGroup(expense))), data.projectedCategories, totals.monthsElapsed).total;
+  const oneOffNames = [...oneOff].join(", ");
   const next: string[] = [
     `Subscriptions: ${money(nextSubscriptions)} excl. GST (${carried.length} subscription${carried.length === 1 ? "" : "s"} at today's prices).`,
-    `Expected purchases: ${money(nextPurchases)}, ${closed ? "the same as this year's purchases" : "this year's purchases carried on at the same rate"}${totals.oneOffPurchases > 0 ? `, without the one-off ${oneOffNames} (${money(totals.oneOffPurchases)})` : ""}.`,
+    `Expected purchases: ${money(nextPurchases)}, ${closed ? "the same as this year's purchases" : "this year's predicted purchases"}${totals.oneOffPurchases > 0 ? `, without the one-off ${oneOffNames} (${money(totals.oneOffPurchases)})` : ""}.`,
   ];
-  if (totals.futureSpends !== 0) next.push(`Future spends not bought by 30 June ${start + 1} would add ${money(totals.futureSpends)}.`);
+  if (totals.futureSpends !== 0) next.push(`Desire spends not bought by 30 June ${start + 1} would add ${money(totals.futureSpends)}.`);
   const nextSpend = round2(nextSubscriptions + nextPurchases);
   if (totals.baseBudget == null) {
     next.push(`Expected spend: ${money(nextSpend)}.`);

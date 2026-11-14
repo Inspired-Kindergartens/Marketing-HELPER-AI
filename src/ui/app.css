@@ -927,6 +927,17 @@ button:focus-visible {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+/* Year Over Year: the current year's tracking tiles, three a row. */
+.google-analytics-summary.budget-tracker {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+/* In predictions tick on a purchase category. */
+.budget-predict {
+  cursor: pointer;
+  white-space: nowrap;
+}
+
 /* Budget purchases: one card per category, three a row. */
 .budget-purchase-grid {
   grid-template-columns: repeat(3, minmax(0, 1fr));

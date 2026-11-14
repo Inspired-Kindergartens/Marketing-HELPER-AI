@@ -7,6 +7,7 @@ import {
   buildBudgetGrounding,
   buildBudgetReport,
   buildSubscriptionRows,
+  buildYearComparison,
   buildYearOverYear,
   computeBudgetTotals,
   groupPurchases,
@@ -31,11 +32,13 @@ function year(startYear: number, operatingBudget: number | null, parts: { subs?:
     id: nextId++, budgetYearId: yearId, project, supplier: "", amount, qty, note: "", status: "planned", expenseId: null, createdAt: "2026-01-01T00:00:00.000Z",
   }));
   return {
-    year: { id: yearId, startYear, label: `${startYear}-${String((startYear + 1) % 100).padStart(2, "0")}`, operatingBudget, thresholdPercent: 2, notes: "", report: "", updatedAt: "2026-01-01T00:00:00.000Z" },
+    year: { id: yearId, startYear, label: `${startYear}-${String((startYear + 1) % 100).padStart(2, "0")}`, operatingBudget, thresholdPercent: 2, notes: "", report: "", outlook: "", updatedAt: "2026-01-01T00:00:00.000Z" },
     subscriptions,
     expenses,
     futureSpends,
     additionalBudgets: [],
+    // Every category ticked "In predictions", as the workbooks carried every purchase forward.
+    projectedCategories: [...new Set(expenses.map((expense) => expense.group))],
   };
 }
 
@@ -110,10 +113,67 @@ test("2026-27 matches the workbook (Totals sheet, 1 Oct 2026)", () => {
   near(totals.spentPercent, 36.89);
   assert.equal(totals.monthsElapsed, 4);
   near(totals.predictedPurchases, 53009.67);
-  near(totals.predictedSpend, 60634.93);
-  near(totals.predictedDifference, -634.93);
-  near(totals.predictedPercent, -1.05);
-  assert.equal(totals.status, "on-track");
+  // The workbook added the future (now desire) spends, 60,634.93; they are kept out.
+  near(totals.predictedSpend, 57475.84);
+  near(totals.predictedDifference, 2524.16);
+  near(totals.predictedPercent, 4.39);
+  assert.equal(totals.status, "surplus");
+});
+
+test("predictions are opt-in: only ticked categories carry on, the rest count as spent", () => {
+  const now = new Date("2026-10-15T00:00:00Z"); // 4 months elapsed
+  const data = fy2627();
+  data.projectedCategories = [];
+  const none = computeBudgetTotals(data, now);
+  near(none.predictedPurchases, 17669.89); // nothing ticked: purchases to date
+  near(none.predictedSpend, 4466.17 + 17669.89);
+  assert.equal(none.predictionError, 0);
+  data.projectedCategories = ["Facebook"];
+  const facebook = computeBudgetTotals(data, now);
+  // Facebook 2,060.21 over 4 months -> 6,180.63 for the year; Mailchimp and the signage as spent.
+  near(facebook.predictedPurchases, 6180.63 + 86.28 + 15523.4);
+  // A ticked category with no purchases this year changes nothing.
+  data.projectedCategories = ["Facebook", "Kale Print"];
+  near(computeBudgetTotals(data, now).predictedPurchases, 6180.63 + 86.28 + 15523.4);
+});
+
+test("desire spends: out of the predicted spend, with the likelihood the surplus covers them all", () => {
+  const december = new Date("2026-12-15T00:00:00Z");
+  // Steady spending, nothing to guess: a 2,000 surplus covers 1,500 for certain, not 2,500.
+  const steady = (desire: number) => {
+    const data = datedYear([1000, 1000, 1000, 1000, 1000, 1000], 14000);
+    data.futureSpends = [{ id: nextId++, budgetYearId: 2026, project: "Wish", supplier: "", amount: desire, qty: 1, note: "", status: "planned", expenseId: null, createdAt: "2026-01-01T00:00:00.000Z" }];
+    return computeBudgetTotals(data, december);
+  };
+  near(steady(1500).predictedSpend, 12000); // unchanged by the desire spend
+  assert.equal(steady(1500).desireLikelihood, 100);
+  assert.equal(steady(1500).desireRemaining, 500);
+  assert.equal(steady(2500).desireLikelihood, 0);
+  assert.equal(steady(2500).desireRemaining, -500);
+  // Swinging spending (error 619.68): exactly covered is a coin toss; one error to spare is 84%.
+  const swinging = (budget: number) => {
+    const data = datedYear([1000, 1200, 800, 1000, 1200, 800], budget);
+    data.futureSpends = [{ id: nextId++, budgetYearId: 2026, project: "Wish", supplier: "", amount: 1000, qty: 1, note: "", status: "planned", expenseId: null, createdAt: "2026-01-01T00:00:00.000Z" }];
+    return computeBudgetTotals(data, december);
+  };
+  near(swinging(13000).desireLikelihood, 50, 0);
+  near(swinging(13619.68).desireLikelihood, 84, 0);
+  near(swinging(12000).desireLikelihood, 5, 0);
+  // None to buy, or no budget: no likelihood.
+  assert.equal(computeBudgetTotals(datedYear([1000, 1000, 1000]), december).desireLikelihood, null);
+});
+
+test("year comparison: the two latest finished years, and the current year tracked", () => {
+  const fy2425 = year(2024, 25000, { buys: [["Everything", "Kale Print", 20000]] });
+  const older = year(2023, 20000);
+  const comparison = buildYearComparison([fy2627(), older, fy2526(), fy2425], new Date("2026-10-15T00:00:00Z"));
+  assert.deepEqual(comparison.completed.map((totals) => totals.label), ["2024-25", "2025-26"]);
+  assert.equal(comparison.tracking?.label, "2026-27");
+  near(comparison.completed[1].predictedSpend, 22366.71); // a finished year: what was spent
+  near(comparison.completed[1].predictedDifference, 7633.29);
+  near(comparison.tracking!.predictedSpend, 57475.84);
+  // Before the current year exists there is nothing to track.
+  assert.equal(buildYearComparison([fy2526()], new Date("2026-10-15T00:00:00Z")).tracking, null);
 });
 
 test("2025-26 matches the workbook's actual figures", () => {
@@ -130,7 +190,7 @@ test("a closed year predicts its own 12 months, not $203k from today's date", ()
   const totals = computeBudgetTotals(fy2526(), new Date("2026-11-12T00:00:00Z"));
   assert.equal(totals.monthsElapsed, 12);
   near(totals.predictedPurchases, 16937.6);
-  near(totals.predictedSpend, 5429.11 + 16937.6 + 3159.09);
+  near(totals.predictedSpend, 5429.11 + 16937.6);
   assert.ok(totals.predictedSpend < 30000);
 });
 
@@ -177,6 +237,7 @@ function datedYear(monthly: number[], operatingBudget = 20000, tbc = 0): BudgetY
     const spentOn = `${index + 7 > 12 ? 2027 : 2026}-${String(month).padStart(2, "0")}-15`;
     return { id: nextId++, budgetYearId: 2026, supplier: "Shop", group: "Shop", amount, note: "", spentOn, source: "manual", sourceMonth: null, createdAt: "2026-01-01T00:00:00.000Z" };
   });
+  data.projectedCategories = ["Shop"];
   if (tbc) data.futureSpends = [{ id: nextId++, budgetYearId: 2026, project: "Maybe", supplier: "", amount: tbc, qty: 1, note: "", status: "tbc", expenseId: null, createdAt: "2026-01-01T00:00:00.000Z" }];
   return data;
 }
@@ -189,8 +250,8 @@ test("threshold is worked out: how far off the prediction could be, between 2% a
   const swinging = computeBudgetTotals(datedYear([1000, 1200, 800, 1000, 1200, 800]), december);
   near(swinging.predictedSpend, 12000);
   assert.equal(swinging.thresholdPercent, 5.2);
-  // Half of a TBC future spend is added: (619.68 + 300) / 12,600 = 7.3%.
-  assert.equal(computeBudgetTotals(datedYear([1000, 1200, 800, 1000, 1200, 800], 20000, 600), december).thresholdPercent, 7.3);
+  // Desire spends are not in the prediction, so a TBC one changes nothing.
+  assert.equal(computeBudgetTotals(datedYear([1000, 1200, 800, 1000, 1200, 800], 20000, 600), december).thresholdPercent, 5.2);
   // One big lumpy purchase: capped at 10%.
   assert.equal(computeBudgetTotals(datedYear([100, 100, 12000, 100, 100, 100]), december).thresholdPercent, 10);
   // Under 3 months there is no swing to measure: half the guessed purchases, capped.
@@ -257,7 +318,9 @@ test("budget grounding: current year, subscriptions and every year's totals", ()
   const text = buildBudgetGrounding([fy2526(), fy2627()], new Date("2026-10-15T00:00:00Z"));
   assert.match(text, /Current financial year 2026-27 \(4 of 12 months\)/);
   assert.match(text, /Operating budget \$60,000\.00/);
-  assert.match(text, /Predicted spend \$60,634\.93/);
+  assert.match(text, /Predicted spend \$57,475\.84 \(subscriptions \+ predicted purchases \$53,009\.67; desire spends are not included\)/);
+  assert.match(text, /carried on at the same monthly rate in the prediction: Facebook, Mailchimp, Office Signage;/);
+  assert.match(text, /Desire spends \(wish list, not in the predicted spend\) \$3,159\.09; after buying all of them the predicted surplus would be \$634\.93 short; likelihood all can be bought this financial year 0%\./);
   assert.match(text, /- Mailchimp: \$152\.80 per year/);
   assert.match(text, /Office Signage \$15,523\.40/);
   assert.match(text, /- 2025-26: budget \$30,000\.00/);
@@ -269,6 +332,7 @@ test("budget grounding: current year, subscriptions and every year's totals", ()
 const fy2627WithSignage = () => {
   const data = fy2627();
   data.additionalBudgets = [{ id: 1, budgetYearId: 2026, category: "Office Signage", amount: 20000 }];
+  data.projectedCategories = ["Facebook", "Mailchimp"]; // the signage is not ticked
   return data;
 };
 
@@ -281,7 +345,7 @@ test("additional budget: its category's purchases count as spent but are not car
   near(totals.actualSpend, 22136.06); // unchanged
   // Everyday purchases 2,146.49 over 4 months -> 6,439.47 for the year, plus the signage as spent.
   near(totals.predictedPurchases, 6439.47 + 15523.4);
-  near(totals.predictedSpend, 4466.17 + 21962.87 + 3159.09);
+  near(totals.predictedSpend, 4466.17 + 21962.87);
   // Without one, nothing changes.
   const plain = computeBudgetTotals(fy2627(), new Date("2026-10-15T00:00:00Z"));
   assert.equal(plain.additionalBudget, 0);
@@ -296,7 +360,7 @@ test("report: written from the figures, with the one-off left out of next year",
   assert.match(text, /  • \$20,000\.00 of it is additional budget for Office Signage, a one-off that is not expected next year \(\$15,523\.40 spent so far\)\./);
   assert.match(text, /  • Without the additional budget it is \$40,000\.00, up from \$30,000\.00 in 2025-26 \(\+33\.3%\)\./);
   assert.match(text, /Actual spend so far is \$22,136\.06 \(36\.9% of the budget\), leaving \$37,863\.94\./);
-  assert.match(text, /Predicted spend for the year is \$29,588\.13, a predicted surplus of \$30,411\.87\./);
+  assert.match(text, /Predicted spend for the year is \$26,429\.04, a predicted surplus of \$33,570\.96\./);
   // Subscription price increases and decreases, new ones and ones no longer paid.
   assert.match(text, /\nSubscriptions:\n  • 8 active subscriptions cost /);
   assert.match(text, /Increases \(yearly cost\): Formstack \$1,171\.72 to \$1,280\.46 \(\+9\.3%\)\./);
@@ -305,16 +369,16 @@ test("report: written from the figures, with the one-off left out of next year",
   assert.match(text, /No longer paid: [^\n]*Midjourney \(was \$480\.16 a year\)/);
   assert.match(text, /\nPurchases:\n  • Purchases so far total \$17,669\.89 across 3 categories\.\n  • Largest: Office Signage \$15,523\.40 \(88%\); Facebook \$2,060\.21 \(12%\); Mailchimp \$86\.28 \(0%\)\./);
   assert.doesNotMatch(text, /Against 2025-26/); // a part year is not compared with a full one
-  assert.match(text, /\nFuture Spends:\n  • 8 still to buy, \$3,159\.09 in total: Recording \$3,159\.09\./);
+  assert.match(text, /\nDesire Spends:\n  • 8 still to buy, \$3,159\.09 in total: Recording \$3,159\.09\.\n  • Likelihood all can be bought this financial year: 100% \(the predicted surplus would leave \$30,411\.87\)\./);
   assert.match(text, /\nNext financial year 2027-28:\n  • Subscriptions: \$4,466\.17 excl\. GST \(8 subscriptions at today's prices\)\./);
-  assert.match(text, /  • Expected purchases: \$6,439\.47, this year's purchases carried on at the same rate, without the one-off Office Signage \(\$15,523\.40\)\./);
-  assert.match(text, /  • Future spends not bought by 30 June 2027 would add \$3,159\.09\./);
+  assert.match(text, /  • Expected purchases: \$6,439\.47, this year's predicted purchases, without the one-off Office Signage \(\$15,523\.40\)\./);
+  assert.match(text, /  • Desire spends not bought by 30 June 2027 would add \$3,159\.09\./);
   assert.match(text, /  • Expected spend: \$10,905\.64, \$29,094\.36 under this year's budget without the additional \$20,000\.00 \(\$40,000\.00\)\.$/);
 
   // No additional budget: no mention of one, and everything is carried forward.
   const plain = buildBudgetReport(fy2627(), fy2526(), now);
   assert.doesNotMatch(plain, /additional|one-off/);
-  assert.match(plain, /Expected purchases: \$53,009\.67, this year's purchases carried on at the same rate\./);
+  assert.match(plain, /Expected purchases: \$53,009\.67, this year's predicted purchases\./);
 
   // A finished year with no year before it.
   const closed = buildBudgetReport(fy2526(), null, new Date("2026-11-12T00:00:00Z"));

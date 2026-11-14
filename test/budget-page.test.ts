@@ -14,8 +14,9 @@ function source(path: string) {
 const created = "2026-11-01T00:00:00.000Z";
 function yearData(startYear: number, budget: number): BudgetYearData {
   return {
-    year: { id: startYear, startYear, label: `${startYear}-${(startYear + 1) % 100}`, operatingBudget: budget, thresholdPercent: 2, notes: "Notes <b>here</b>", report: "", updatedAt: created },
+    year: { id: startYear, startYear, label: `${startYear}-${(startYear + 1) % 100}`, operatingBudget: budget, thresholdPercent: 2, notes: "Notes <b>here</b>", report: "", outlook: "", updatedAt: created },
     additionalBudgets: [],
+    projectedCategories: ["Facebook"],
     subscriptions: [
       { id: startYear * 10 + 1, subscriptionId: 1, budgetYearId: startYear, startYear, name: "Mailchimp", category: "", amount: startYear === 2026 ? 152.8 : 28.76, frequency: startYear === 2026 ? "year" : "month", status: "active", tally: 0, note: "", startedOn: "2023-07-01", endedOn: null, createdAt: created },
       { id: startYear * 10 + 2, subscriptionId: 2, budgetYearId: startYear, startYear, name: "Zoom", category: "", amount: 84.22, frequency: "month", status: "ended", tally: 12, note: "", startedOn: null, endedOn: "2026-09-30", createdAt: created },
@@ -63,7 +64,7 @@ test("budget page: no year notes box; Generate report opens the report for editi
   assert.match(html, /"\/api\/budget\/years\/" \+ YEAR \+ "\/report" \+ \(fresh \? "\?fresh=1" : ""\)/);
   const server = source("../src/server.ts");
   assert.match(server, /saved && request\.query\?\.fresh !== "1" \? saved : buildBudgetReport\(data\.selected, data\.previous, data\.now\)/);
-  assert.match(server, /updateBudgetYearSettings\(year, \{ operatingBudget: body\.operatingBudget, report: body\.report \}\)/);
+  assert.match(server, /updateBudgetYearSettings\(year, \{ operatingBudget: body\.operatingBudget, report: body\.report, outlook: body\.outlook \}\)/);
 });
 
 test("budget pdf: named Marketing Budget; uses the saved report, or writes one when none was generated", () => {
@@ -169,7 +170,116 @@ test("budget page: purchases are one card per category with the last three, a to
   assert.match(html, /data-budget-fragment="categories"/);
 });
 
-test("budget page: Future Spends is the same card design as Purchases, by category", () => {
+test("budget page: In predictions is an opt-in tick on each purchase category", () => {
+  const { purchases, categories, totals } = renderBudgetFragments(pageData());
+  const cards = purchases.split('<template data-budget-card-template="expense">')[0].split("<section").slice(1);
+  const card = (name: string) => cards.find((part) => part.includes(`data-budget-card="${name}"`))!;
+  assert.match(card("Facebook"), /<input type="checkbox" data-budget-predict="Facebook" checked \/><span>In predictions<\/span>/);
+  assert.match(card("Office Signage"), /<input type="checkbox" data-budget-predict="Office Signage" \/><span>In predictions<\/span>/);
+  assert.match(categories, /data-budget-predict="Facebook" checked/); // and on the full list on the right
+  // 12 Nov = 5 months: Facebook 810.97 carries on to 1,946.33; the signage counts as spent.
+  assert.match(totals, /<td>Predicted purchases<\/td><td class="[^"]*">\$13,979\.23<\/td>/);
+  const html = renderBudgetAppShell(pageData());
+  assert.match(html, /post\("\/api\/budget\/categories\/predict", \{ category: box\.getAttribute\("data-budget-predict"\), on: box\.checked \}\)\.then\(swap\)/);
+  const server = source("../src/server.ts");
+  assert.match(server, /"\/api\/budget\/categories\/predict"[\s\S]*?setBudgetCategoryProjected\(body\.category, body\.on === true\)/);
+  const store = source("../src/storage/budget-store.ts");
+  assert.match(store, /return \{ year, subscriptions, expenses, futureSpends, additionalBudgets, projectedCategories \};/);
+  // Renaming the category takes its tick with it.
+  assert.match(store, /db\.budgetProjectedCategory\.deleteMany\(\{ where: \{ category: from \} \}\)/);
+  assert.match(source("../prisma/schema.prisma"), /model BudgetProjectedCategory \{[^}]*category\s+String\s+@unique/);
+});
+
+test("budget page: Year Over Year compares whole finished years and tracks the current one", () => {
+  const data = pageData();
+  const older = yearData(2024, 25000);
+  data.all = [older, ...data.all];
+  const { history, totals } = renderBudgetFragments(data);
+  // Finished years, then the current year's predicted figures; no subscriptions or purchase categories.
+  assert.match(history, /<th><\/th><th class="[^"]*">2024-25<\/th><th class="[^"]*">2025-26<\/th><th class="[^"]*">2026-27 predicted<\/th>/);
+  assert.equal(history.match(/<table/g)?.length, 1);
+  assert.doesNotMatch(history, /Mailchimp|Office Signage|Facebook|data-budget-yoy-subscriptions|data-budget-yoy-groups/);
+  const row = (label: string) => history.split("<tr>").find((part) => part.includes(`<strong>${label}</strong>`))!;
+  // Budget increases and decreases, in dollars and %.
+  assert.match(row("Budget"), /\$25,000\.00[\s\S]*\$30,000\.00<\/span><div class="text-muted text-small">\+\$5,000\.00 \(\+20\.0%\)<\/div>[\s\S]*\$60,000\.00<\/span><div class="text-muted text-small">\+\$30,000\.00 \(\+100\.0%\)<\/div>/);
+  assert.match(row("Spend"), /\$13,143\.97[\s\S]*\$14,112\.10/); // 2025-26 as spent; 2026-27 predicted (132.87 + 13,979.23)
+  assert.match(row("Surplus \/ deficit"), /\$45,887\.90<\/span><div class="text-muted text-small">\+76\.5% of budget<\/div>/);
+  // The current year's tracker.
+  const tracker = history.slice(history.indexOf("data-budget-tracker"), history.indexOf("<table"));
+  assert.match(tracker, /<span>Budget vs 2025-26<\/span><strong class="">\+100\.0%<\/strong><small class="text-small text-muted">\+\$30,000\.00<\/small>/);
+  assert.match(tracker, /<span>Spent to date<\/span><strong class="">\$12,976\.74<\/strong><small class="text-small text-muted">21\.6% of budget · 5 of 12 months<\/small>/);
+  assert.match(tracker, /<span>Predicted spend<\/span><strong class="">\$14,112\.10<\/strong>/);
+  assert.match(tracker, /<span>Predicted surplus<\/span><strong class="enrolment-quality__band--watch">\$45,887\.90<\/strong>/);
+  // Desire spends: weighed against the predicted surplus, in no other figure.
+  assert.match(tracker, /<span>Desire Spends<\/span><strong class="">\$1,398\.00<\/strong><small class="text-small text-muted">\$44,489\.90 left after<\/small>/);
+  assert.match(tracker, /data-budget-desire-likelihood><span>Desire Spend likelihood<\/span><strong class="enrolment-quality__band--good">100%<\/strong>/);
+  assert.match(totals, /<td>Desire spends \(not in predicted spend\)<\/td><td class="[^"]*">\$1,398\.00<\/td>/);
+  assert.match(totals, /<span>Predicted spend<\/span><strong>\$14,112\.10<\/strong>/);
+  // The PDF's year-over-year table is the same comparison.
+  assert.match(source("../src/ui/budget-pdf.ts"), /comparisonTable\("", " predicted", yearComparisonRows\(comparison\)\)/);
+});
+
+test("budget page: Year Over Year adds like-for-like, usual surplus, same point, follow-through and the year type", () => {
+  const data = pageData();
+  const older = yearData(2024, 25000);
+  data.all = [older, ...data.all];
+  data.selected.additionalBudgets = [{ id: 1, budgetYearId: 2026, category: "Office Signage", amount: 20000 }];
+  data.selected.futureSpends.push({ id: 77, budgetYearId: 2026, project: "Recording", supplier: "Music Works", amount: 100, qty: 1, note: "Stand", status: "bought", expenseId: null, createdAt: created });
+  data.previous!.year.outlook = "bearish";
+  const { history } = renderBudgetFragments(data);
+  const row = (label: string) => history.split("<tr>").find((part) => part.includes(`<strong>${label}</strong>`))!;
+  // The $20,000 for the signage is a one-off: without it the budget rose 33.3%, not 100%.
+  assert.match(row("Budget without one-offs"), /\$40,000\.00<\/span><div class="text-muted text-small">\+\$10,000\.00 \(\+33\.3%\)<\/div>/);
+  assert.match(row("Spend without one-offs"), /\$2,079\.20/); // 132.87 + Facebook 1,946.33
+  // How the finished years ended: (25,000 - 13,143.97) / 25,000 and (30,000 - 13,143.97) / 30,000.
+  assert.match(history, /data-budget-usual-surplus><span>Usual surplus<\/span><strong class="">51\.8% of budget<\/strong><small class="text-small text-muted">2024-25 · 2025-26<\/small>/);
+  assert.match(row("Subscriptions share of budget"), /0\.2%<\/span><div class="text-muted text-small">\$132\.87<\/div>/);
+  // 12 Nov: purchases to the end of October. The finished years' fixture purchases are undated, so no figure.
+  const samePoint = row("Purchases to end of October");
+  assert.equal(samePoint.match(/—/g)?.length, 2);
+  assert.match(samePoint, /\$12,843\.87/); // the signage came from the workbook (by September) + Meta in October
+  assert.match(row("Desire Spends bought"), /\$100\.00 of \$1,498\.00<\/span><div class="text-muted text-small">1 of 2<\/div>/);
+  // Year type: the user's call, set per year from its pencil in a modal.
+  const type = row("Year type");
+  assert.match(type, /<i class="bi bi-graph-down-arrow" aria-hidden="true"><\/i> Bearish<\/span>/);
+  assert.match(type, /data-budget-edit="outlook" data-title="Year type 2026-27" data-values="\{&quot;targetYear&quot;:2026,&quot;outlook&quot;:&quot;&quot;\}"/);
+  const html = renderBudgetAppShell(data);
+  assert.match(html, /data-budget-dialog="outlook" data-noun="Year type" data-submit="Save"[\s\S]*?name="targetYear"[\s\S]*?<option value="">Not set<\/option><option value="bullish">Bullish<\/option><option value="bearish">Bearish<\/option>/);
+  assert.match(html, /kind === "outlook" \? "\/api\/budget\/years\/" \+ payload\.targetYear \+ "\/settings"/);
+  // Saved for the year in the URL; the panels come back for the year on the page.
+  assert.match(source("../src/server.ts"), /return budgetFragmentsReply\(\{ year: parseBudgetYear\(body\.year\) \?\? year \}\);/);
+  assert.match(source("../prisma/schema.prisma"), /model BudgetYear \{[^}]*outlook\s+String\s+@default\(""\)/);
+});
+
+test("budget page: Marketing results set the spend against children enrolled and the Meta results", () => {
+  const data = pageData();
+  assert.doesNotMatch(renderBudgetFragments(data).history, /data-budget-yoy-marketing/); // nothing stored: no table
+  const month = (name: string, roll: number | null, metaSpend: number, metaLandingViews: number, metaLeads: number) => ({ month: name, roll, metaSpend, metaLandingViews, metaLeads });
+  data.outcomes = [month("2025-07", 800, 1000, 2000, 10), month("2026-06", 900, 1000, 3000, 30), month("2026-07", 880, 300, 1500, 5), month("2026-11", null, 100, 500, 0)];
+  const { history } = renderBudgetFragments(data);
+  const table = history.slice(history.indexOf("data-budget-yoy-marketing"));
+  assert.match(table, /<th>Marketing results<\/th><th class="[^"]*">2025-26<\/th><th class="[^"]*">2026-27 to date<\/th>/);
+  const row = (label: string) => table.split("<tr>").find((part) => part.includes(`<strong>${label}</strong>`))!;
+  // Average of the complete months; the unfinished month (no roll yet) is left out.
+  assert.match(row("Children enrolled"), />850<\/span>[\s\S]*>880<\/span><div class="text-muted text-small">\+30 \(\+3\.5%\) · 1 month<\/div>/);
+  assert.match(row("Budget spend per child"), /\$15\.46<\/span>[\s\S]*\$16\.04<\/span><div class="text-muted text-small">\+\$0\.58 \(\+3\.8%\)<\/div>/);
+  // Running totals for the year so far carry no change; the cost of each result does.
+  assert.match(row("Meta ad spend"), /\$2,000\.00<\/span><\/td><td class="[^"]*"><span class="">\$400\.00<\/span><\/td>/);
+  assert.match(row("Meta landing page views"), />5,000<\/span><\/td><td class="[^"]*"><span class="">2,000<\/span><\/td>/);
+  assert.match(row("Cost per landing page view"), /\$0\.40<\/span>[\s\S]*\$0\.20<\/span><div class="text-muted text-small">-\$0\.20 \(-50\.0%\)<\/div>/);
+  assert.match(row("Meta leads"), />40<\/span>[\s\S]*>5<\/span><\/td>/);
+  assert.match(row("Cost per lead"), /\$50\.00<\/span>[\s\S]*\$80\.00<\/span><div class="text-muted text-small">\+\$30\.00 \(\+60\.0%\)<\/div>/);
+  // Read-only: the stored roll and Meta results, nothing fetched or written.
+  const outcomes = source("../src/budget/outcomes.ts");
+  assert.match(outcomes, /FROM "CentreMonthlyRoll"/);
+  assert.match(outcomes, /FROM "MetaInsightSnapshot"/);
+  assert.doesNotMatch(outcomes, /INSERT|UPDATE|DELETE|upsert|create\(/);
+  const server = source("../src/server.ts");
+  assert.match(server, /buildBudgetGrounding\(await readAllBudgetYearData\(\), new Date\(\), await readBudgetOutcomes\(\)\)/);
+  assert.match(server, /renderBudgetPdf\(data\.selected, data\.previous, data\.all, data\.now, data\.outcomes\)/);
+});
+
+test("budget page: Desire Spends (was Future Spends) is the same card design as Purchases, by category", () => {
   const data = pageData();
   const spend = (id: number, project: string, note: string, amount: number, qty: number, status: "planned" | "tbc" | "bought") => ({ id, budgetYearId: 2026, project, supplier: "Music Works", amount, qty, note, status, expenseId: null, createdAt: created });
   data.selected.futureSpends = [spend(1, "Recording", "Mic bundle", 699, 2, "tbc"), spend(2, "Recording", "Stand", 100, 1, "planned"), spend(3, "Recording", "Cable", 20, 1, "planned"), spend(4, "Recording", "Pop filter", 30, 1, "planned"), spend(5, "Recording", "Old mic", 500, 1, "bought"), spend(6, "Signage", "Banner", 250, 1, "planned")];
@@ -189,10 +299,13 @@ test("budget page: Future Spends is the same card design as Purchases, by catego
   assert.match(all, /data-budget-kind="future"[^>]* hidden>/);
   assert.equal(all.match(/<tr>/g)?.length, 5);
   assert.match(all, /data-budget-category-rename="Recording"/);
-  assert.match(all, /data-confirm="Delete Recording and its 4 future spends still to buy in 2026-27\?/);
+  assert.match(all, /data-confirm="Delete Recording and its 4 desire spends still to buy in 2026-27\?/);
   assert.match(all, /\$699\.00 × 2/);
   assert.doesNotMatch(all.split("<tr>").find((row) => row.includes("Old mic"))!, /data-budget-edit|data-budget-delete|data-budget-bought/);
   const html = renderBudgetAppShell(data);
+  assert.match(html, /<h2 class="panel__title[^"]*">Desire Spends<\/h2>|>Desire Spends</);
+  assert.doesNotMatch(html, /Future Spend|future spend/);
+  assert.match(html, /data-budget-dialog="future" data-noun="desire spend"/);
   assert.match(html, /data-budget-new-category="future"/);
   assert.match(html, /data-budget-fragment="futureCategories"/);
   assert.match(html, /<select class="form-control" name="project" required data-budget-categories><\/select>/);

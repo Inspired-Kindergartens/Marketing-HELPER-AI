@@ -51,8 +51,10 @@ const money = (value: number | null | undefined) => (value == null ? "-" : value
 function asYearData(year: HistoryFile["years"][number]): BudgetYearData {
   const created = "2026-11-12T00:00:00.000Z";
   return {
-    year: { id: year.startYear, startYear: year.startYear, label: financialYearLabel(year.startYear), operatingBudget: year.operatingBudget, thresholdPercent: 2, notes: year.notes, report: "", updatedAt: created },
+    year: { id: year.startYear, startYear: year.startYear, label: financialYearLabel(year.startYear), operatingBudget: year.operatingBudget, thresholdPercent: 2, notes: year.notes, report: "", outlook: "", updatedAt: created },
     additionalBudgets: [],
+    // The workbooks carried every purchase forward.
+    projectedCategories: [...new Set(year.expenses.map((expense) => expense.group.trim() || expense.supplier.trim() || "Other"))],
     subscriptions: year.subscriptions.map((sub, index): BudgetSubscriptionYearView => ({
       id: index, subscriptionId: index, budgetYearId: year.startYear, startYear: year.startYear, name: names.get(sub.key) ?? sub.key, category: "",
       amount: sub.amount, frequency: resolveBudgetFrequency(sub.frequency), status: resolveBudgetSubscriptionStatus(sub.status), tally: sub.tally, note: sub.note, startedOn: null, endedOn: null, createdAt: created,

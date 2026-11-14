@@ -313,6 +313,7 @@ import {
 } from "./storage/help-kb-store.js";
 import { renderSectorAppShell } from "./ui/sector-app-shell.js";
 import { syncBudgetMetaSpend } from "./budget/meta-sync.js";
+import { readBudgetOutcomeMonths } from "./budget/outcomes.js";
 import { buildBudgetGrounding, buildBudgetReport, budgetReminderMonth, financialYearOf, isBudgetPrompt, monthName, nzMonthOf } from "./analytics/budget.js";
 import { nzDateTime } from "./ui/report-pdf.js";
 import { renderBudgetAppShell, renderBudgetFragments, type BudgetPageData } from "./ui/budget-app-shell.js";
@@ -342,6 +343,7 @@ import {
   renameBudgetExpenseCategory,
   renameBudgetFutureCategory,
   setBudgetAdditional,
+  setBudgetCategoryProjected,
   updateBudgetExpense,
   updateBudgetFutureSpend,
   updateBudgetSubscription,
@@ -3152,6 +3154,17 @@ function parseBudgetYear(value: unknown): number | null {
   return Number.isInteger(year) && year >= 2000 && year <= 2100 ? year : null;
 }
 
+// The roll and Meta results Year Over Year sets the spend against. Fails
+// soft: the Budget page works without them.
+async function readBudgetOutcomes() {
+  try {
+    return await readBudgetOutcomeMonths();
+  } catch (error) {
+    app.log.warn({ error }, "Budget marketing results unavailable");
+    return [];
+  }
+}
+
 async function readBudgetPageData(startYear: number): Promise<BudgetPageData> {
   const now = new Date();
   // The current financial year always exists, so the page opens on it.
@@ -3165,9 +3178,9 @@ async function readBudgetPageData(startYear: number): Promise<BudgetPageData> {
   }
   await ensureBudgetYear(currentYear);
   const selected = await readBudgetYearData(startYear);
-  const [years, all, subscriptionNames] = await Promise.all([readBudgetYears(), readAllBudgetYearData(), readBudgetSubscriptionNames()]);
+  const [years, all, subscriptionNames, outcomes] = await Promise.all([readBudgetYears(), readAllBudgetYearData(), readBudgetSubscriptionNames(), readBudgetOutcomes()]);
   const previous = all.find((data) => data.year.startYear === startYear - 1) ?? null;
-  return { years, selected, previous, all, subscriptionNames, now };
+  return { years, selected, previous, all, subscriptionNames, outcomes, now };
 }
 
 async function budgetFragmentsReply(body: { year?: unknown } | undefined) {
@@ -3186,7 +3199,7 @@ app.get<{ Querystring: { year?: string } }>("/fragments/budget", async (request)
 app.get<{ Querystring: { year?: string } }>("/api/budget/pdf", async (request, reply) => {
   const year = parseBudgetYear(request.query?.year) ?? financialYearOf(new Date());
   const data = await readBudgetPageData(year);
-  const buffer = await renderBudgetPdf(data.selected, data.previous, data.all, data.now);
+  const buffer = await renderBudgetPdf(data.selected, data.previous, data.all, data.now, data.outcomes);
   return reply.type("application/pdf").header("Content-Disposition", attachmentDownloadHeader(budgetPdfFilename(year))).send(buffer);
 });
 
@@ -3198,8 +3211,10 @@ app.post<{ Params: { year: string }; Body: Record<string, unknown> }>("/api/budg
   }
   const body = request.body ?? {};
   // The threshold is worked out (budgetThresholdPercent), never set from here.
-  await updateBudgetYearSettings(year, { operatingBudget: body.operatingBudget, report: body.report });
-  return budgetFragmentsReply({ year });
+  await updateBudgetYearSettings(year, { operatingBudget: body.operatingBudget, report: body.report, outlook: body.outlook });
+  // The year type can be set for another year than the one on the page
+  // (Year Over Year lists three), so the panels come back for the page's year.
+  return budgetFragmentsReply({ year: parseBudgetYear(body.year) ?? year });
 });
 
 // The year's report for the Generate report window: the saved one, or one
@@ -3316,6 +3331,17 @@ app.post<{ Body: Record<string, unknown> }>("/api/budget/categories/rename", asy
   return budgetFragmentsReply(body);
 });
 
+// In predictions (opt-in): only a ticked category's purchases carry on at the
+// same monthly rate in the predicted spend.
+app.post<{ Body: Record<string, unknown> }>("/api/budget/categories/predict", async (request, reply) => {
+  const body = request.body ?? {};
+  if (!(await setBudgetCategoryProjected(body.category, body.on === true))) {
+    reply.code(400);
+    return { ok: false, error: "That category could not be changed." };
+  }
+  return budgetFragmentsReply(body);
+});
+
 app.post<{ Body: Record<string, unknown> }>("/api/budget/categories/delete", async (request, reply) => {
   const body = request.body ?? {};
   const year = parseBudgetYear(body.year) ?? financialYearOf(new Date());
@@ -3362,7 +3388,7 @@ app.post<{ Params: { id: string }; Body: Record<string, unknown> }>("/api/budget
   const id = parsePositiveInt(request.params.id);
   if (id == null || !(await updateBudgetFutureSpend(id, request.body ?? {}))) {
     reply.code(400);
-    return { ok: false, error: "That future spend could not be saved." };
+    return { ok: false, error: "That desire spend could not be saved." };
   }
   return budgetFragmentsReply(request.body);
 });
@@ -3371,7 +3397,7 @@ app.post<{ Params: { id: string }; Body: Record<string, unknown> }>("/api/budget
   const id = parsePositiveInt(request.params.id);
   if (id == null || !(await deleteBudgetFutureSpend(id))) {
     reply.code(400);
-    return { ok: false, error: "That future spend could not be deleted." };
+    return { ok: false, error: "That desire spend could not be deleted." };
   }
   return budgetFragmentsReply(request.body);
 });
@@ -3380,7 +3406,7 @@ app.post<{ Params: { id: string }; Body: Record<string, unknown> }>("/api/budget
   const id = parsePositiveInt(request.params.id);
   if (id == null || !(await markBudgetFutureSpendBought(id, { spentOn: request.body?.spentOn }))) {
     reply.code(400);
-    return { ok: false, error: "That future spend is already bought or no longer exists." };
+    return { ok: false, error: "That desire spend is already bought or no longer exists." };
   }
   return budgetFragmentsReply(request.body);
 });
@@ -3566,7 +3592,7 @@ async function findEnrolmentQualityGrounding(prompt: string, selectedCentreKey: 
 async function findBudgetGrounding(prompt: string): Promise<string | null> {
   if (!isBudgetPrompt(prompt)) return null;
   try {
-    return buildBudgetGrounding(await readAllBudgetYearData(), new Date()) || null;
+    return buildBudgetGrounding(await readAllBudgetYearData(), new Date(), await readBudgetOutcomes()) || null;
   } catch (error) {
     app.log.warn({ error }, "Budget grounding unavailable");
     return null;

@@ -3,17 +3,19 @@
 import {
   buildBudgetReport,
   buildSubscriptionRows,
+  buildYearComparison,
   buildYearOverYear,
   computeBudgetTotals,
   expenseGroup,
   futureSpendTotal,
   groupPurchases,
   percentChange,
+  type BudgetOutcomeMonth,
   type BudgetYearData,
 } from "../analytics/budget.js";
 import { financialYearLabel } from "../storage/budget-store.js";
 import { dataTable, noteText, renderReportPdf, sectionTitle, type PdfContent } from "./report-pdf.js";
-import { formatMoney, formatPercent, statusLabel } from "./budget-app-shell.js";
+import { formatMoney, formatPercent, statusLabel, yearComparisonRows, yearMarketingRows, type ComparisonRow } from "./budget-app-shell.js";
 
 export function budgetPdfFilename(startYear: number): string {
   return `Marketing Budget ${financialYearLabel(startYear)}.pdf`;
@@ -45,7 +47,7 @@ export function reportContent(text: string): PdfContent[] {
   return content;
 }
 
-export async function renderBudgetPdf(selected: BudgetYearData, previous: BudgetYearData | null, all: BudgetYearData[], now = new Date()): Promise<Buffer> {
+export async function renderBudgetPdf(selected: BudgetYearData, previous: BudgetYearData | null, all: BudgetYearData[], now = new Date(), outcomes: readonly BudgetOutcomeMonth[] = []): Promise<Buffer> {
   const totals = computeBudgetTotals(selected, now);
   const label = selected.year.label;
   const content: PdfContent[] = [];
@@ -62,18 +64,24 @@ export async function renderBudgetPdf(selected: BudgetYearData, previous: Budget
         ["Actual spend", `${formatMoney(totals.actualSpend)}${totals.spentPercent == null ? "" : `  (${totals.spentPercent.toFixed(1)}%)`}`],
         ["Remaining", `${formatMoney(totals.remaining)}${totals.remainingPercent == null ? "" : `  (${totals.remainingPercent.toFixed(1)}%)`}`],
         ["Predicted purchases", formatMoney(totals.predictedPurchases)],
-        ["Future spends", formatMoney(totals.futureSpends)],
         ["Predicted spend", formatMoney(totals.predictedSpend)],
         [
           totals.predictedDifference != null && totals.predictedDifference < 0 ? "Predicted deficit" : "Predicted surplus",
           `${formatMoney(totals.predictedDifference == null ? null : Math.abs(totals.predictedDifference))}  ${[formatPercent(totals.predictedPercent), statusLabel(totals.status)].filter(Boolean).join(" · ")}`,
         ],
+        ["Desire spends (not in predicted spend)", formatMoney(totals.futureSpends)],
+        ...(totals.desireLikelihood == null ? [] : [["Desire Spend likelihood", `${totals.desireLikelihood.toFixed(0)}%`]]),
         ["Ended subscriptions (not in totals)", formatMoney(totals.endedSubscriptions)],
       ],
       ["*", 160],
     ),
   );
-  content.push(noteText(`Predictions use ${totals.monthsElapsed} of 12 months. Subscriptions exclude GST (÷ 1.15); purchases and future spends are as entered.`));
+  const carriedOn = selected.projectedCategories.filter((category) => selected.expenses.some((expense) => expenseGroup(expense) === category));
+  content.push(
+    noteText(
+      `Predictions use ${totals.monthsElapsed} of 12 months. Purchases carried on at the same monthly rate: ${carriedOn.join(", ") || "none"}; the rest count what was spent. Subscriptions exclude GST (÷ 1.15); purchases and desire spends are as entered.`,
+    ),
+  );
   // The report as the user saved it; if none was generated before printing, it is written now.
   content.push(sectionTitle("Report", { marginTop: 14 }));
   content.push(...reportContent(selected.year.report.trim() || buildBudgetReport(selected, previous, now)));
@@ -110,7 +118,7 @@ export async function renderBudgetPdf(selected: BudgetYearData, previous: Budget
 
   const future = selected.futureSpends.filter((spend) => spend.status !== "bought");
   if (future.length) {
-    content.push(sectionTitle("Future spends", { marginTop: 14 }));
+    content.push(sectionTitle("Desire spends", { marginTop: 14 }));
     content.push(
       dataTable(
         ["Project", "Supplier", "Note", "Qty", "Total"],
@@ -126,21 +134,23 @@ export async function renderBudgetPdf(selected: BudgetYearData, previous: Budget
     const labels = yoy.years.map(financialYearLabel);
     const withChange = (values: Array<number | null | undefined>) =>
       values.map((value, index) => (value == null ? "" : `${formatMoney(value)}${index > 0 && percentChange(values[index - 1], value) != null ? `\n${formatPercent(percentChange(values[index - 1], value))}` : ""}`));
-    content.push(sectionTitle("Year over year", { pageBreak: true }));
-    content.push(
+    // The same comparison as the page's Year Over Year panel: the two latest
+    // finished years and the current year's predicted figures.
+    const comparison = buildYearComparison(all, now, outcomes);
+    const columns = [...comparison.completed, ...(comparison.tracking ? [comparison.tracking] : [])];
+    const comparisonTable = (first: string, trackingSuffix: string, rows: ComparisonRow[]) =>
       dataTable(
-        ["", ...labels],
-        [
-          ["Budget", ...withChange(yoy.totals.map((t) => t.operatingBudget))],
-          ["Subscriptions (excl. GST)", ...withChange(yoy.totals.map((t) => t.subscriptions))],
-          ["Purchases", ...withChange(yoy.totals.map((t) => t.purchases))],
-          ["Actual spend", ...withChange(yoy.totals.map((t) => t.actualSpend))],
-          ["Remaining", ...withChange(yoy.totals.map((t) => t.remaining))],
-          ["Ended subscriptions", ...withChange(yoy.totals.map((t) => t.endedSubscriptions))],
-        ],
-        ["*", ...labels.map(() => 80)],
-      ),
-    );
+        [first, ...columns.map((column) => `${column.label}${column === comparison.tracking ? trackingSuffix : ""}`)],
+        rows.map((row) => [row.label, ...row.cells.map((cell) => (cell.note ? `${cell.value}\n${cell.note}` : cell.value))]),
+        ["*", ...columns.map(() => 110)],
+      );
+    content.push(sectionTitle("Year over year", { pageBreak: true }));
+    content.push(comparisonTable("", " predicted", yearComparisonRows(comparison)));
+    const marketing = yearMarketingRows(comparison);
+    if (marketing.length) {
+      content.push(sectionTitle("Marketing results", { marginTop: 14 }));
+      content.push(comparisonTable("", " to date", marketing));
+    }
     content.push(sectionTitle("Subscriptions by year (yearly cost)", { marginTop: 14 }));
     content.push(dataTable(["Subscription", ...labels], yoy.subscriptions.map((entry) => [entry.name, ...withChange(yoy.years.map((year) => entry.costs[year]))]), ["*", ...labels.map(() => 80)]));
     if (yoy.groups.length > 0) {
