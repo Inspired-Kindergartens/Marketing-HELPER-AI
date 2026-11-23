@@ -24,3 +24,6 @@ OAuth.json
 google-oauth-token.json
 .scratch/
 backups
+# The original info sheet PDFs hold photos of real children and staff: never
+# in git. They travel in the backup (src/backup.ts).
+/docs/One Pager/

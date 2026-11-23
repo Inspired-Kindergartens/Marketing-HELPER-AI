@@ -374,6 +374,13 @@ import {
   planSectorAnswer,
 } from "./ai/sector-context.js";
 import { THEME_HEAD_SCRIPT } from "./ui/theme.js";
+import { registerImageAiRoutes } from "./image-ai/routes.js";
+import { createSlotImageGenerator, createSlotImageRegenerator } from "./image-ai/photo-slot.js";
+import { aiImageStore } from "./storage/ai-image-store.js";
+import { registerOnePagerRoutes } from "./one-pager/routes.js";
+import { onePagerStore } from "./storage/one-pager-store.js";
+import { checkStaffPhotos } from "./one-pager/staff-photo.js";
+import { readOpenStaffPhotoTasks, staffPhotoStore } from "./storage/staff-photo-store.js";
 
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
@@ -404,6 +411,10 @@ const envSchema = z.object({
   AI_TIMEOUT_MS: z.coerce.number().int().min(1000).max(300000).default(60000),
   // Small embedding model for the AI chats' help knowledge retrieval.
   AI_EMBED_MODEL: z.string().trim().default("nomic-embed-text"),
+  // AI images (OpenAI): a blank model falls back to the default in image-ai/config.ts.
+  OPENAI_API_KEY: z.string().trim().default(""),
+  AI_IMAGE_MODEL: z.string().trim().default(""),
+  AI_TRANSCRIBE_MODEL: z.string().trim().default(""),
   POSTMARK_WEBHOOK_BASIC_AUTH: z.string().trim().default(""),
   POSTMARK_SERVER_TOKEN: z.string().trim().default(""),
   CLOUDFLARE_SYNC_URL: z
@@ -442,6 +453,92 @@ await app.register(multipart, {
     fileSize: TASK_ATTACHMENT_MAX_BYTES,
   },
 });
+
+registerImageAiRoutes(app, { env, store: aiImageStore });
+
+// Info Sheets. The About us draft runs on the app's one chat model, called
+// the way the Job Description intro is: thinking off, a longer wait.
+const ONE_PAGER_AI_TIMEOUT_MS = 120000;
+registerOnePagerRoutes(app, {
+  store: onePagerStore,
+  warmAi: () => void ensureAiRunning(aiConfig, app.log),
+  runChat: async (messages) => {
+    if (!(await ensureAiRunning(aiConfig, app.log))) {
+      throw new AiClientError("The local AI server isn't running and couldn't be started.", 503);
+    }
+    return runLocalChat({ ...aiConfig, AI_TIMEOUT_MS: ONE_PAGER_AI_TIMEOUT_MS }, messages, { think: false });
+  },
+  // AI generated pictures for a photo slot come from the image feature, the
+  // only code that talks to OpenAI; the info sheet code is just handed this.
+  generateImage: createSlotImageGenerator(env),
+  regenerateImage: createSlotImageRegenerator(env),
+  staffPhoto: { check: () => checkStaffPhotos(staffPhotoStore), openTasks: readOpenStaffPhotoTasks },
+  // Greeting names come from the same contact list as the Marketing page's emails.
+  contactNames: async (centre) => {
+    const contact = matchCentreContact(centre.name, await readCentreContactList());
+    return contact ? [contact.headTeacher, contact.administrator] : [];
+  },
+  // The list's people columns, from the same contact list. The senior leader
+  // is its Key Senior Teacher column.
+  people: async (centres) => {
+    const contacts = await readCentreContactList();
+    return Object.fromEntries(
+      centres.flatMap((centre) => {
+        const contact = matchCentreContact(centre.name, contacts);
+        return contact
+          ? [[centre.centreKey, { seniorLeader: contact.keySeniorTeacher, headTeacher: contact.headTeacher, administrator: contact.administrator }]]
+          : [];
+      }),
+    );
+  },
+  // The Notes panel shows the kindergarten's notes from the Meta notes
+  // storage (every note on it, whatever page it was written on). A note added
+  // here, or an email that was sent, is kept there too, as advert reviews
+  // are: a notification row under a fixed id carries the centre, so it shows
+  // wherever that kindergarten's notes show.
+  notes: {
+    list: async (centre) => {
+      const history = await readMetaNotificationHistoryPage({ centreKey: centre.centreKey, kind: "Note", pageSize: 100 });
+      return history.rows.map((row) => ({ heading: row.heading, text: row.message, at: row.occurredAt }));
+    },
+    add: async (centre, text) => {
+      const notificationId = `info-sheet-${centre.centreKey}`;
+      await upsertMetaRecommendationNotification({
+        notificationId,
+        centreKey: centre.centreKey,
+        centreName: centre.name,
+        windowKey: "info-sheet",
+        recommendation: "Info sheet",
+        message: `${centre.name}: info sheet notes and emails.`,
+        priority: 0,
+        openPlaces: 0,
+        actionableWaitlist: 0,
+        waitlistCount: 0,
+        replacementPressure: 0,
+        activeCampaignCount: 0,
+        spend30d: 0,
+      });
+      await createMetaRecommendationNote({ notificationId, text });
+    },
+  },
+});
+
+// Team photo upkeep also runs daily without the page being opened, so the
+// task reaches the Tasks page and the landing reminders by itself. It reads
+// stored data only (the Infocare staff lists the monthly roll check stores).
+const STAFF_PHOTO_STARTUP_DELAY_MS = 90_000;
+const STAFF_PHOTO_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
+if (env.NODE_ENV !== "test") {
+  const run = () => {
+    void checkStaffPhotos(staffPhotoStore)
+      .then((result) => {
+        if (result.created.length) app.log.info({ tasks: result.created }, "Info sheets: team photo tasks raised");
+      })
+      .catch((error) => app.log.warn({ error }, "Info sheets: team photo check failed"));
+  };
+  setTimeout(run, STAFF_PHOTO_STARTUP_DELAY_MS).unref();
+  setInterval(run, STAFF_PHOTO_CHECK_INTERVAL_MS).unref();
+}
 
 const VALID_PANEL_IDS = new Set(["analytics", "enrolment-quality", "waitlist", "meta-ads", "google-analytics", "notes", "chat"]);
 const META_ADS_AUTO_REFRESH_MAX_AGE_MS = 24 * 60 * 60 * 1000;

@@ -12,8 +12,8 @@ It runs on this computer only. Open it from the desktop shortcut, or go to [the 
 
 The [landing page](/) is your starting point.
 
-- **Big buttons** open the main areas: [Marketing](/app), [Tasks](/tasks), [General Chat](/chat), [Communications](/comms), [Job Descriptions](/jd) and [Budget](/budget).
-- **Small buttons** underneath open the tools: this Read Me, Upscalar, SharePoint, the website admin, [Code Snippets](/snippets), [Links](/subscriptions), [Sector Insight](/sector) and [Things To Know](/wiki).
+- **Big buttons** open the main areas: [Marketing](/app), [Tasks](/tasks), [Info Sheets](/one-pager), [Communications](/comms), [Job Descriptions](/jd) and [Budget](/budget).
+- **Small buttons** underneath open the tools: this Read Me, Upscalar, SharePoint, the website admin, [Code Snippets](/snippets), [Links](/subscriptions), [Sector Insight](/sector), [General Chat](/chat) and [Things To Know](/wiki).
 - **Reminders** show tasks that are overdue or due soon. Click one to open the task. If nothing is due, this section is hidden. In the last three days of a month, if nobody has added an expense to the Budget that month, a reminder says so: **Add expense** opens the Purchases list, and **Dismiss** hides it for that month. If you don't do either, it stays into the next month until an expense for that month is added. A recommended AI model update also appears here and stays until you choose **Update AI model** or **Dismiss**. If you dismiss it, you can still update later from the button at the bottom of the page.
 - **Email alert banner.** An amber or red banner appears if our email tracking has gone quiet. Amber (3+ days with no email activity) is worth a look. Red (7+ days) means something is probably broken: click it to go to Webmail, and see *Email alerts* below.
 - **News and weather** scroll along the bottom: severe weather warnings for our area and early-childhood news. The app checks for new items every 15 minutes on its own, so refreshing the page won't fetch news any sooner. The "Updated" time shows the last successful check. If that time is more than about 30 minutes old, something is wrong: tell whoever looks after the app. To make sure a topic is always picked up (for example our organisation's name or a centre), add it as a **search text** under the feed. To go back to a story that has scrolled past, click and drag the feed left or right; it carries on scrolling from where you let go. Hovering over the feed pauses it. Each story shows its headline first, then the publisher and time (long publisher names are cut short with …). Stories matching a search text go to the top. Local stories from the Bay of Plenty Times, SunLive, RNZ, Stuff and 1News are included, even when the headline doesn't mention early childhood but the article does.
@@ -23,10 +23,10 @@ The [landing page](/) is your starting point.
   - **Update AI model** appears when a new AI model is recommended for Beep Beep. It tells you what it's installing and how big it is, downloads the model, and checks it works before switching. If the check fails, your current model stays and the button shows why. The model you were using is kept as a backup, and any older backup is deleted automatically to free up space.
   - **Rollback AI model** switches Beep Beep back to the backup model if the new one isn't working well. The app then stops recommending the model you rolled back from.
   - **[Infocare Login](/settings/infocare)** changes the username and password the app uses to read from Infocare. See *Changing the Infocare login* below.
-  - **[Back up data](/backup)** saves one file on this computer holding everything the app knows: the whole database, uploaded task attachments, the contact list, and the passwords and keys the app uses to connect to Infocare, Google, Meta and Postmark. You choose a passphrase that locks the file. For safety it is not downloaded through the browser; the page tells you where it was saved. See *Moving the app to another computer* below.
+  - **[Back up data](/backup)** saves one file on this computer holding everything the app knows: the whole database, every photo and file the app holds (task attachments, info sheet photos, AI pictures and the original info sheet PDFs), the contact list, and the passwords and keys the app uses to connect to Infocare, Google, Meta and Postmark. You choose a passphrase that locks the file. For safety it is not downloaded through the browser; the page tells you where it was saved. See *Moving the app to another computer* below.
   - **Look** chooses how the app looks: Default, Light or Dark. See *Appearance* below.
 
-On any page, the **icons down the right-hand edge** take you back to the landing page or straight to another area.
+On any page, the **icons down the right-hand edge** take you back to the landing page or straight to another area. They run in the same order as the buttons on the landing page: the big buttons first, left to right and top to bottom, then the small ones.
 
 ---
 
@@ -264,6 +264,58 @@ The marketing budget, one financial year at a time (1 July to 30 June). It repla
 
 ---
 
+## Info Sheets — [open](/one-pager)
+
+The one-page PDF flyer for each kindergarten, all made from one shared design (the 2023 info sheet: logo, teal name band, three photos, "Making the early years count", About us and the team photo on the left, contact details and questions on the right).
+
+- **Kindergartens** lists every open kindergarten with its senior leader, its head teacher and administrator (head teacher on the first line, administrator under), how many of its four photos are in, and when it was last edited. The names come from the same contact list the Marketing page's emails use (the senior leader is its **Key Senior Teacher** column); a kindergarten that isn't on that list shows no names. Each kindergarten is a button: press it to work on that kindergarten. The one you have open is marked with an arrow. Each one starts with the words and photos from its existing info sheet. OPEYS has no team photo yet: the one on its old sheet was a stand-in. Otamarakau's old sheet had a photo of a child where the team photo goes; it is still there, and a task in [Tasks](/tasks) asks for a real team photo.
+- **One design for everyone.** Every sheet uses the same template, in the newer style: the logo that has *Ngā Kōhungahunga Manawanui* under it, and the heavier lettering for the kindergarten's name, the tagline and the headings. The only exception is Tai o Fenua, which has its own logo beside ours at the top and its hibiscus in the teal half-circle at the foot of the page; everything else on its page is the template. The blue cloud that said *Extended hours available!* on the old Avenues sheet is no longer part of the design.
+- **The preview** on the right is the real PDF. It updates each time you save or change a photo. The **print icon** above it downloads the PDF, for example *Avenues Kindergarten Info Sheet v3 Nov 2026*.
+- **Text** holds the kindergarten's own words. Press **Save** to keep your changes and update the preview.
+  - **Service type** says how the service runs: **Kindergarten (donations)** or **All Day (fees)**. It decides which shared wording the service uses for cost and enrolment. Maunganui and OPEYS are All Day.
+  - **About us**: a blank line starts a new paragraph. Start lines with `-` to make a bullet list.
+  - **Draft with AI** rewrites whatever is in the About us box as a finished About us. Paste the kindergarten's website text or type rough notes, then press it. Beep Beep only uses what you gave it and never adds facts of its own. Read the draft, change what you like, then **Save**. Nothing is saved until you do.
+  - **Fill from what we know** puts the address, phone and email from the Ministry of Education directory (the same record [Sector Insight](/sector) uses) into the boxes. Check them, then **Save**.
+  - **Hours** are always the service's own, because every service's hours differ; there is no shared wording for them. The session times were worked out from each kindergarten's bookings in Infocare (November 2026), with notes such as holiday programmes kept from its old sheet. Infocare is only read, never changed. The two All Day services and Karamuramu keep the hours from their sheets, because their bookings don't show set sessions. You can still edit any of them here. A section left empty is left off the page.
+  - **Contact us** is the address, phone and email boxes. The website line under them is the same for everyone and is changed under **Shared Text**.
+  - **Save** stays at the bottom of the panel as you scroll, and saves every box in it.
+  - **How much does it cost?**, **Are the teachers trained?** and **How do I enrol my child?** use the shared wording for the service's type unless you type something here. The shared wording shows in grey in the empty box. **Use shared text** empties the box so the service goes back to the shared wording. Many kindergartens have their own donation wording from their existing sheet.
+- **Photos** has four slots: three across the top of the page and the team photo. **Upload** (or **Replace**) lets you choose a JPG or PNG, then crop it, and **Use photo**. You can also drag a photo file from a folder or your desktop and drop it on a slot's card: the card gets an outline while the file is over it, and dropping it opens the same crop step. **Remove** empties the slot.
+  - **Cropping.** The crop step shows the whole photo with a green box on it. What is inside the box is kept; the rest is dimmed and cut away. Drag a corner of the box to make it smaller or larger, and drag inside the box to move it. For the three top photos the box keeps the shape of the slot, so what you see in the box is what is on the page. For the team photo the box can be any shape, because the page shows the whole team photo whatever its shape.
+  - **A tight crop is upscaled with AI.** If the part you kept has too few pixels to print sharply where it goes on the page (under 300 to the inch), the app offers to have the AI draw the same picture again at full size, with nothing in it changed. Because that sends the photo to OpenAI, it first asks **"Does this image contain real children?"** Answer **Yes** and nothing is sent; answer **No** and it is sent; **Cancel** keeps the cropped photo as it is. The photo dims under a turning icon until the larger picture arrives (a few minutes). The larger picture gets the **AI generated** tick, and **Revert** puts your cropped photo back. The team photo is never upscaled: it is of real staff. This needs the OpenAI key, like the other AI pictures.
+  - **Revert** puts back the photo that was in the slot before the last change (an upload, **Generate with AI** or **Regenerate with AI**). The button only shows once a photo has been replaced. The two photos swap places, so pressing **Revert** again brings the newer one back. One earlier photo is kept per slot, and **Remove** clears it too.
+  - **Download** saves the photo in the slot to your computer, named after the kindergarten and the slot, for example *Avenues Kindergarten Photo 1.jpg*.
+  - **The words under the team photo:** open **Photos**, type them in **Caption under the photo** on the Team photo card (one line per row of people works well), and press **Save caption**. They only show on the page when there is a team photo. The three photos across the top have no words under them in this design.
+  - **Team photo due.** When a kindergarten's teaching team changes, the app adds a task called *Update the team photo: (kindergarten)* to [Tasks](/tasks), due in two weeks, saying what changed. The kindergarten shows **Team photo due** in the list here, and its Team photo card gets a **Team photo due: open task** button. It counts as a change when:
+    - a teacher or head teacher starts or leaves, by the dates in Infocare's staff list (relievers and non-teaching staff don't count); or
+    - a full-time teacher job was advertised in [Job Descriptions](/jd) and its closing date was a month ago.
+
+    Only changes after the current team photo went on the sheet count, and one open task per kindergarten is enough: more changes don't add another. When the new photo is on, tick the task off. The staff list is the one the app already reads from Infocare each month; Infocare is never changed.
+  - **The photos from the old sheets** were checked once, on 17 November 2026: the names under each team photo against today's staff in Infocare. Where they differ, or there is no team photo, a task was added to [Tasks](/tasks) listing the names. A shortened name (Mike for Michael) can show as a difference when the person is the same. Six sheets have a photo but no names under it, so they could not be checked.
+  - **Generate with AI** makes a picture from a description you type and puts it in the slot. Only your description is sent to OpenAI. AI pictures (generated or regenerated) are made at the largest size the image model offers, 3456 by 2400 pixels, so they print sharply. A picture that size can take a few minutes to arrive.
+  - **Regenerate with AI** makes a new picture from the one in the slot, for example a photo of the empty playground with children added. The usual way: upload a real photo of the kindergarten with **no children in it**, then press **Regenerate with AI**.
+    - It first asks **"Does this image contain real children?"** Answer **Yes** and it stops; nothing is sent. Answer **No** and it carries on. A photo with the **AI generated** tick is not asked.
+    - Then type what you would like to see. If you leave the box empty, it uses the choice under **If left empty**. The default is **the same number of children, doing the same things**: three children in the old picture give three new children, each in the place and pose of the one they replace. If the old picture has no children, it adds two or three playing together. The other choices are two or three children playing together, one child, a busy group, or children with a teacher.
+    - The children in the old picture are never kept: every child in the new picture is a new one. If what you type doesn't say how many children, it keeps the number in the old picture. If it doesn't say what they are doing, they keep the poses from the old picture.
+    - The new children are a mix of New Zealand children in ordinary modern clothes, and the place itself is kept as it is in your photo.
+    - The new picture replaces the photo in the slot and gets the **AI generated** tick. You can press **Regenerate with AI** on it again to try another version, and it won't ask the question this time.
+    - When you press **Regenerate with AI** the box closes straight away. The old photo dims under a turning icon until the new picture arrives, and that photo's buttons are off until then. You can press **Regenerate with AI** on the other photos in the meantime, so several can be made at once. Stay on the kindergarten's page until they arrive.
+    - The team photo has no Regenerate with AI button: it is of real staff.
+  - **AI generated** is a tick on each photo. The app turns it on by itself for a picture it generated or regenerated, and leaves it off for anything uploaded or dropped in. You can tick or untick it yourself, for example to tick a picture you made with AI somewhere else and then uploaded. A ticked photo is not asked "Does this image contain real children?" when you press **Regenerate with AI**, so only tick a picture that really is AI generated. Uploading a photo over a ticked one turns it off again.
+  - **A picture with real children in it is never sent to OpenAI.** The question above is the check, so answer it carefully. Only a picture with the AI generated tick skips it, because the children in it aren't real.
+- **Email kindergarten** (the envelope above the preview) writes to the kindergarten's email address, the one under **Text**, Contact us. It works like the **Email** button on the [Marketing](/app) page:
+  1. Choose the email: **Approve changes** (asks them to check the info sheet and reply "approved"), **Staff photo** (asks for a current team photo with no children in it, and the names row by row), or **New** (an empty email).
+  2. Change the subject and words if you like, then **Continue**. Both ready-made emails ask for a reply within three working days and greet the head teacher and administrator by first name.
+  3. Your mail app opens with the email written. For **Approve changes** the PDF is downloaded at the same time: attach it to the email yourself, as a mail link can't carry a file.
+  4. Back here it asks **Did you send the email?** Answer **Yes** and the email is kept as a note on that kindergarten, with its other notes on the [Marketing](/app) page. It appears under **Notes** straight away. A **Staff photo** email is kept as the short note "Email sent for staff photo update"; the other emails keep their subject and words.
+- **Badges on the team photo**: the preview shows up to two badges in the top left corner of the team photo, each a black box with a green border and green words, like the app's own buttons. **Staff photo needed** shows while the task to get a new team photo is open. **Email sent** shows once you have sent the **Staff photo** email and answered **Yes**, and goes away when a new team photo is put in. They are only in the preview: the PDF you download or attach never has them.
+- **Notes** lists every note kept on the kindergarten, newest first, each with its date and what it is about (for example *Info sheet*, or an advert review). These are the same notes as on the [Marketing](/app) page, so a note written there shows here and a note written here shows there. Type in **Add note** and press **Save note** to add one. Notes are never printed on the info sheet.
+- **It always fits on one page.** When About us is long, the team photo is made smaller first, then the text a little smaller. If it still doesn't fit, an amber note above the preview says which column is too long and by how many lines.
+- **Downloading**: the print button above the preview downloads the PDF as it is now, named with the kindergarten and the month, for example "Avenues Kindergarten Info Sheet Nov 2026.pdf". Saved versions were removed on 18 November 2026.
+- **Shared Text** is the wording every service uses: the tagline, the website address, and the shared questions. Cost and enrolment each have two versions, one for kindergartens and one marked **(All Day)**. Changing it changes every service of that type that hasn't typed its own.
+
+---
+
 ## Code Snippets — [open](/snippets)
 
 Pieces of code we reuse: tracking tags, embed codes, email HTML.
@@ -310,6 +362,18 @@ Every other early childhood service around our kindergartens (childcare centres,
 
 ---
 
+## AI images
+
+The app can make a picture from a description, which you either type or say into the microphone. The first place that uses it is **Generate with AI** on the [Info Sheets](/one-pager) photos, from a typed description.
+
+- **It uses OpenAI, not Beep Beep.** Beep Beep can't draw or listen, so the description, and the recording if you speak, are sent to OpenAI over the internet. Nothing else in the app leaves this computer for an AI service.
+- **Pictures of real children never go to OpenAI.** A photo is only sent when you press **Regenerate with AI** on an info sheet photo (or a tightly cropped one is offered an AI upscale) and you answer **No** to "Does this image contain real children?", or when the picture is marked **AI generated** (the app ticks this for a picture it generated, and you can tick it yourself).
+- **It needs an OpenAI key.** Until the key is added to the app's settings file and the app is restarted, AI images stay switched off and everything else works as normal. OpenAI charges the account for each picture and each recording.
+- **Speaking:** the first time, the browser asks for permission to use the microphone. The recording is turned into words and is not kept.
+- **Pictures are kept** in the app's own folder with the description that made them, and are included in backups.
+
+---
+
 ## Upload Contacts — [open](/contacts/upload)
 
 Upload the latest centre contact list (the Excel workbook). The **Email** buttons on the Marketing page use it to find each centre's address.
@@ -352,7 +416,7 @@ For security, the page never shows the current username or password. It only say
 
 ## How the app keeps passwords safe
 
-- The passwords and keys the app uses (Infocare, Google, Meta, Postmark, Mailchimp, Formstack) are stored **encrypted**. They can only be unlocked on this computer, so a copy of the settings file taken elsewhere is useless.
+- The passwords and keys the app uses (Infocare, Google, Meta, Postmark, Mailchimp, Formstack, OpenAI) are stored **encrypted**. They can only be unlocked on this computer, so a copy of the settings file taken elsewhere is useless.
 - They are never shown on any page and never given to Beep Beep.
 - Backups are locked with a passphrase you choose.
 - The one thing the app can't do for you is encrypt the whole computer drive. Ask IT to turn on **BitLocker** so a lost or stolen computer doesn't expose the app's data.

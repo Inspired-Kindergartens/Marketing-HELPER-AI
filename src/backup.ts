@@ -13,13 +13,18 @@ import { readEnvFileUnsealed } from "./env-file.js";
 export const BACKUP_DIR = "backups";
 
 // Paths relative to the project root. Missing entries are skipped, not errors.
-const BACKUP_PATHS = [
+// All media is in here: everything the app stores as a file goes under
+// `uploads` (task attachments, AI images, info sheet photos).
+export const BACKUP_PATHS = [
   ".env",
   "OAuth.json",
   "google-oauth-token.json",
   "marketing-helper-ai-495603-7bf952d32fa8.json",
   "centre-contact-list.xlsx",
   "uploads",
+  // The original info sheet PDFs: they hold photos of real children and
+  // staff, so they are kept out of git and travel in the backup instead.
+  "docs/One Pager",
   "INFOCARE",
   "META",
   "logs",

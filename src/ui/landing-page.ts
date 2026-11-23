@@ -318,7 +318,7 @@ export function renderLandingPage(options: LandingPageOptions = {}) {
   const tiles = [
     { label: "Marketing", description: "Infocare, Meta Ads & Google Analytics", href: "/app", primary: true },
     { label: "Tasks", description: "Tasks, projects & reminders", href: "/tasks", primary: true },
-    { label: "General Chat", description: "General help with saved conversations", href: "/chat", primary: true },
+    { label: "Info Sheets", description: "A one-page PDF for each kindergarten", href: "/one-pager", primary: true },
     { label: "Communications", description: "Postmark, Mailchimp & Formstack", href: "/comms", primary: false },
     { label: "Job Descriptions", description: "AI blurbs & PDF job descriptions", href: "/jd", primary: false },
     { label: "Budget", description: "Subscriptions, purchases & desire spends", href: "/budget", primary: false },
@@ -332,6 +332,7 @@ export function renderLandingPage(options: LandingPageOptions = {}) {
     { label: "Code", href: "/snippets", external: false },
     { label: "Links", href: "/subscriptions", external: false },
     { label: "Sector Insight", href: "/sector", external: false },
+    { label: "General Chat", href: "/chat", external: false },
     { label: "WIKI", href: "/wiki", external: false },
   ];
 
@@ -386,10 +387,10 @@ export function renderLandingPage(options: LandingPageOptions = {}) {
       <nav class="landing__buttons grid" aria-label="Primary navigation">
         ${buttonRow}
       </nav>
-      <section class="landing__tiles flex flex-wrap justify-center gap-12" aria-label="Upcoming tools">
+      <nav class="landing__tiles" aria-label="Quick links" tabindex="0">
         ${secondaryTileRow}
         ${placeholderTiles.join("")}
-      </section>
+      </nav>
       ${renderLandingIntelligenceFeed(options.intelligenceFeed)}
       <footer class="landing__footer flex justify-center flex-wrap gap-12">
         <a class="landing__github inline-flex items-center gap-8 text-muted" href="/contacts/upload">

@@ -136,7 +136,8 @@ The landing page links to the main local tools:
 
 - **Marketing** (`/app`) - Infocare analytics, waitlist quality, Meta Ads, Google Analytics, and the dashboard-specific AI panel.
 - **Tasks** (`/tasks`) - local task and project tracking.
-- **General Chat** (`/chat`) - a general-purpose local AI chat with retained conversations and groups.
+- **Info Sheets** (`/one-pager`) - the one-page PDF flyer for each kindergarten, from one shared template, with editable text and photos. Main landing tile. See [Info Sheets](#info-sheets).
+- **General Chat** (`/chat`) - a general-purpose local AI chat with retained conversations and groups. Secondary landing row, after Sector Insight.
 - **Communications** (`/comms`) - Postmark, Mailchimp, Formstack, and communications-focused AI help.
 - **Job Descriptions** (`/jd`) - AI-drafted website vacancy blurbs and PDF job descriptions per kindergarten.
 - **Budget** (`/budget`) - the marketing budget per financial year: subscriptions, purchases, desire spends, totals and predictions, year-over-year, PDF. Main landing tile. See [Budget](#budget).
@@ -339,7 +340,7 @@ All persistent state lives in **one PostgreSQL database** (`DATABASE_URL`; the `
 The `.mhbak` file is a zip encrypted with **AES-256-GCM** under a key derived from the passphrase with **scrypt** (N=2^16, r=8, p=1). Layout: `MHBAK1` | salt(16) | iv(12) | ciphertext | tag(16). Nothing inside is readable without the passphrase, a wrong passphrase or any tampering fails the GCM check, and **a lost passphrase cannot be recovered**. Keep it in the organisation's password manager. The zip inside contains:
 
 - `database.dump` - `pg_dump --format=custom --no-owner --no-privileges` of the whole database (all tables, including help-KB embeddings and Sector Insight data).
-- `files/` - `.env` **with credentials decrypted** (the at-rest DPAPI seal only works on this computer, so the backup carries plain values under the passphrase and the restore re-seals them), `OAuth.json`, the Google service-account JSON, `centre-contact-list.xlsx`, `uploads/` (task attachments), `INFOCARE/`, `META/`, `logs/` (landing-feed snapshots, Infocare audit log).
+- `files/` - `.env` **with credentials decrypted** (the at-rest DPAPI seal only works on this computer, so the backup carries plain values under the passphrase and the restore re-seals them), `OAuth.json`, the Google service-account JSON, `centre-contact-list.xlsx`, `uploads/` (all media the app stores: task attachments, AI images, info sheet photos including the one kept for Revert), `docs/One Pager/` (the original info sheet PDFs, which hold photos of real children and staff and so are git-ignored and travel here instead), `INFOCARE/`, `META/`, `logs/` (landing-feed snapshots, Infocare audit log).
 - `MANIFEST.json` - timestamp and the file list.
 
 Not included (rebuilt or re-downloaded): `node_modules`, `dist`, `generated/prisma` (`npm run build`), and the Ollama models in `.local/` (~6.6 GB, `npm run ai:setup`). Everything else is in git.
@@ -396,7 +397,7 @@ Rules: credential values never reach the browser and never reach the AI.
   4. Appends `{ event: "infocare_login_change", outcome }` (no values) to `logs/infocare-audit.log`. Responses carry only `ok`/`error`.
 - **Backups are passphrase-encrypted and disk-only.** See above; `/actions/backup` returns the saved path, never the file, and its error response is generic (details go to the server log).
 - **The AI has no route to the environment.** Nothing under `src/ai/` reads `process.env` (except `LOCALAPPDATA` to locate Ollama), the `.env` file, or names any credential key; the help knowledge base indexes only `knowledge/`, `docs/metric-contracts.md` and one `INFOCARE/` notes file. Infocare live chat calls run server-side through the client, and the model only ever sees returned data. `test/secrets-isolation.test.ts` enforces all of this and that the Infocare page never contains the current login.
-- **At rest, credentials in `.env` are encrypted with Windows DPAPI** (`src/secrets.ts`). The keys in `SECRET_KEYS` (Infocare user and password, Meta token, Google refresh token, Postmark tokens, Cloudflare sync token, Mailchimp key, Formstack token) are stored as `dpapi:<base64>` and only decrypt **on this computer**.
+- **At rest, credentials in `.env` are encrypted with Windows DPAPI** (`src/secrets.ts`). The keys in `SECRET_KEYS` (Infocare user and password, Meta token, Google refresh token, Postmark tokens, Cloudflare sync token, Mailchimp key, Formstack token, OpenAI key) are stored as `dpapi:<base64>` and only decrypt **on this computer**.
   - **Scope is LocalMachine, not CurrentUser.** The app runs under the work (Azure AD) sign-in while admin terminals use a local account, and per-user sealing locked the server out of its own settings. Any account on this computer that can read the folder can decrypt; a copy of `.env` on any other computer cannot.
   - **`src/load-env.ts` must be the first import** of anything that reads the environment (it is in `server.ts`, `db.ts` and the scripts). On every start it:
     1. Seals any credential typed in as plain text, and moves a fresh `google-oauth-token.json` into `.env`, deleting the file only after the sealed copy is proven to decrypt.
@@ -424,6 +425,7 @@ Optional integrations:
 - `GOOGLE_ANALYTICS_OAUTH_PATH`, `GOOGLE_ANALYTICS_TOKEN_PATH`, or `GOOGLE_ANALYTICS_REFRESH_TOKEN`.
 - `POSTMARK_SERVER_TOKEN`, `POSTMARK_WEBHOOK_BASIC_AUTH` - Postmark email send token and the basic-auth password Postmark presents to the live webhook endpoint. The webhook itself is configured in Postmark by the web host (Blacksheep), not by us — see [Postmark Webhook Alerts](#postmark-webhook-alerts-amber--red).
 - `CLOUDFLARE_SYNC_URL`, `CLOUDFLARE_SYNC_TOKEN` - Cloudflare Worker that buffers Postmark webhook events while the app is offline, and the `X-Sync-Token` used to read from it. See [Postmark Event Sync](#postmark-event-sync).
+- `OPENAI_API_KEY`, and optionally `AI_IMAGE_MODEL` and `AI_TRANSCRIBE_MODEL` - OpenAI, for AI images. See [AI Images](#ai-images).
 
 ## Postmark Event Sync
 
@@ -927,6 +929,139 @@ They match the workbook, and each year's figures were checked against its own To
 - `BudgetReminderDismissal` stores a dismissed reminder per month (`month` unique, `dismissedAt`).
 - Money is `Decimal(12,2)` and is returned as numbers. All the tables are in the database backup (whole-database `pg_dump`). No new environment variables.
 
+## Info Sheets
+
+The one-page A4 PDF for each kindergarten, made from one template (the 2023 design in `docs/One Pager`). Page `/one-pager` (`src/ui/one-pager-app-shell.ts`), routes `src/one-pager/routes.ts` (`registerOnePagerRoutes`, registered in `src/server.ts`), template rules `src/one-pager/template.ts` and `src/one-pager/prefill.ts` (pure), PDF `src/ui/one-pager-pdf.ts`, storage `src/storage/one-pager-store.ts`, tests `test/one-pager.test.ts` (routes run against an in-memory `OnePagerStore`).
+
+### Template
+
+- **Shared for all**: logo, teal name band, tagline on the orange brush stroke, butterfly, fern, teal half-circle, column rule, and the text of *How much does it cost?*, *Are the teachers trained?* and *How do I enrol my child?* (`OnePagerTemplate`, one row; `DEFAULT_ONE_PAGER_TEMPLATE` seeds it).
+- **Service model** (`OnePager.serviceModel`, `ONE_PAGER_SERVICE_MODELS`): `kindergarten` (sessions, donations) or `all-day` (long days, fees). It picks which shared cost and enrolment text a service uses (`sharedTextKeys`: `costText` / `enrolText`, or `allDayCostText` / `allDayEnrolText`). A new sheet starts as `all-day` when the centre's name says "All Day" (`defaultOnePagerServiceModel`), and the Text panel's **Service type** changes it. **Hours have no shared text**: they differ for every service and are always its own field.
+- **Per kindergarten** (`OnePager`): About us, address, phone, email, hours, team caption, and an optional override of each shared section (`""` = use the shared text). `resolveOnePagerContent` merges the two; a section with no text is left off the page. A right-hand section typed entirely as bullet lines (the All Day fees) is set as a list.
+- **The one exception: Tai o Fenua's own artwork.** `resolveOnePagerContent` sets `ownLogo: "tai-o-fenua"` for that centre, and the PDF then places `tai-o-fenua-header.png` (its logo beside ours) where the logo goes and `tai-o-fenua-hibiscus.png` (the hibiscus outline, on a clear background) in the teal half-circle at the foot. Both are cut from its original by `scripts/one-pager-tai-artwork.ts`. Nothing else in the layout varies by kindergarten, and a test holds it to that one use.
+- **About us** is plain text: a blank line starts a paragraph, lines starting `-`, `•` or `*` are a bullet list (`parseAboutUs`).
+- **Artwork** is in `src/assets/one-pager` (`logo.png`, `band.png`, `brush.png`, `butterfly.png`, `fern.png`). All but the logo were pulled out of the Avenues 2023 PDF: `scripts/one-pager-extract.ts` writes a PDF's pictures and text positions, and `scripts/one-pager-assets.ts` copies them and mirrors the fern left to right (it sits hard against the left and bottom page edges, stems coming in from the edge). `logo.png` is the newer logo with *Ngā Kōhungahunga Manawanui* under it, drawn from the vector artwork in Matua's 2024 sheet by `scripts/one-pager-logo-artwork.ts`; its box there is the `LOGO` constant in the PDF. The callout cloud of the Avenues sheet was dropped from the template on 2026-11-17 (migration `20261117030000_one_pager_drop_callout`). Both use `@napi-rs/canvas`, which pdfjs-dist installs; the running app does not need it. Replace the files with original artwork if it turns up; the names and proportions are all the code depends on.
+- **Fonts**: the text is Calibri; the name in the band, the tagline, *About us* and the right-hand headings are Arial Bold (`HEADING_FONT`), the heavier style of the newer sheets (Matua, Gwen Rogers, Otamarakau, Tai o Fenua and others), used on every sheet since 2026-11-17. Both are read from the Windows fonts folder (`FONTS` in `src/ui/jd/jd-pdf.ts`).
+
+### PDF
+
+`renderOnePagerPdf(content, images)` builds the page with pdfmake. Positions and sizes are the originals', measured in points (constants at the top of the file). The artwork, name, photos and tagline are a background layer at fixed positions; the two columns are the page content.
+
+- **Always one page.** Each column is measured alone (`columnFits`: does it stay on one page?). The left column steps through `LEFT_LEVELS` (team photo height 194 down to 100 pt, then text 10 down to 8.5 pt); the right through `RIGHT_LEVELS` (line spacing, then text size). The first level that fits is used.
+- **Too long.** When the tightest level still overflows, `overflowLines` finds by how many lines (a binary search on page height). The result carries `fits` and `fit` (`leftOverflowLines`, `rightOverflowLines`); `describeOnePagerFit` words it. The draft PDF then runs to a second, plain page.
+- pdfmake changes the content it is given, so every measurement builds its column again; reusing one fails with "Access to local file denied".
+- Photos are placed with `cover`, so one is cropped to its slot and never stretched. Slot shapes are `ONE_PAGER_SLOT_RATIO`.
+- `scripts/one-pager-sample.ts <folder>` renders all 26 reviewed originals from `scripts/one-pager-reference.ts` without the database, as a PDF and a PNG each, to compare with the originals. All 26 fit on one page, including the ones whose original file ran to two (a test checks this).
+
+### Routes
+
+Every change answers `{ ok, fragments }` with only the panel bodies it touched, which the page swaps in place (`data-one-pager-fragment`), so unsaved text in another panel is not lost.
+
+- `GET /one-pager[?centre=<centreKey>&panel=<id>]` - the page. The Kindergartens panel is a GET form of standard buttons, one a kindergarten (`name="centre"`), with no links. Opening a kindergarten for the first time creates its `OnePager` with the contact details held (`contactFromKnown`).
+- `POST /api/one-pager/template` - save the shared text; an empty value is refused. Registered before `/:centreKey`.
+- `POST /api/one-pager/:centreKey` - save the fields sent (`cleanOnePagerFields`: tidied, cut to `ONE_PAGER_FIELD_MAX`). The Text panel's form sends every text field; the team caption has its own small form on the Team photo card (`data-one-pager-form="caption"`), whose save leaves the Text panel's unsaved typing alone.
+- `POST /api/one-pager/:centreKey/prefill` - `{ contact }` from the `SectorCentre` whose `eceId` is the centre's `licenseNumber` (address + suburb or city, landline as `07 578 4481`). Not saved: the page puts it in the boxes.
+- `POST /api/one-pager/:centreKey/draft-about` `{ notes }` - an About us draft. Not saved. See below.
+- `POST /api/one-pager/:centreKey/images/:slot` (multipart) and `.../delete` - `slot` is `photo1`, `photo2`, `photo3` or `team`. The file must be a JPEG or PNG by its first bytes (`sniffOnePagerImage`), up to 12 MB, and is stored under a name the app generates. The page crops the photo in the browser before it uploads, so files stay small and no image library is needed: the crop dialog (`[data-one-pager-crop]`) draws the whole photo on a canvas with a crop box on it, dragged by its corners (`resizeCrop`) or moved whole. The box keeps the slot's shape for `photo1`-`photo3` (`data-ratio` on the upload button) and is any shape for `team` (`data-ratio="free"`), since the PDF shows the team photo whole. What is uploaded is the box's own pixels as a JPEG, at most 2400 px wide and never enlarged. The reply carries `upscale: true` when those pixels are too few to print sharply in the slot; see [Upscaling a tight crop](#upscaling-a-tight-crop). A file dropped on a slot's card (`[data-one-pager-slot]`, document-level `dragover`/`drop` handlers) goes into the same crop dialog as one chosen with **Replace**; a file dropped anywhere else on the page is ignored instead of opening in the tab.
+- `POST /api/one-pager/:centreKey/images/:slot/generate` `{ prompt }` - an AI generated picture for the slot. See [AI generated images](#ai-generated-images).
+- `POST /api/one-pager/:centreKey/images/:slot/revert` - swaps the slot's photo with the one it replaced (`store.revertImage`); 404 when nothing was replaced. Every replacement (upload, generate, regenerate) moves the old row to `OnePagerPreviousImage` and drops the one kept before it, so one earlier photo is kept per slot and a second Revert undoes the first. A row moves with its own `aiGenerated`, `aiPrompt` and `createdAt`; nothing is sent anywhere. `.../delete` removes both. The **Revert** button shows only when the slot has a previous photo.
+- `GET /api/one-pager/images/:id/file` - the photo. The **Download** button on a slot saves it through a link with a `download` name (`<Name> <Slot label>.jpg|png`); there is no separate download route.
+- `GET /api/one-pager/:centreKey/pdf[?inline=1]` - the PDF as it stands. `X-One-Pager-Fit` carries the too-long message (URL-encoded, empty when it fits). The preview fetches it with `inline=1` and shows it in an iframe from a blob URL.
+- Downloads are named `<Name> Info Sheet <Mon YYYY>.pdf` (`onePagerFilename`). Saved versions were removed on 2026-11-18 (migration `20261118020000_one_pager_drop_versions` drops `OnePagerVersion` and `OnePager.version`).
+- The Kindergartens list shows each service's senior leader, then its head teacher and administrator. `people` in `src/server.ts` reads the centre contact list once (`readCentreContactList`, `matchCentreContact`) and hands the routes `{ seniorLeader, headTeacher, administrator }` by `centreKey` (`OnePagerPageData.people`); the senior leader is the sheet's `Key Senior Teacher` column. It fails soft: without the list, or for an unmatched service, the columns are empty.
+
+### About us draft
+
+`src/ai/one-pager-context.ts` builds the prompt. Sources, all for that kindergarten only: the text in the About us box when the button is pressed (`notes`), its website text (`JdKnowledgeDoc`, labels `current` and `old`), and its Job Description intro (`JdCentreProfile.introParagraph`). No other kindergarten's About us is given as an example: when it was, the model carried their values and lists into the draft. The Enviroschool line comes from `JdCentreProfile.isEnviroschool`, never from the model. With no source at all the route answers 422 and calls nothing.
+
+It runs on the app's one chat model (`AI_CHAT_MODEL`), called the way the Job Description intro is: `runLocalChat(..., { think: false })` with a 120-second wait, handed to the routes as `runChat`. No model is named and none is added. As of 2026-11-15 no kindergarten has stored website text, so the notes are the source in practice.
+
+### Hours from Infocare
+
+`src/one-pager/hours.ts` (pure) works a service's Hours text out of its Infocare bookings (`get_attendance_list`: one row per child per day, `booked_from` to `booked_to`). `npx tsx scripts/one-pager-hours.ts` prints what Infocare shows beside what is stored; `--apply` saves it. It reads the replies already stored in `ExternalApiCapture` (the newest month per centre) and calls Infocare for nothing. Infocare data is never changed; only the info sheet's own `hours` text is.
+
+- **Sessions** (`inferDayHours`): per weekday, a booked session counts when it is at least 8% of that day's bookings, at most three; a weekday counts as open when it has at least a quarter of the busiest weekday's bookings.
+- **Wording** (`describeOperatingHours`): weekdays with the same sessions share a line, e.g. `8:30am - 1pm or 8:30am - 2:30pm, Monday to Thursday.` then `8:30am - 12:45pm, Friday.`
+- **Sessional or not.** A service is sessional when its set sessions hold 85% or more of each day's bookings. Only then are the bookings its hours. Where families book their own hours (the All Day services) bookings can be shorter than opening hours, so the stored hours are kept and the booked span is only reported.
+- **Notes are kept** (`keepHoursNotes`, `mergeHours`): sentences Infocare cannot know (holiday programmes, closures, playgroup, OSCAR) stay under the new times; the old session times are dropped.
+- Run on 2026-11-17 from November 2026 bookings: 22 sheets updated; Te Puke already matched; Karamuramu (mixed Thursday and Friday bookings), Maunganui and OPEYS kept their stored hours.
+
+### Team photo upkeep
+
+`src/one-pager/staff-photo.ts` (pure, deps injected) raises a task when a kindergarten's teaching team has changed, so its team photo is out of date. Storage side: `src/storage/staff-photo-store.ts`.
+
+- **Signs of a change** (`findStaffPhotoReasons`), each dated after `since` and no later than today:
+  - a teaching staff member (`isTeachingJob`: job contains "teacher", not a reliever) has a `starting_date` or `leaving_date` in the newest stored `get_staff_list` reply for the centre (`ExternalApiCapture`; the Enrolment Quality monthly check and **Update from Infocare** store these). Infocare is not called.
+  - a `JobDescription` for the centre that is a full-time teacher job (`isFullTimeTeacherAdvert`), one month (`ADVERT_SETTLE_MONTHS`) after its `closingAt`.
+- **`since`** is the newest of: the team photo's `createdAt`, the sheet's `createdAt`, and `OnePager.staffPhotoCheckedAt`. So a change is raised once, and changes from before the current photo are not raised.
+- **The task** (`checkStaffPhotos`): `createTask` with title `Update the team photo: <name>`, the reasons (no staff names) and what to do, the centre, due in 14 days. Its id is kept in `OnePager.staffPhotoTaskId`. While that task is not done, a further change only moves `staffPhotoCheckedAt`; no second task.
+- **When it runs**: on `GET /one-pager` (so the list is current) and daily from `src/server.ts` (90 seconds after start, then every 24 hours), failing soft.
+- **Page**: `pageData.photoTasks` (centreKey → open task id, `readOpenStaffPhotoTasks`) puts a **Team photo due** badge on the kindergarten's button and a button on its Team photo card that opens `/tasks?task=<id>`.
+- `npx tsx scripts/one-pager-staff-peek.ts` shows what the check sees per kindergarten and what it would raise, without raising anything.
+- **One-off audit of the imported photos** (`scripts/one-pager-team-photo-audit.ts`, `--apply` to raise the tasks; applied 2026-11-17). The daily check ignores changes from before a photo went on, so the photos imported from the old sheets were checked once by name: `captionNames` reads the people out of `teamCaption`, and `compareCaptionWithStaff` matches them against the current people in the stored staff list (`readNamedStaff`), giving `notOnStaff` and `notNamed` (teachers only). A difference, or no team photo, raises the same *Update the team photo* task and sets `staffPhotoTaskId`. A kindergarten that has ever had a task is skipped, so a second run raises nothing. A photo with no caption cannot be checked and gets no task. Matching is rough by design (first three letters of a first name, bracketed preferred names), so a task says "check", not "wrong".
+
+### Nav rail order
+
+Each page writes its own `.nav-rail`. The items run in the landing page's order (`tiles`, then `secondaryTiles`, in `src/ui/landing-page.ts`), after the Landing icon. A page's rail may show fewer items, never a different order; `test/one-pager.test.ts` ("every page's nav rail runs in the landing page's order") holds all eleven rails to it, so a change to the landing order has to be made in the rails too.
+
+### Emailing the kindergarten
+
+**Email kindergarten** in the preview panel's actions follows the Marketing page's email flow (`email-confirm-dialog` classes): choose a type, edit subject and body, a `mailto:` link opens the mail app, then "Did you send the email?".
+
+- `src/one-pager/email.ts` (pure): `buildOnePagerEmail("approve" | "staff-photo", …)` writes the two ready-made emails, with a reply-by date three working days on (`addBusinessDays`); **New** starts with the greeting only. `joinGreetingNames` gives first names, each once, or "there".
+- **To**: the email in the Text panel as it stands, else `pageData.emailContact.to` (`OnePager.email`). **Greeting**: `contactNames` in `src/server.ts`, the head teacher and administrator from the centre contact list (`matchCentreContact`), as the Marketing emails use.
+- **Approve changes** downloads `/api/one-pager/:centreKey/pdf` first, to be attached by hand.
+- **The note**: on "Yes", `POST /api/one-pager/:centreKey/email-note { subject, body }` → `notes.add`, which keeps it in the Meta notes storage under the notification id `info-sheet-<centreKey>` (`upsertMetaRecommendationNotification` + `createMetaRecommendationNote`), so it shows with the kindergarten's other notes. No new table. The reply carries the `notes` fragment, so the Notes panel shows it at once.
+
+### Preview badges
+
+The preview draws up to two badges over the team photo, in its top left corner: **Staff photo needed** and **Email sent**. They are part of the preview PDF itself, so they sit on the photo at any zoom.
+
+- Only the preview asks for them: it fetches `/api/one-pager/:centreKey/pdf?inline=1&badges=1`. Without `badges` (the print button, the **Approve changes** attachment) the PDF is made without them. A test holds the download link and the route to that.
+- `teamPhotoBadges` (`src/one-pager/email.ts`, pure) decides: **Staff photo needed** when the kindergarten's team photo task is open (`staffPhoto.openTasks`); **Email sent** when a Staff photo email note is newer than the photo in the team slot (or the slot is empty). Both fail soft to no badge.
+- A Staff photo email's note is the one short line "Email sent for staff photo update" (`onePagerEmailNote(email, kind)`; the page posts `kind` with `email-note`), not its subject and words. Notes kept before that are recognised by the ready-made subject, "Updated team photo for …".
+- `renderOnePagerPdf(content, images, { teamBadges })` draws them (`badgeStack`, `badgeBox`) in the app's Default look: a black box (`#040404`) with a green border and green 15 pt words (`#7fbe6f`). Each is a `canvas` rectangle with the words placed on it, both with `relativePosition` after the photo so they are on top of it and take no room in the column. The box is as wide as its words, measured with `@napi-rs/canvas` (`badgeTextWidth`). A table's `fillColor` is drawn under the photo, so it is not used. With no team photo they go where it would start.
+- `npx tsx scripts/one-pager-badge-sample.ts <out.pdf>` renders a reference sheet with both badges, without the database.
+
+### Notes panel
+
+The **Notes** panel (`one-pager-notes`, fragment `notes`, `renderOnePagerNotes`) shows the selected kindergarten's notes and a box to add one. It has no storage of its own: `src/one-pager` is handed `notes: { list, add }` from `src/server.ts`.
+
+- `list` reads every note on the centre from the Meta notes storage (`readMetaNotificationHistoryPage({ centreKey, kind: "Note", pageSize: 100 })`), newest first, whatever page it was written on (advert reviews, recommendation notes, info sheet emails). Each shows its date and the heading it is filed under. It fails soft: the page opens with an empty panel.
+- `POST /api/one-pager/:centreKey/notes { text }` (cut to `ONE_PAGER_NOTE_MAX`) → `add`, the same `info-sheet-<centreKey>` row the emails use; answers 201 with the `notes` fragment only. The preview is not reloaded, as a note is not on the sheet.
+- Notes are not edited or removed here; the Marketing page's Latest notes table does that.
+
+### AI generated images
+
+**Rule: an image of real children is never uploaded to OpenAI.** Before a picture is sent, the user is asked "Does this image contain real children?" (`REAL_CHILDREN_QUESTION`); it goes only on "no". A picture flagged AI generated skips the question.
+
+- `OnePagerImage.aiGenerated` is the flag, shown on each photo slot as the **AI generated** tick box. It is set two ways. Automatically, in one place: `storeAiPicture` in the routes, which stores a picture OpenAI returned (`aiPrompt` keeps the description sent). And by the user: the tick box posts `POST .../images/:slot/ai-generated` `{ aiGenerated: boolean }` (`store.setImageAiGenerated`, same image row and id; 400 unless a boolean, 404 for an empty slot), which answers with the Photos fragment. Uploads and the seed always store `false`, and an upload over a flagged picture makes the slot `false` again.
+- **The gate** is `assertNoRealChildren(image, answer)` in `src/image-ai/photo-slot.ts`: it passes for a flagged picture or the answer `"no"`, throws 403 on `"yes"` and 400 on anything else. It runs twice per regeneration: in the route before the file is handed over, and inside the regenerator on the line before the upload.
+- **Regenerating** (`POST .../images/:slot/regenerate` `{ containsRealChildren, request, option }`, slots `photo1`-`photo3` only; the team photo is of real staff) uploads the slot's picture with a description to `/images/edits` (`editImage` in `src/image-ai/openai.ts`, the only function that uploads an image; `createSlotImageRegenerator` is its only caller). The result replaces the slot's picture, flagged. The page's **Regenerate with AI** button opens a dialog that asks the question first (Yes closes it and posts nothing), then shows a request box and an **If left empty** list. On submit the dialog closes at once and the request runs in the background: the page keeps a `regenerating` set of slots, and `markRegenerating()` dims each one's photo under a turning icon (`.is-regenerating`, `.one-pager-photo__working`) and turns its card's buttons off. Several slots can be in flight together, one request per slot. The marks are reapplied after every fragment swap, since a swap redraws all the photo cards. The set lives in the page only, so a reload loses the marks, not the requests.
+- **The description** (`buildRegenerationPrompt`): fixed scene guidance (keep the place, camera angle and light; a real documentary photograph), then the user's request or the chosen `REGENERATION_OPTIONS` entry (default `same-children`: every child replaced by a new one, the same number, each in the same position, pose and activity; two or three children added if the picture has none), then fixed replace guidance (`REPLACE_GUIDANCE`: nobody in the original remains; a request that gives no number keeps the original's number, one that gives no activity keeps the original's poses), then fixed children guidance (ages two to four; a mix of New Zealand children, about half Polynesian New Zealanders, in ordinary modern play clothes). The word "Māori" is never sent, and is replaced in a typed request: image models answer it with historical costume.
+- **Generating sends words only.** `POST .../images/:slot/generate` passes the typed description to `options.generateImage`, which `src/server.ts` fills with `createSlotImageGenerator(env)` from `src/image-ai/photo-slot.ts` (`SLOT_IMAGE_SIZE` 3456x2400, the largest picture of the photo slots' shape the image model makes, for print; medium quality, JPEG, to `/images/generations`; Regenerate asks `/images/edits` for the same size; OpenAI is given up to 10 minutes). Without `OPENAI_API_KEY` the route answers 503.
+- <a id="upscaling-a-tight-crop"></a>**Upscaling a tight crop.** `onePagerPhotoDpi(slot, width, height)` (`src/ui/one-pager-pdf.ts`) gives how many of a photo's pixels land on an inch of paper where its slot puts it (the top photos fill their box; the team photo at its largest); under `ONE_PAGER_PRINT_DPI` (300) it is too small (`onePagerPhotoIsTooSmall`). An upload of such a photo into `photo1`-`photo3` answers `upscale: true` when AI images are set up, and the page then opens the Regenerate dialog on its question step with the form's `action` set to `upscale` (`openRedraw`). "Yes" posts nothing; "No" posts `POST .../images/:slot/upscale` `{ containsRealChildren: "no" }`. The route is the regenerate route's own code (`redraw(..., upscale)`): the same gate, the same single `editImage` caller, with `upscale: true` so the regenerator sends `UPSCALE_PROMPT` (the same photograph, nothing changed, only sharper) at high quality and `SLOT_IMAGE_SIZE` in place of a regeneration request. It answers 409 for a photo that is already large enough and 404 for the team photo, which is of real staff. The result is stored by `storeAiPicture`, so it is flagged AI generated and the cropped upload is kept for **Revert**.
+- **The info sheet code cannot reach OpenAI.** `src/one-pager` holds the photos and is only handed the generator and regenerator. All OpenAI calls stay in `src/image-ai`, as the AI model design requires. `test/ai-model-design.test.ts` pins its endpoints to `/images/generations`, `/images/edits` and `/audio/transcriptions`.
+- **Not yet run against OpenAI.** The edit request's shape (multipart `model`, `prompt`, `image`, `size`, `quality`, `output_format`, answer in `data[0].b64_json`) follows the generations call and is tested against a stand-in only: on 2026-11-17 OpenAI answered 401 to the configured key.
+- Tests (`test/one-pager.test.ts`, "AI images: ...", "Regenerate: ...", "Upscale: ..." and "Crop: ..."): a tight crop is offered an upscale and a large photo or the team photo is not; an upscale sends nothing without the answer "no"; a generated picture is flagged and an upload starts unflagged; the user's tick sets and clears the flag, and a ticked photo skips the question; "yes" or no answer sends nothing and leaves the photo as it was; "no" sends and flags; a flagged picture needs no answer; the info sheet files contain no OpenAI address or key; `editImage` has one caller, behind the gate.
+
+### Storage
+
+- `OnePagerTemplate` (id 1): `tagline`, `website`, `costText`, `teachersText`, `enrolText`, `allDayCostText`, `allDayEnrolText`.
+- `OnePager`: `centreKey` (unique, → `CentreReference`), `serviceModel`, the fields above. Centre names are tidied when listed (`listCentres`), because Infocare names can carry a double space.
+- `OnePagerImage`: one per (`onePagerId`, `slot`), with `aiGenerated` and `aiPrompt`; the file is under `uploads/one-pager`.
+- `OnePagerPreviousImage`: the same fields, at most one per (`onePagerId`, `slot`): the photo the slot held before its last replacement, for **Revert**. Its file stays in `uploads/one-pager` until a further replacement or a removal drops it.
+- The tables are in the database backup and the files are in its `uploads` folder. No new environment variables.
+
+### Seed
+
+`npx tsx scripts/one-pager-seed.ts` starts every open kindergarten off from its existing sheet in `docs/One Pager`: its words and four photos (`scripts/one-pager-reference.ts` for Avenues and Arataki, `scripts/one-pager-import-data.json` for the other 24, read by `scripts/one-pager-reference-photos.ts`). It only fills fields and slots that are empty, so it is safe to run again; a contact line still exactly as the directory gave it is replaced by the sheet's own wording. Run on 2026-11-17: all 26 kindergartens have text and photos.
+
+- **OPEYS** comes from `OPEYS Kindergarten 1 Pager v2 18.2.21.pdf`. The other file named for it (`OPEYS Kindergarten Infosheet A4_PRINT.pdf`) is Matua's sheet and is not used. OPEYS has three photos and no team photo: the one on its sheet is another kindergarten's team, captioned "Team photo to come!". Its sheet has "What ages do you care for?" where the others have cost, so it lists no fees and shows the All Day shared fees.
+- **Two-page originals** (for example Maunganui, whose second page is a leftover Maungaarangi draft): only page 1 is read.
+- **All Day text is shared, not copied.** Maunganui's fees and enrolment wording became the All Day shared text, so Maunganui has no override and OPEYS shows the same wording until it gets its own.
+- **Where the sheet and the directory disagree, the sheet won** (for example Whangamata: 200 Port Road on the sheet, 202 in the directory; Otamarakau's phone area code).
+
 ## Printable PDF reports
 
 Enrolment Quality, Infocare Analytics, Waitlist Quality and Budget (see [Budget](#budget)) each have a print icon (`bi-printer`, no text) in the panel header that downloads an A4 PDF. They share `src/ui/report-pdf.ts` (`renderReportPdf`), built with pdfmake and the JD PDF's Arial fonts and logo (`ensureFontsConfigured`, `getLogoDataUri`):
@@ -1155,6 +1290,7 @@ Ollama starts with the server, but the chat model (`AI_CHAT_MODEL`) does not loa
 | Things To Know category, tags and summary | An article is saved | Chat model |
 | Sector Insight extraction | Daily check; runs when the last complete run is over 30 days old, or on **Update now** | Chat model |
 | Help knowledge base embeddings | Daily check for changed documents, each Things To Know change, plus each chat question | `AI_EMBED_MODEL`, CPU only |
+| AI images and their speech-to-text | A page calls `/api/image-ai/...` | `AI_IMAGE_MODEL` / `AI_TRANSCRIBE_MODEL` at OpenAI; nothing loads on this computer |
 
 The landing feed uses no AI.
 
@@ -1213,6 +1349,7 @@ Local AI configuration is controlled through `.env`:
 - `AI_CHAT_MODEL=qwen3:8b`
 - `AI_TIMEOUT_MS=60000`
 - `AI_EMBED_MODEL=nomic-embed-text` - the embedding model for the help knowledge base (see below).
+- `OPENAI_API_KEY`, `AI_IMAGE_MODEL`, `AI_TRANSCRIBE_MODEL` - AI images only (see [AI Images](#ai-images)); these are OpenAI, not local.
 
 ### Landing news and weather feed refresh
 
@@ -1237,9 +1374,12 @@ The app has one AI model, held in the `AI_CHAT_MODEL` variable. Every feature us
 3. The model it replaced is kept as the rollback model (`AI_CHAT_MODEL_FALLBACK`), so **Rollback AI model** can restore it if performance is poor.
 4. The model before that is permanently deleted to free storage.
 
-So at most two chat models are ever installed: the current one and the rollback one. The one named exception is the help search model (`AI_EMBED_MODEL`): it cannot chat, runs on the CPU only, and does a job chat models can't.
+So at most two chat models are ever installed: the current one and the rollback one. There are two named exceptions, each in its own variable and neither able to stand in for the chat model:
 
-All models are stored once in `.local/ollama-models`. `src/server.ts` and `scripts/open-marketing-helper.ps1` set `OLLAMA_MODELS` so that Ollama never falls back to its per-account default folder. To turn a model's thinking off for one task, pass `{ think: false }` to `runLocalChat` rather than using a different model. `test/ai-model-design.test.ts` fails if a model is hard-coded. `aiConfig` is changed in place by update and rollback, so read it at call time and never copy it at startup.
+- The help search model (`AI_EMBED_MODEL`): it cannot chat, runs on the CPU only, and does a job chat models can't.
+- AI images: the image model (`AI_IMAGE_MODEL`) and the speech-to-text model (`AI_TRANSCRIBE_MODEL`). Both are OpenAI models reached with `OPENAI_API_KEY`, not installed on this computer, and do jobs the chat model can't: draw a picture and hear a recording. They are named only in `src/image-ai/config.ts`. See [AI Images](#ai-images).
+
+All models are stored once in `.local/ollama-models`. `src/server.ts` and `scripts/open-marketing-helper.ps1` set `OLLAMA_MODELS` so that Ollama never falls back to its per-account default folder. To turn a model's thinking off for one task, pass `{ think: false }` to `runLocalChat` rather than using a different model. `test/ai-model-design.test.ts` fails if a model is hard-coded, if an OpenAI model is named outside `src/image-ai/config.ts`, or if the image feature calls anything but OpenAI's image and transcription endpoints. `aiConfig` is changed in place by update and rollback, so read it at call time and never copy it at startup.
 
 ### Updating the local AI model
 
@@ -1248,6 +1388,41 @@ A recommendation appears as a card in the landing page reminders strip when `REC
 The landing page footer also has **Update AI model** (shown whenever the recommended model isn't installed, so a dismissed update can still be installed) and **Rollback AI model**. An update pulls the recommended model with `ollama pull`, then asks it for a real reply (`assertModelAnswers`). If it doesn't answer, the update stops: nothing is switched, the rollback model is kept, the new download is removed, and the reason stays on the button. If it answers, the current model moves to `AI_CHAT_MODEL_FALLBACK` and `AI_CHAT_MODEL` switches. It then runs `ollama rm` on the model that was the fallback *before* the update, since it is no longer needed, unless it is still in use as the active model, the new fallback or the embedding model (`AI_EMBED_MODEL`). A removal failure is logged and never fails the update. Rollback swaps `AI_CHAT_MODEL` and `AI_CHAT_MODEL_FALLBACK`, and rolling back from the recommended model also dismisses that recommendation. When changing `RECOMMENDED_AI_MODEL`, update `RECOMMENDED_AI_MODEL_SIZE` and `RECOMMENDED_AI_MODEL_REASON` too, because the card and confirmation show them.
 
 Leave `AI_PROVIDER` unset, or set it to `builtin`, when you want Beep Beep to run with no external model dependency. Set `AI_PROVIDER=ollama` only when you want the optional local LLM path. `npm run ai:setup` downloads Ollama's standalone Windows runtime into `.local/ollama`, stores model files under `.local/ollama-models`, starts the local runtime, and pulls the configured model. Use `npm run ai:doctor` if the Ollama-backed chat path reports that the local AI is unavailable.
+
+## AI Images
+
+Makes an image from a description that is typed or spoken. This is a backend only: JSON routes with no page of their own, so any page can plug in to them. It is the one feature that sends content off this computer to an AI service: the description and any recording go to OpenAI.
+
+### Settings (`src/image-ai/config.ts`)
+
+- `OPENAI_API_KEY` - required; encrypted in `.env` like the other credentials (`SECRET_KEYS`). Without it every OpenAI route answers `503` with `missingKeys`, and nothing else in the app is affected. Read at start, so restart after adding it.
+- `AI_IMAGE_MODEL`, `AI_TRANSCRIBE_MODEL` - optional; blank uses `DEFAULT_AI_IMAGE_MODEL` / `DEFAULT_AI_TRANSCRIBE_MODEL`, the only place an OpenAI model is named. They are the second named exception in [The AI model design](#the-ai-model-design).
+
+### Routes (`src/image-ai/routes.ts`, `registerImageAiRoutes`)
+
+| Route | Takes | Answers |
+| --- | --- | --- |
+| `GET /api/image-ai/status` | - | `isConfigured`, `missingKeys`, the two models, and what is accepted: `promptMaxLength`, `defaultSize`, `qualities`, `formats`, `backgrounds`, `audioTypes` |
+| `POST /api/image-ai/transcribe` | multipart form with the recording as a file | `{ text }` |
+| `POST /api/image-ai/images` | JSON `{ prompt, size?, quality?, format?, background? }`, or a multipart form with the recording as a file plus the same fields | `201 { image, transcript }` |
+| `GET /api/image-ai/images?limit=` | - | `{ images }`, newest first (50 by default, 200 at most) |
+| `GET /api/image-ai/images/:id` | - | `{ image }` |
+| `GET /api/image-ai/images/:id/file` | `?download=1` to save rather than show | the picture |
+| `POST /api/image-ai/images/:id/delete` | - | `{ ok: true }`; removes the row and the file |
+
+- `image` is `{ id, prompt, source, model, size, quality, mimeType, sizeBytes, createdAt, url, downloadUrl }`. `source` is `typed` or `spoken`.
+- **Typed or spoken.** A page that wants to show the words first posts the recording to `/transcribe` and then the text to `/images`. A page that wants one step posts the recording straight to `/images`: it is transcribed, and its words become the prompt (after any typed `prompt` sent with it). The answer carries the `transcript`.
+- **The microphone** is the page's job: `navigator.mediaDevices.getUserMedia({ audio: true })` asks for permission and `MediaRecorder` records. Post the resulting blob as the form's file. Browsers record webm, ogg or mp4; `audioFilename` gives OpenAI a file name with the right extension, since browsers name the upload `blob`. Recordings are limited to 25 MB (the app's multipart limit, also OpenAI's) and are never stored.
+- **Options** (`parseImageOptions`): `size` is `auto` or `WIDTHxHEIGHT` (default `2880x2880`, the largest square, for print; each side a multiple of 16, at most 3840, no more than 3:1, 655,360 to 8,294,400 pixels: `isValidImageSize`); `quality` is `auto`, `low`, `medium`, `high`, `xhigh` or `max`; `format` is `png`, `jpeg` or `webp`; `background` is `auto`, `opaque` or `transparent` (not with `jpeg`). `auto` values are left out of the OpenAI request.
+- **Errors** are `{ error }`: `400` for something the caller can fix (no description, a wrong option, a file that is not a recording, a description OpenAI refused), `422` when no speech was heard, `502` when OpenAI fails (a rejected key, rate limit or no credit), `503` when not set up, `504` on a timeout (image 180 s, transcription 60 s). The API key is never in an answer.
+
+### OpenAI calls (`src/image-ai/openai.ts`)
+
+`generateImage` posts to `/v1/images/generations` (one image, returned as base64) and `transcribeAudio` to `/v1/audio/transcriptions`. Both take the `fetch` to use, so the tests (`test/image-ai.test.ts`) run the routes against a stand-in for OpenAI. The code is outside `src/ai` on purpose: that folder may never name a credential (`test/secrets-isolation.test.ts`).
+
+### Storage (`src/storage/ai-image-store.ts`, migration `20261114030000_add_ai_image`)
+
+One `AiImage` row per image, and the picture as a file in `uploads/ai-images`, the same layout as task attachments, so it is covered by the backup's `uploads` folder. A failed row insert removes the file again.
 
 ## Things To Know
 

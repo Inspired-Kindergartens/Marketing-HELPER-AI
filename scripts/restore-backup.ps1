@@ -73,7 +73,9 @@ try {
   $files = Join-Path $staging "files"
   if (Test-Path $files) {
     Get-ChildItem $files -Force | ForEach-Object {
-      Copy-Item $_.FullName (Join-Path $repoRoot $_.Name) -Recurse -Force
+      # Copied INTO the project folder, so a folder that is already there
+      # (logs, docs) is merged with, not given a second copy inside itself.
+      Copy-Item $_.FullName $repoRoot -Recurse -Force
       Write-Host "Restored $($_.Name)"
     }
   }

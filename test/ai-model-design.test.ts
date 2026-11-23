@@ -43,6 +43,49 @@ test("no function overrides the model variable", () => {
   assert.deepEqual(offenders, []);
 });
 
+// The named exceptions that are not chat models: AI images (AI_IMAGE_MODEL) and
+// speech-to-text (AI_TRANSCRIBE_MODEL), both OpenAI. They are named in one file,
+// stay in their own folder, and are never a way to chat on another model.
+const OPENAI_MODEL_NAME = /\b(gpt-[a-z0-9]|whisper-\d|dall-e|chatgpt)/i;
+const IMAGE_AI_DIR = join("src", "image-ai");
+
+test("no code names an OpenAI model except src/image-ai/config.ts", () => {
+  const offenders = files
+    .filter((path) => path !== join(IMAGE_AI_DIR, "config.ts"))
+    .flatMap((path) =>
+      readFileSync(path, "utf8")
+        .split(/\r?\n/)
+        .filter((line) => !COMMENT.test(line) && OPENAI_MODEL_NAME.test(line))
+        .map((line) => `${path}: ${line.trim()}`),
+    );
+
+  assert.deepEqual(offenders, []);
+});
+
+test("the OpenAI models only make images and hear speech", () => {
+  const imageAiFiles = sourceFiles(IMAGE_AI_DIR);
+  const elsewhere = files.filter((path) => !imageAiFiles.includes(path));
+
+  // Nothing outside the image feature calls OpenAI or reads its models.
+  const callers = elsewhere.filter((path) => {
+    const text = readFileSync(path, "utf8");
+    return /api\.openai\.com/.test(text) || /\benv\.(AI_IMAGE_MODEL|AI_TRANSCRIBE_MODEL|OPENAI_API_KEY)\b/.test(text);
+  });
+  assert.deepEqual(callers, []);
+
+  // The image feature uses OpenAI for those two jobs only, and never the chat model.
+  for (const path of imageAiFiles) {
+    const text = readFileSync(path, "utf8");
+    assert.doesNotMatch(text, /AI_CHAT_MODEL|chat\/completions|\/responses\b/, `${path} must not chat`);
+  }
+  const endpoints = imageAiFiles.flatMap((path) => [...readFileSync(path, "utf8").matchAll(/\$\{config\.baseUrl\}(\/[\w/]+)/g)].map((match) => match[1]));
+  // /images/edits (added 2026-11-17,the user's Regenerate button) is the same
+  // image model drawing a picture, from a picture and a description. It is the
+  // one endpoint that uploads an image; test/one-pager.test.ts holds it behind
+  // the "real children" check.
+  assert.deepEqual(endpoints.sort(), ["/audio/transcriptions", "/images/edits", "/images/generations"]);
+});
+
 test(".env.example defaults to the recommended model", () => {
   const match = /^AI_CHAT_MODEL=(.+)$/m.exec(readFileSync(".env.example", "utf8"));
 

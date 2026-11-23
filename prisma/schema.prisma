@@ -98,6 +98,7 @@ model CentreReference {
   jobDescriptions                JobDescription[]
   jdBlurbs                       JdBlurb[]
   jdKnowledgeDocs                JdKnowledgeDoc[]
+  onePager                       OnePager?
 
   @@index([ignored, openStatus, name])
 }
@@ -1245,6 +1246,24 @@ model BudgetAdditional {
   @@index([budgetYearId])
 }
 
+// An image made with the OpenAI image model (AI_IMAGE_MODEL) from a typed or
+// spoken description. The picture is a file under uploads/ai-images.
+model AiImage {
+  id          Int      @id @default(autoincrement())
+  prompt      String
+  source      String   @default("typed") // "typed" or "spoken"
+  model       String
+  size        String
+  quality     String
+  storedName  String   @unique
+  storagePath String
+  mimeType    String
+  sizeBytes   Int
+  createdAt   DateTime @default(now())
+
+  @@index([createdAt(sort: Desc)])
+}
+
 // A purchase category the user ticked "In predictions": its purchases carry
 // on at the same monthly rate in the predicted spend. Opt-in, so a category
 // not listed here counts only what was spent. By name, for every year (a
@@ -1339,4 +1358,89 @@ model BudgetReminderDismissal {
   id          Int      @id @default(autoincrement())
   month       String   @unique
   dismissedAt DateTime @default(now())
+}
+
+// One Pagers: the text every kindergarten's one-page PDF shares. A single row
+// (id 1); a kindergarten uses these unless it has its own override.
+model OnePagerTemplate {
+  id           Int      @id @default(1)
+  tagline      String
+  website      String
+  costText     String
+  teachersText String
+  enrolText    String
+  // The All Day services charge fees and take younger children, so they
+  // share their own cost and enrolment text.
+  allDayCostText  String @default("")
+  allDayEnrolText String @default("")
+  updatedAt    DateTime @updatedAt
+}
+
+// One kindergarten's one pager. The three override fields are "" while the
+// kindergarten uses the shared text.
+model OnePager {
+  id               Int               @id @default(autoincrement())
+  centreKey        Int               @unique
+  // "kindergarten" (sessions, donations) or "all-day" (long days, fees):
+  // which shared cost and enrolment text the service uses.
+  serviceModel     String            @default("kindergarten")
+  aboutUs          String            @default("")
+  address          String            @default("")
+  phone            String            @default("")
+  email            String            @default("")
+  hours            String            @default("")
+  costOverride     String            @default("")
+  teachersOverride String            @default("")
+  enrolOverride    String            @default("")
+  teamCaption      String            @default("")
+  // Team photo upkeep: the task last raised to get a new team photo after a
+  // staff change, and when staff changes were last acted on (changes up to
+  // then are not raised again).
+  staffPhotoTaskId    Int?
+  staffPhotoCheckedAt DateTime?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  centre           CentreReference   @relation(fields: [centreKey], references: [centreKey], onDelete: Cascade, onUpdate: Cascade)
+  images           OnePagerImage[]
+  previousImages   OnePagerPreviousImage[]
+}
+
+// The photo a slot held before its last replacement, kept so Revert can put
+// it back (the two then swap). Same fields as OnePagerImage; it keeps the
+// flag and date it was stored with. At most one per slot.
+model OnePagerPreviousImage {
+  id          Int      @id @default(autoincrement())
+  onePagerId  Int
+  slot        String
+  storedName  String   @unique
+  storagePath String
+  mimeType    String
+  sizeBytes   Int
+  aiGenerated Boolean  @default(false)
+  aiPrompt    String   @default("")
+  createdAt   DateTime @default(now())
+  onePager    OnePager @relation(fields: [onePagerId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@unique([onePagerId, slot])
+}
+
+// A photo in one of a one pager's four slots (photo1, photo2, photo3, team).
+// The picture is a file under uploads/one-pager (storagePath).
+model OnePagerImage {
+  id          Int      @id @default(autoincrement())
+  onePagerId  Int
+  slot        String
+  storedName  String   @unique
+  storagePath String
+  mimeType    String
+  sizeBytes   Int
+  // True only for a picture the app itself got from the AI image model
+  // (aiPrompt is what it was asked for). An uploaded photo is always false.
+  // Only a true one may ever be sent to OpenAI; a real photo never is.
+  aiGenerated Boolean  @default(false)
+  aiPrompt    String   @default("")
+  createdAt   DateTime @default(now())
+  onePager    OnePager @relation(fields: [onePagerId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@unique([onePagerId, slot])
 }

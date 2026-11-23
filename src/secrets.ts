@@ -25,6 +25,7 @@ export const SECRET_KEYS = [
   "CLOUDFLARE_SYNC_TOKEN",
   "MAILCHIMP_API_KEY",
   "FORMSTACK_API_TOKEN",
+  "OPENAI_API_KEY",
 ] as const;
 
 export const canSeal = process.platform === "win32";

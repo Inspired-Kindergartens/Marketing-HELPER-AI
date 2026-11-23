@@ -28,6 +28,13 @@ const FONTS = {
     italics: `${FONT_DIR}/ariali.ttf`,
     bolditalics: `${FONT_DIR}/arialbi.ttf`,
   },
+  // The Info Sheets' font (src/ui/one-pager-pdf.ts), as in the original files.
+  Calibri: {
+    normal: `${FONT_DIR}/calibri.ttf`,
+    bold: `${FONT_DIR}/calibrib.ttf`,
+    italics: `${FONT_DIR}/calibrii.ttf`,
+    bolditalics: `${FONT_DIR}/calibriz.ttf`,
+  },
 };
 
 const FIELD_TABLE_LAYOUT = {

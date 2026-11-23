@@ -17,6 +17,8 @@ import "./jd-store.test.js";
 import "./landing-intelligence.test.js";
 import "./landing-page.test.js";
 import "./help-kb.test.js";
+import "./image-ai.test.js";
+import "./one-pager.test.js";
 import "./subscriptions.test.js";
 import "./slt-filter.test.js";
 import "./sector.test.js";

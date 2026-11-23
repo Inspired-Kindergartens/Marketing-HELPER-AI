@@ -979,6 +979,178 @@ button:focus-visible {
   display: none;
 }
 
+/* --- Info Sheets --- */
+/* The preview fills the right-hand column: the PDF itself in a frame. */
+.panel--one-pager-preview .panel__body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.one-pager-preview__frame {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+  background: var(--color-surface-dark);
+}
+
+.one-pager-preview__fit {
+  align-self: flex-start;
+}
+
+.one-pager-preview__fit[hidden] {
+  display: none;
+}
+
+/* The kindergartens: one standard button a row, its figures in columns under
+   the headings. Layout only; the colours are the base button's. */
+.one-pager-list__head,
+.one-pager-list__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 0.7fr) minmax(0, 1fr) 4rem 11rem;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0 0.85rem;
+  text-align: right;
+}
+
+.one-pager-list__head span:first-child,
+.one-pager-list__name,
+.one-pager-list__person {
+  text-align: left;
+}
+
+.one-pager-list__person {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.one-pager-list__name {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.one-pager-form textarea {
+  resize: vertical;
+  line-height: var(--line-height-compact);
+}
+
+.one-pager-form__contact {
+  grid-template-columns: 2fr 1fr 1.5fr;
+}
+
+/* Save stays in view while the long Text form scrolls under it. */
+.one-pager-form__save {
+  position: sticky;
+  bottom: -10px;
+  padding: 8px 0;
+  background: var(--color-panel-bg);
+}
+
+/* The four photo slots, each framed in the shape it has on the page. */
+.one-pager-photos {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.one-pager-photo {
+  min-width: 0;
+  padding: 12px;
+}
+
+.one-pager-photo__frame {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border: 1px solid var(--color-border-muted);
+  border-radius: var(--radius-control);
+  background: var(--color-surface-dark);
+}
+
+.one-pager-photo__image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* The team photo is shown whole, as the page shows it, whatever its shape. */
+.one-pager-photo__frame--whole .one-pager-photo__image {
+  object-fit: contain;
+}
+
+/* A new picture is being made from this one: the old photo dims under a turning icon. */
+.one-pager-photo__frame {
+  position: relative;
+}
+
+.one-pager-photo.is-regenerating .one-pager-photo__image {
+  opacity: 0.35;
+}
+
+.one-pager-photo__working {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  margin: -16px 0 0 -16px;
+  font-size: 32px;
+  line-height: 1;
+  color: var(--color-text);
+}
+
+/* The AI generated tick is set by the app, never by hand. */
+/* A file is being dragged over this slot: dropping it replaces the photo. */
+.one-pager-photo--drop {
+  outline: 1px solid var(--color-active);
+}
+
+/* A note keeps the line breaks it was written with (a sent email's body). */
+.one-pager-notes__text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* A line between one note and the next. */
+.one-pager-notes .task-notes__item + .task-notes__item {
+  border-top: 1px solid var(--color-border);
+  padding-top: 10px;
+}
+
+.one-pager-photo__ai input {
+  margin: 0;
+}
+
+/* The info sheet email is longer than the Marketing page's, so its box is wider. */
+.email-confirm-dialog--form.one-pager-email-dialog {
+  width: min(640px, calc(100vw - 32px));
+}
+
+/* Regenerate asks its question first, then for the request. */
+.one-pager-regenerate__step[hidden] {
+  display: none;
+}
+
+/* Cropping a photo: the whole photo, with the crop box drawn on it. The box
+   is wide enough to see what is being kept. */
+.wiki-modal.one-pager-crop {
+  width: min(860px, calc(100vw - 32px));
+}
+
+.one-pager-crop__canvas {
+  display: block;
+  max-width: 100%;
+  max-height: 62vh;
+  margin: 0 auto;
+  border: 1px solid var(--color-border);
+  touch-action: none;
+}
+
 /* --- Enrolment Quality: trend lines (colours from theme tokens only) --- */
 .enrolment-quality__spark {
   display: block;
@@ -1732,6 +1904,7 @@ button:focus-visible {
 
 .email-confirm-dialog--form input,
 .email-confirm-dialog--form textarea {
+  box-sizing: border-box;
   width: 100%;
   border: 1px solid var(--color-border);
   background: var(--color-surface);
@@ -2635,6 +2808,7 @@ body.landing-body {
 
 .landing {
   max-width: 1280px;
+  min-width: 0;
   margin: 0 auto;
   padding: 32px 24px 48px;
   display: flex;
@@ -2823,7 +2997,7 @@ body.landing-body {
   display: block;
   margin: 0 auto;
   padding: 12px 0;
-  height: 315px;
+  height: clamp(140px, 22vh, 220px);
   width: auto;
   max-width: 100%;
   object-fit: contain;
@@ -2876,14 +3050,32 @@ body.landing-body {
 }
 
 .landing__tiles {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-content: safe center;
+  gap: 8px;
   width: 100%;
-  margin-top: 18px;
+  min-width: 0;
+  min-height: 60px;
+  box-sizing: border-box;
+  overflow-x: auto;
+  /* Reserve space for the scrollbar so extra links never move the RSS feed. */
+  padding: 2px 2px 6px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border-panel) var(--color-surface-dark);
+}
+
+.landing__tiles:focus-visible {
+  outline: 1px solid var(--color-active);
+  outline-offset: 2px;
 }
 
 .landing-tile {
+  flex: 0 0 auto;
   min-height: 42px;
-  min-width: 132px;
-  padding: 0 14px;
+  min-width: 64px;
+  padding: 0 12px;
   box-sizing: border-box;
   border: 1px dashed var(--color-border);
   border-radius: 999px;
@@ -2891,6 +3083,7 @@ body.landing-body {
   font-size: 0.78rem;
   letter-spacing: 0.04em;
   text-align: center;
+  white-space: nowrap;
 }
 
 .landing-tile--placeholder span {
@@ -3246,6 +3439,38 @@ body.landing-body {
   margin-top: 32px;
   padding-top: 20px;
   border-top: 1px solid var(--color-border);
+}
+
+/* Fit the complete landing page, including its footer, on laptop screens.
+   Trim whitespace before reducing any content; taller content can still scroll. */
+@media (min-width: 1001px) and (max-height: 1000px) {
+  .landing {
+    padding-top: 16px;
+    padding-bottom: 16px;
+    gap: 8px;
+  }
+
+  .landing__hero {
+    padding: 0;
+  }
+
+  .landing__buttons,
+  .landing-feed,
+  .landing__footer {
+    margin-top: 0;
+  }
+
+  .landing__footer {
+    padding-top: 8px;
+  }
+}
+
+@media (min-width: 1001px) and (max-height: 780px) {
+  .landing {
+    padding-top: 8px;
+    padding-bottom: 8px;
+    gap: 4px;
+  }
 }
 
 .landing__restart {
