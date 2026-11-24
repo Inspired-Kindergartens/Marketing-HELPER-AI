@@ -431,10 +431,10 @@ function renderTasksScript(): string {
           }
         });
 
-        // Status dropdown on the detail panel changes status immediately.
+        // Status radio buttons on the detail panel change status immediately.
         document.addEventListener("change", function(event) {
           var select = event.target;
-          if (!(select instanceof HTMLSelectElement)) return;
+          if (!(select instanceof HTMLInputElement) || !select.checked) return;
           if (select.getAttribute("data-task-action") !== "status") return;
           var host = select.closest("[data-task-id]");
           if (!host) return;

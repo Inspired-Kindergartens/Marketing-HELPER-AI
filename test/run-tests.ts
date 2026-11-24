@@ -21,6 +21,7 @@ import "./image-ai.test.js";
 import "./one-pager.test.js";
 import "./subscriptions.test.js";
 import "./slt-filter.test.js";
+import "./staff-roles.test.js";
 import "./sector.test.js";
 import "./sector-ero.test.js";
 import "./meta-centre-match.test.js";

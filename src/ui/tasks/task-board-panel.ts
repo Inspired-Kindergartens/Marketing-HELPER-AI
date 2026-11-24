@@ -61,8 +61,20 @@ function renderTaskCard(task: TaskView): string {
   `;
 }
 
+/** How many task cards one board column shows per page. */
+export const TASK_BOARD_PAGE_SIZE = 10;
+
 function renderColumn(status: TaskStatus, tasks: TaskView[]): string {
   const columnTasks = tasks.filter((task) => task.status === status);
+  const pageCount = Math.ceil(columnTasks.length / TASK_BOARD_PAGE_SIZE);
+  // Every card is in the page; the ones past the first page start hidden and
+  // the column's Previous/Next buttons swap which ten are shown.
+  const cards = columnTasks
+    .map((task, index) => {
+      const card = renderTaskCard(task);
+      return index < TASK_BOARD_PAGE_SIZE ? card : card.replace("<article ", "<article hidden ");
+    })
+    .join("");
   return `
     <section class="task-board__column flex flex-col" data-status="${status}">
       <header class="task-board__column-header items-center flex justify-between">
@@ -70,11 +82,56 @@ function renderColumn(status: TaskStatus, tasks: TaskView[]): string {
         <span class="task-board__column-count text-ghost text-small">${columnTasks.length}</span>
       </header>
       <div class="task-board__column-body flex flex-col gap-8">
-        ${columnTasks.length
-          ? columnTasks.map((task) => renderTaskCard(task)).join("")
-          : `<p class="task-board__empty text-empty text-small">No tasks</p>`}
+        ${columnTasks.length ? cards : `<p class="task-board__empty text-empty text-small">No tasks</p>`}
       </div>
+      ${pageCount > 1
+        ? `<nav class="task-board__pagination comms-pagination items-center flex flex-wrap gap-8 justify-center" aria-label="${escapeHtml(TASK_STATUS_LABELS[status])} task pages" data-task-board-pagination data-page-count="${pageCount}">
+        <button type="button" data-task-board-page="prev" disabled>Previous</button>
+        <span data-task-board-page-label>Page 1 of ${pageCount}</span>
+        <button type="button" data-task-board-page="next">Next</button>
+      </nav>`
+        : ""}
     </section>
+  `;
+}
+
+// Pages each column on its own. The page a column is on is remembered for the
+// browser tab, because most actions on the board reload the page and would
+// otherwise send every column back to page 1.
+function renderPaginationScript(): string {
+  return `
+    <script>
+      (function() {
+        var pageSize = ${TASK_BOARD_PAGE_SIZE};
+        Array.prototype.forEach.call(document.querySelectorAll("[data-task-board-pagination]"), function(nav) {
+          var column = nav.closest(".task-board__column");
+          if (!column) return;
+          var key = "task-board-page-" + column.getAttribute("data-status");
+          var pageCount = Number(nav.getAttribute("data-page-count")) || 1;
+          var cards = Array.prototype.slice.call(column.querySelectorAll(".task-card"));
+          var prev = nav.querySelector('[data-task-board-page="prev"]');
+          var next = nav.querySelector('[data-task-board-page="next"]');
+          var label = nav.querySelector("[data-task-board-page-label]");
+          var page = 1;
+          try { page = Number(window.sessionStorage.getItem(key)) || 1; } catch (error) {}
+          page = Math.min(Math.max(1, page), pageCount);
+
+          function show() {
+            cards.forEach(function(card, index) {
+              card.hidden = index < (page - 1) * pageSize || index >= page * pageSize;
+            });
+            prev.disabled = page <= 1;
+            next.disabled = page >= pageCount;
+            label.textContent = "Page " + page + " of " + pageCount;
+            try { window.sessionStorage.setItem(key, String(page)); } catch (error) {}
+          }
+
+          prev.addEventListener("click", function() { if (page > 1) { page -= 1; show(); } });
+          next.addEventListener("click", function() { if (page < pageCount) { page += 1; show(); } });
+          show();
+        });
+      })();
+    </script>
   `;
 }
 
@@ -117,6 +174,7 @@ export function renderTaskBoardPanel(options: TaskBoardPanelOptions): string {
       <div class="task-board__columns grid gap-12">
         ${TASK_STATUSES.map((status) => renderColumn(status, tasks)).join("")}
       </div>
+      ${renderPaginationScript()}
     </div>
   `;
 }

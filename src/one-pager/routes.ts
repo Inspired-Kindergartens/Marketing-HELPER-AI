@@ -6,6 +6,10 @@
 //   POST /api/one-pager/:centreKey/email-note          { subject, body }: keep an email sent to the
 //                                                      kindergarten as a note on it
 //   POST /api/one-pager/:centreKey/notes               { text }: keep a note on the kindergarten
+//   POST /api/one-pager/:centreKey/notes/:noteId       { text }: change the words of one of its notes
+//   POST /api/one-pager/:centreKey/in-use              { inUse, reason, selected }: the In use tick;
+//                                                      the reason is kept as a note. Not in use:
+//                                                      no staff photo is asked for
 //   POST /api/one-pager/:centreKey/prefill            contact details we know (not saved)
 //   POST /api/one-pager/:centreKey/draft-about         an About us draft from the AI, written from
 //                                                      { notes } and what is held (not saved)
@@ -30,7 +34,7 @@
 // A change answers with the panel bodies it touched (fragments), which the
 // page swaps in place.
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import type {} from "@fastify/multipart";
@@ -49,7 +53,7 @@ import {
   type OnePagerPeople,
 } from "../ui/one-pager-app-shell.js";
 import { describeOnePagerFit, onePagerPhotoIsTooSmall, renderOnePagerPdf, type OnePagerImages, type OnePagerPdf } from "../ui/one-pager-pdf.js";
-import { joinGreetingNames, onePagerEmailNote, teamPhotoBadges } from "./email.js";
+import { joinGreetingNames, onePagerEmailNote, onePagerInUseNote, staffPhotoEmailSent, teamPhotoBadges } from "./email.js";
 import { contactFromKnown } from "./prefill.js";
 import {
   cleanOnePagerFields,
@@ -90,16 +94,19 @@ export type OnePagerRouteOptions = {
   // Team photo upkeep: `check` raises a task for any kindergarten whose
   // teaching team has changed (run when the page opens); `openTasks` gives the
   // open task of each kindergarten that has one, by centreKey.
-  staffPhoto?: { check(): Promise<unknown>; openTasks(): Promise<Map<number, number>> };
+  // `photoRemoved` raises the kindergarten's team photo task when its team photo is removed.
+  staffPhoto?: { check(): Promise<unknown>; openTasks(): Promise<Map<number, number>>; photoRemoved?(centreKey: number): Promise<unknown> };
   // Emailing the kindergarten: `contactNames` gives who to greet (the head
-  // teacher and administrator from the contact list).
+  // teacher and administrator in Infocare's staff list).
   contactNames?: (centre: OnePagerCentre) => Promise<string[]>;
   // The kindergarten's notes (the ones the Marketing page keeps on it):
   // `list` reads them newest first for the Notes panel, `add` keeps a new one
-  // (typed in the panel, or an email that was sent).
-  notes?: { list(centre: OnePagerCentre): Promise<OnePagerNote[]>; add(centre: OnePagerCentre, text: string): Promise<void> };
-  // Who looks after each kindergarten (its senior leader, head teacher and
-  // administrator, from the contact list), by centreKey, for the list.
+  // (typed in the panel, or an email that was sent), `edit` changes the words
+  // of one that `list` gave (by its id).
+  notes?: { list(centre: OnePagerCentre): Promise<OnePagerNote[]>; add(centre: OnePagerCentre, text: string): Promise<void>; edit(id: number, text: string): Promise<void> };
+  // Who looks after each kindergarten (its senior leader from the uploaded
+  // workbook, its head teacher and administrator from Infocare's staff list),
+  // by centreKey, for the list.
   people?: (centres: OnePagerCentre[]) => Promise<Record<number, OnePagerPeople>>;
   now?: () => Date;
 };
@@ -156,10 +163,10 @@ export function registerOnePagerRoutes(app: FastifyInstance, options: OnePagerRo
       app.log.warn({ error }, "Info sheet team photo tasks unavailable");
       return new Map<number, number>();
     });
-    // Who the Email kindergarten button writes to. Without the contact list the greeting is "there".
+    // Who the Email kindergarten button writes to. With no head teacher or administrator to name, the greeting is the kindergarten's name.
     const names = centre && options.contactNames ? await options.contactNames(centre).catch(() => []) : [];
-    const emailContact = onePager ? { to: onePager.email, greeting: joinGreetingNames(names) } : undefined;
-    // Fails soft: without the contact list the list's people columns are empty.
+    const emailContact = onePager ? { to: onePager.email, greeting: joinGreetingNames(names, centre?.name) } : undefined;
+    // Fails soft: without its people the list's people columns are empty.
     const people = options.people ? await options.people(centres).catch(() => ({})) : {};
     // Fails soft: without the notes the Notes panel is empty.
     const notes = centre && options.notes
@@ -168,7 +175,38 @@ export function registerOnePagerRoutes(app: FastifyInstance, options: OnePagerRo
           return [];
         })
       : [];
-    return { centres, onePagers, template, selected: centre && onePager ? { centre, onePager } : null, photoTasks: Object.fromEntries(photoTasks), emailContact, people, notes };
+    // Which kindergartens have been emailed for a new team photo, for the
+    // list's badge. Only one with an info sheet can have been. Fails soft: no badge.
+    const listNotes = options.notes;
+    const photoEmails: Record<number, boolean> = {};
+    if (listNotes) {
+      await Promise.all(
+        onePagers.map(async (entry) => {
+          const listed = centres.find((item) => item.centreKey === entry.centreKey);
+          if (!listed) return;
+          // The selected kindergarten's notes are already read.
+          const entryNotes = listed.centreKey === centre?.centreKey ? notes : await listNotes.list(listed).catch(() => []);
+          if (staffPhotoEmailSent(entry.images.find((image) => image.slot === "team")?.createdAt ?? null, entryNotes)) photoEmails[entry.centreKey] = true;
+        }),
+      );
+    }
+    // Which info sheets have no team photo (removed, or its file has gone),
+    // for the list's badge.
+    const photoMissing: Record<number, boolean> = {};
+    await Promise.all(
+      onePagers.map(async (entry) => {
+        if (await teamPhotoMissing(entry)) photoMissing[entry.centreKey] = true;
+      }),
+    );
+    return { centres, onePagers, template, selected: centre && onePager ? { centre, onePager } : null, photoTasks: Object.fromEntries(photoTasks), photoEmails, photoMissing, emailContact, people, notes };
+  }
+
+  // True when the sheet has no team photo: the slot is empty (never filled, or
+  // the photo was removed), or the photo's file has gone.
+  async function teamPhotoMissing(onePager: OnePagerRecord): Promise<boolean> {
+    const team = onePager.images.find((image) => image.slot === "team");
+    if (!team) return true;
+    return access(join(rootDir, team.storagePath)).then(() => false, () => true);
   }
 
   async function fragmentsReply(centre: OnePagerCentre | null, keys: OnePagerFragmentKey[]) {
@@ -192,15 +230,20 @@ export function registerOnePagerRoutes(app: FastifyInstance, options: OnePagerRo
     return renderOnePagerPdf(content, await readImages(onePager), { teamBadges });
   }
 
-  // The preview's badges over the team photo: a new photo is needed, and the
+  // The preview's badges over the team photo: a photo is needed (the task is
+  // open, or the sheet has no team photo), and the
   // kindergarten has been emailed for one. Fails soft: no badges.
   async function previewBadges(centre: OnePagerCentre, onePager: OnePagerRecord): Promise<string[]> {
-    const [tasks, notes] = await Promise.all([
+    // A sheet that is not in use is not asked for a staff photo.
+    if (!onePager.inUse) return [];
+    const [tasks, notes, missing] = await Promise.all([
       (options.staffPhoto?.openTasks() ?? Promise.resolve(new Map<number, number>())).catch(() => new Map<number, number>()),
       (options.notes?.list(centre) ?? Promise.resolve([])).catch(() => []),
+      teamPhotoMissing(onePager),
     ]);
     return teamPhotoBadges({
-      photoDue: tasks.has(centre.centreKey),
+      // A sheet with no team photo needs one, task or no task.
+      photoDue: tasks.has(centre.centreKey) || missing,
       teamPhotoAt: onePager.images.find((image) => image.slot === "team")?.createdAt ?? null,
       notes,
     });
@@ -287,7 +330,8 @@ export function registerOnePagerRoutes(app: FastifyInstance, options: OnePagerRo
       return { ok: false, error: NOTES_UNAVAILABLE };
     }
     await options.notes.add(centre, onePagerEmailNote(email, request.body?.kind));
-    return reply.code(201).send(await fragmentsReply(centre, ["notes"]));
+    // The list too: a Staff photo email shows as a badge on the kindergarten.
+    return reply.code(201).send(await fragmentsReply(centre, ["notes", "list"]));
   });
 
   // A note typed in the Notes panel, kept with the kindergarten's other notes.
@@ -308,6 +352,66 @@ export function registerOnePagerRoutes(app: FastifyInstance, options: OnePagerRo
     }
     await options.notes.add(centre, text);
     return reply.code(201).send(await fragmentsReply(centre, ["notes"]));
+  });
+
+  // A note changed in the Notes panel. Only a note on this kindergarten can be
+  // changed. The list is redrawn too: its Staff photo email badge is read from
+  // the notes. The Notes panel is not, so nothing being typed in it is lost.
+  app.post<{ Params: { centreKey: string; noteId: string }; Body: { text?: unknown } }>("/api/one-pager/:centreKey/notes/:noteId", async (request, reply) => {
+    const centre = await findCentre(request.params.centreKey);
+    if (!centre) {
+      reply.code(404);
+      return notFound;
+    }
+    const text = cleanOnePagerText(request.body?.text, ONE_PAGER_NOTE_MAX);
+    if (!text) {
+      reply.code(400);
+      return { ok: false, error: "A note cannot be left empty." };
+    }
+    if (!options.notes) {
+      reply.code(503);
+      return { ok: false, error: NOTES_UNAVAILABLE };
+    }
+    const noteId = parseId(request.params.noteId);
+    if (noteId == null || !(await options.notes.list(centre)).some((note) => note.id === noteId)) {
+      reply.code(404);
+      return { ok: false, error: "That note was not found." };
+    }
+    await options.notes.edit(noteId, text);
+    return { ...(await fragmentsReply(centre, ["list"])), text };
+  });
+
+  // The In use tick box in the list ({ inUse }, a boolean). The reason typed
+  // in its box is kept as a note on the kindergarten. A kindergarten that is
+  // not in use is left out of team photo upkeep. `selected` is the
+  // kindergarten the page has open, whose panels are redrawn when it is the
+  // one ticked.
+  app.post<{ Params: { centreKey: string }; Body: { inUse?: unknown; reason?: unknown; selected?: unknown } }>("/api/one-pager/:centreKey/in-use", async (request, reply) => {
+    const centre = await findCentre(request.params.centreKey);
+    if (!centre) {
+      reply.code(404);
+      return notFound;
+    }
+    const inUse = request.body?.inUse;
+    if (typeof inUse !== "boolean") {
+      reply.code(400);
+      return { ok: false, error: "Say whether the kindergarten is in use." };
+    }
+    const reason = cleanOnePagerText(request.body?.reason, ONE_PAGER_NOTE_MAX);
+    if (!reason) {
+      reply.code(400);
+      return { ok: false, error: "Type the reason first." };
+    }
+    if (!options.notes) {
+      reply.code(503);
+      return { ok: false, error: NOTES_UNAVAILABLE };
+    }
+    await open(centre);
+    await store.setInUse(centre.centreKey, inUse);
+    await options.notes.add(centre, onePagerInUseNote(inUse, reason));
+    app.log.info({ centreKey: centre.centreKey, inUse }, "Info sheet In use tick set by the user");
+    const selected = await findCentre(request.body?.selected);
+    return fragmentsReply(selected, selected?.centreKey === centre.centreKey ? ["list", "notes", "photos"] : ["list"]);
   });
 
   app.post<{ Params: { centreKey: string } }>("/api/one-pager/:centreKey/prefill", async (request, reply) => {
@@ -525,6 +629,9 @@ export function registerOnePagerRoutes(app: FastifyInstance, options: OnePagerRo
     const onePager = await open(centre);
     // Removing empties the slot for good: the photo kept for Revert goes too.
     for (const removed of await store.removeImage(onePager.id, slot)) await unlink(join(rootDir, removed.storagePath)).catch(() => undefined);
+    // A removed team photo raises the task to get a new one (unless one is
+    // open), so the card redrawn below has its button. A failure never stops the removal.
+    if (slot === "team") await options.staffPhoto?.photoRemoved?.(centre.centreKey).catch((error) => app.log.warn({ error }, "Info sheet team photo task not raised"));
     return fragmentsReply(centre, ["photos", "list"]);
   });
 

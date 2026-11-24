@@ -875,7 +875,8 @@ function renderMetaRecommendationNote(note: MetaRecommendationNoteView) {
   `;
 }
 
-function joinGreetingNames(names: string[]) {
+// With nobody to name, the greeting is the service's own name.
+function joinGreetingNames(names: string[], serviceName = "") {
   const filteredNames = [
     ...new Set(
       names
@@ -885,7 +886,7 @@ function joinGreetingNames(names: string[]) {
   ];
 
   if (filteredNames.length === 0) {
-    return "there";
+    return serviceName.replace(/\s+/g, " ").trim() || "there";
   }
 
   if (filteredNames.length === 1) {
@@ -903,8 +904,8 @@ function buildMailtoHref(email: string, subject: string, body: string) {
   return `mailto:${email.replace(/[\r\n]/g, "")}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 }
 
-function buildMetaInitiateEmailHref(contact: CentreContact) {
-  const greetingNames = joinGreetingNames([contact.headTeacher, contact.administrator]);
+function buildMetaInitiateEmailHref(contact: CentreContact, serviceName: string) {
+  const greetingNames = joinGreetingNames([contact.headTeacher, contact.administrator], serviceName);
   const subject = `Facebook advert for enrolments`;
   const body = [
     `Kia ora ${greetingNames},`,
@@ -929,7 +930,7 @@ function renderMetaEmailActionAttributes(contact: CentreContact, row: AnalyticsR
     `data-contact-email="${escapeHtml(contact.email)}"`,
     `data-head-teacher="${escapeHtml(contact.headTeacher)}"`,
     `data-administrator="${escapeHtml(contact.administrator)}"`,
-    `data-initiate-href="${escapeHtml(buildMetaInitiateEmailHref(contact))}"`,
+    `data-initiate-href="${escapeHtml(buildMetaInitiateEmailHref(contact, row.serviceName))}"`,
   ].join(" ");
 }
 
@@ -1998,7 +1999,7 @@ const analyticsColumnInfo = {
   leaving:
     "Enrolled children with a known future leaving date inside the selected time window. Past leaving dates are ignored. This is independent of Age 5+ and Near 5, so the same child can appear in both. The AI summary uses deduplicated replacement pressure.",
   note: "Opens the matching Meta Ads recommendation note field for this centre and window.",
-  email: "Email action shown when the centre can be matched to a contact from the centre contact list.",
+  email: "Email action shown when the centre has an email address on its Info Sheet.",
 } as const;
 
 function renderAnalyticsHeaderLabel(label: string, info: string, placement: "start" | "end" = "end") {
@@ -2039,8 +2040,8 @@ function renderAnalyticsTable(
         const replacementPressure = getScopedReplacementPressure(row, selectedWindowKey);
         const centreCoverage = coverage.get(row.centreKey);
         const metaMessage = `${row.serviceName}: ${openPlaces} open, ${actionableWaitlist}/${row.waitlistCount} actionable waitlist, ${replacementPressure} pressure, ${centreCoverage?.activeCampaignCount ?? 0} active campaigns, ${formatMoney(centreCoverage?.spend30d ?? 0)} spend.`;
-        const emailAction = contact
-          ? `<a class="analytics-table__email-action inline-flex items-center justify-center" ${renderMetaEmailActionAttributes(contact, row, notificationId)} href="${escapeHtml(buildMetaInitiateEmailHref(contact))}" title="Email centre about a Facebook advert" aria-label="Email ${escapeHtml(row.serviceName)} about a Facebook advert"><i class="bi bi-envelope ui-icon" aria-hidden="true"></i></a>`
+        const emailAction = contact?.email
+          ? `<a class="analytics-table__email-action inline-flex items-center justify-center" ${renderMetaEmailActionAttributes(contact, row, notificationId)} href="${escapeHtml(buildMetaInitiateEmailHref(contact, row.serviceName))}" title="Email centre about a Facebook advert" aria-label="Email ${escapeHtml(row.serviceName)} about a Facebook advert"><i class="bi bi-envelope ui-icon" aria-hidden="true"></i></a>`
           : "";
         const noteAction = `<button type="button" class="analytics-table__note-action inline-flex items-center justify-center" data-analytics-meta-note data-notification-id="${escapeHtml(notificationId)}" data-centre-key="${row.centreKey}" data-window-key="${escapeHtml(selectedWindowKey)}" data-meta-history-heading="${escapeHtml(recommendation)}" data-meta-history-message="${escapeHtml(metaMessage)}" data-centre-name="${escapeHtml(row.serviceName)}" data-open-places="${openPlaces}" data-actionable-waitlist="${actionableWaitlist}" data-waitlist-count="${row.waitlistCount}" data-replacement-pressure="${replacementPressure}" data-active-campaign-count="${centreCoverage?.activeCampaignCount ?? 0}" data-spend-30d="${centreCoverage?.spend30d ?? 0}" title="Add Meta Ads note" aria-label="Add Meta Ads note for ${escapeHtml(row.serviceName)}"><i class="bi bi-journal-plus ui-icon" aria-hidden="true"></i></button>`;
 
@@ -2757,8 +2758,8 @@ function renderMetaRecommendations(
                   <strong>${escapeHtml(entry.recommendation)}</strong>
                   <div class="meta-ads-notification__title-actions inline-flex items-center gap-6">
                     ${
-                      contact
-                        ? `<a class="meta-ads-notification__email inline-flex items-center justify-center" ${renderMetaEmailActionAttributes(contact, entry.row, entry.notificationId)} href="${escapeHtml(buildMetaInitiateEmailHref(contact))}" title="Email centre about a Facebook advert" aria-label="Email ${escapeHtml(entry.row.serviceName)} about a Facebook advert"><i class="bi bi-envelope ui-icon" aria-hidden="true"></i></a>`
+                      contact?.email
+                        ? `<a class="meta-ads-notification__email inline-flex items-center justify-center" ${renderMetaEmailActionAttributes(contact, entry.row, entry.notificationId)} href="${escapeHtml(buildMetaInitiateEmailHref(contact, entry.row.serviceName))}" title="Email centre about a Facebook advert" aria-label="Email ${escapeHtml(entry.row.serviceName)} about a Facebook advert"><i class="bi bi-envelope ui-icon" aria-hidden="true"></i></a>`
                         : ""
                     }
                     <button type="button" data-meta-notification-dismiss title="Dismiss notification" aria-label="Dismiss notification">
@@ -4508,9 +4509,24 @@ function renderBreakoutScript() {
           return blocker;
         }
 
-        function closeMetaNoteModal() {
+        // A note typed but not saved is kept when the modal is dismissed (a
+        // click outside it, Esc), and comes back when it is opened again. Only
+        // the Close button and a saved note clear it.
+        const metaNoteDrafts = new Map();
+
+        function closeMetaNoteModal(discard) {
           const modal = document.querySelector("[data-meta-note-modal]");
           const shouldRefresh = modal instanceof HTMLElement && modal.dataset.refreshOnClose === "true";
+          const draftId = modal?.querySelector("[data-notification-id]")?.getAttribute("data-notification-id");
+          const draftBox = modal?.querySelector("[data-popup-note-text]");
+
+          if (draftId && draftBox instanceof HTMLTextAreaElement) {
+            if (discard === true || !draftBox.value) {
+              metaNoteDrafts.delete(draftId);
+            } else {
+              metaNoteDrafts.set(draftId, draftBox.value);
+            }
+          }
 
           modal?.remove();
 
@@ -4576,11 +4592,19 @@ function renderBreakoutScript() {
           document.body.append(overlay);
           renderLatestNoteList(notes, []);
 
-          closeButton.addEventListener("click", closeMetaNoteModal);
+          textarea.value = metaNoteDrafts.get(context.notificationId) || "";
+          closeButton.addEventListener("click", () => closeMetaNoteModal(true));
+          // Only a click that both starts and ends outside the modal closes
+          // it: selecting text and letting go outside does not.
+          let pressedOutside = false;
+          overlay.addEventListener("pointerdown", (event) => {
+            pressedOutside = event.target === overlay;
+          });
           overlay.addEventListener("click", (event) => {
-            if (event.target === overlay) {
+            if (event.target === overlay && pressedOutside) {
               closeMetaNoteModal();
             }
+            pressedOutside = false;
           });
 
           form.addEventListener("submit", async (event) => {
@@ -4899,9 +4923,10 @@ function renderBreakoutScript() {
         }
 
         // Builds the greeting line from the contact names, e.g.
-        // "Paula and Colleen", "Paula", or "there" when none are available.
+        // "Paula and Colleen" or "Paula". With nobody to name it is the
+        // service's own name, or "there" when that isn't known either.
         // De-duplicates so a shared name is not repeated.
-        function joinGreetingNames(names) {
+        function joinGreetingNames(names, serviceName) {
           const firstNames = [];
           (names || []).forEach((name) => {
             const first = firstNameOnly(name);
@@ -4911,7 +4936,7 @@ function renderBreakoutScript() {
           });
 
           if (firstNames.length === 0) {
-            return "there";
+            return String(serviceName || "").replace(/\\s+/g, " ").trim() || "there";
           }
 
           if (firstNames.length === 1) {
@@ -4923,7 +4948,7 @@ function renderBreakoutScript() {
 
         function buildTemplatedEmailBody(template, context) {
           const replacements = {
-            "<greeting_names>": joinGreetingNames([context.headTeacher, context.administrator]),
+            "<greeting_names>": joinGreetingNames([context.headTeacher, context.administrator], context.centreName),
             "<kindergarten_name>": context.kindergartenName || context.centreName,
             "<heading_text>": context.headingText,
             "<primary_text>": context.primaryText,
@@ -5006,7 +5031,7 @@ function renderBreakoutScript() {
               const greetingNames = joinGreetingNames([
                 emailConfirm.getAttribute("data-head-teacher") || "",
                 emailConfirm.getAttribute("data-administrator") || "",
-              ]);
+              ], centreName);
               const newEmail = await askMetaEmailNew(centreName);
 
               if (!newEmail) {

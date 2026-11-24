@@ -43,6 +43,8 @@ export type MetaNotificationHistoryRow = {
   waitlist: string;
   pressure: string;
   occurredAt: string;
+  // A Note row's own id, for editing it.
+  noteId?: number;
 };
 
 export type MetaNotificationHistoryKind = MetaNotificationHistoryRow["kind"];
@@ -262,6 +264,7 @@ type RawMetaHistoryRow = {
   waitlist: string | null;
   pressure: string | number | null;
   occurredAt: Date;
+  sortId?: bigint | number;
   totalRows: bigint | number;
 };
 
@@ -278,6 +281,7 @@ function mapHistoryRow(row: RawMetaHistoryRow): MetaNotificationHistoryRow {
     waitlist: row.waitlist ?? "",
     pressure: row.pressure == null ? "" : String(row.pressure),
     occurredAt: row.occurredAt.toISOString(),
+    ...(row.kind === "Note" && row.sortId != null ? { noteId: Number(row.sortId) } : {}),
   };
 }
 
@@ -373,6 +377,7 @@ export async function readLatestMetaRecommendationNotesForCentre(centreKey: numb
       '' AS "waitlist",
       '' AS "pressure",
       note."submittedAt" AS "occurredAt",
+      note."id" AS "sortId",
       0::bigint AS "totalRows"
     FROM "MetaRecommendationNote" note
     INNER JOIN "MetaRecommendationNotification" notification

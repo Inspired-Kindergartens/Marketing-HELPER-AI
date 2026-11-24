@@ -152,6 +152,34 @@ export function staffPhotoTaskDescription(centreName: string, reasons: readonly 
   ].join("\n");
 }
 
+export function missingTeamPhotoTaskDescription(centreName: string): string {
+  return [
+    `${centreName} has no team photo on its info sheet.`,
+    "Get a new team photo from the kindergarten, then put it on the info sheet: Info Sheets, the kindergarten, Photos, Team photo. Update the caption under it.",
+  ].join("\n");
+}
+
+// The team photo was removed from a kindergarten's info sheet: raises its
+// team photo task, as In progress, unless one is already open. Returns the
+// new task's id, or null when none was raised (a task is open, the sheet is
+// not in use, or it has a team photo).
+export async function raiseMissingTeamPhotoTask(deps: StaffPhotoDeps, centreKey: number, now = new Date()): Promise<number | null> {
+  const centre = (await deps.listCentres()).find((entry) => entry.centreKey === centreKey);
+  if (!centre || centre.teamPhotoAt) return null;
+  if (centre.staffPhotoTaskId != null && (await deps.taskOpen(centre.staffPhotoTaskId))) return null;
+  const due = new Date(now);
+  due.setDate(due.getDate() + STAFF_PHOTO_TASK_DAYS);
+  const taskId = await deps.createTask({
+    title: staffPhotoTaskTitle(centre.name),
+    description: missingTeamPhotoTaskDescription(centre.name),
+    centreKey: centre.centreKey,
+    dueDate: nzDate(due),
+    status: "in_progress",
+  });
+  await deps.mark(centre.onePagerId, now, taskId);
+  return taskId;
+}
+
 export type StaffPhotoCentre = {
   centreKey: number;
   name: string;
@@ -171,7 +199,7 @@ export type StaffPhotoDeps = {
   adverts(centreKey: number): Promise<TeacherAdvert[]>;
   // True when the task exists and is not done.
   taskOpen(taskId: number): Promise<boolean>;
-  createTask(input: { title: string; description: string; centreKey: number; dueDate: string }): Promise<number>;
+  createTask(input: { title: string; description: string; centreKey: number; dueDate: string; status?: string }): Promise<number>;
   // Records that changes up to `at` have been acted on (and the task, when one was made).
   mark(onePagerId: number, at: Date, taskId?: number): Promise<void>;
 };

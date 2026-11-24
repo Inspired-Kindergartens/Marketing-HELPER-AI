@@ -722,7 +722,7 @@ function renderBudgetScript(startYear: number): string {
             swap(result);
             // A modal is outside the swapped fragments: close it.
             var dialog = form.closest("[data-budget-dialog]");
-            if (dialog) { if (button) button.disabled = false; closeDialog(dialog); }
+            if (dialog) { if (button) button.disabled = false; dialog.removeAttribute("data-budget-draft"); closeDialog(dialog); }
           }).catch(function(error) { if (button) button.disabled = false; fail(error); });
         });
 
@@ -731,10 +731,15 @@ function renderBudgetScript(startYear: number): string {
           var dialog = document.querySelector('[data-budget-dialog="' + kind + '"]');
           if (!dialog) return false;
           var form = dialog.querySelector("form");
-          form.reset();
+          // Dismissed (a click outside, Esc) and opened again for the same
+          // thing: what was typed is still there. Cancel and a save clear it.
+          var draft = JSON.stringify([id || "", values]);
+          var kept = dialog.getAttribute("data-budget-draft") === draft;
+          dialog.setAttribute("data-budget-draft", draft);
+          if (!kept) form.reset();
           // Category is a drop-down of the current cards (new, still empty ones included).
           var categories = form.querySelector("[data-budget-categories]");
-          if (categories) {
+          if (categories && !kept) {
             var names = [];
             document.querySelectorAll('[data-budget-grid="' + kind + '"] [data-budget-card]').forEach(function(card) {
               names.push(card.getAttribute("data-budget-card"));
@@ -749,11 +754,13 @@ function renderBudgetScript(startYear: number): string {
               categories.appendChild(option);
             });
           }
-          Object.keys(values).forEach(function(key) {
-            var field = form.querySelector('[name="' + key + '"]');
-            if (field) field.value = values[key];
-          });
-          form.querySelector("[name=id]").value = id || "";
+          if (!kept) {
+            Object.keys(values).forEach(function(key) {
+              var field = form.querySelector('[name="' + key + '"]');
+              if (field) field.value = values[key];
+            });
+            form.querySelector("[name=id]").value = id || "";
+          }
           var fixed = dialog.getAttribute("data-submit");
           form.querySelector("[data-budget-submit]").textContent = fixed || (id ? "Save" : "Add");
           dialog.querySelector("[data-budget-dialog-title]").textContent = fixed ? dialog.getAttribute("data-noun") : (id ? "Edit " : "Add ") + dialog.getAttribute("data-noun");
@@ -770,9 +777,14 @@ function renderBudgetScript(startYear: number): string {
           else dialog.removeAttribute("open");
         }
         document.querySelectorAll("[data-budget-dialog]").forEach(function(dialog) {
-          // Clicking the backdrop closes it (Esc is handled natively).
+          // Clicking the backdrop closes it (Esc is handled natively). The click
+          // must start there too: selecting text and letting go outside the
+          // modal does not close it.
+          var pressedOutside = false;
+          dialog.addEventListener("pointerdown", function(event) { pressedOutside = event.target === dialog; });
           dialog.addEventListener("click", function(event) {
-            if (event.target === dialog) closeDialog(dialog);
+            if (event.target === dialog && pressedOutside) closeDialog(dialog);
+            pressedOutside = false;
           });
         });
 
@@ -882,7 +894,9 @@ function renderBudgetScript(startYear: number): string {
           } else if (target.closest("[data-budget-add-subscription]")) {
             openDialog("subscription", {});
           } else if (target.closest("[data-budget-dialog-cancel]")) {
-            closeDialog(target.closest("[data-budget-dialog]"));
+            var cancelled = target.closest("[data-budget-dialog]");
+            cancelled.removeAttribute("data-budget-draft");
+            closeDialog(cancelled);
           } else if (target.closest("[data-budget-new-category]")) {
             var newKind = target.closest("[data-budget-new-category]").getAttribute("data-budget-new-category");
             var name = (window.prompt("New category name", "") || "").trim();

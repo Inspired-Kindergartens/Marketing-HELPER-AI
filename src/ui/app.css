@@ -574,6 +574,11 @@ button:focus-visible {
   text-transform: var(--text-transform-label);
 }
 
+/* A label written as a sentence, not in the label capitals. */
+.field-label--sentence {
+  text-transform: none;
+}
+
 .form-control {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-control);
@@ -1018,6 +1023,24 @@ button:focus-visible {
   text-align: right;
 }
 
+/* A line of the list: the kindergarten's button, then its In use tick box
+   (a tick box cannot sit inside a button). */
+.one-pager-list__line {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 4rem;
+  align-items: center;
+  gap: 12px;
+}
+
+.one-pager-list__in-use {
+  display: flex;
+  justify-content: center;
+}
+
+.one-pager-list__in-use input {
+  margin: 0;
+}
+
 .one-pager-list__head span:first-child,
 .one-pager-list__name,
 .one-pager-list__person {
@@ -1110,19 +1133,14 @@ button:focus-visible {
   outline: 1px solid var(--color-active);
 }
 
-/* A note keeps the line breaks it was written with (a sent email's body). */
-.one-pager-notes__text {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
 /* A line between one note and the next. */
 .one-pager-notes .task-notes__item + .task-notes__item {
   border-top: 1px solid var(--color-border);
   padding-top: 10px;
 }
 
-.one-pager-photo__ai input {
+.one-pager-photo__ai input,
+.one-pager-crop__fixed input {
   margin: 0;
 }
 
@@ -4495,6 +4513,17 @@ body.readme-body {
 
 .task-board__column-body {
   padding: 10px;
+}
+
+/* Cards on another page of the column: the flex utility would otherwise
+   override the hidden attribute. */
+.task-card[hidden] {
+  display: none;
+}
+
+.task-board__pagination {
+  margin-top: auto;
+  padding: 0 10px 10px;
 }
 
 /* Compact cards so more tasks fit in view: the title drops from the 16px base

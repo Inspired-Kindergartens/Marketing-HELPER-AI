@@ -7,6 +7,7 @@ import {
   VALID_TASKS_PANEL_IDS,
 } from "../src/ui/tasks-app-shell.js";
 import { renderTaskDetailPanel } from "../src/ui/tasks/task-detail-panel.js";
+import { renderTaskBoardPanel, TASK_BOARD_PAGE_SIZE } from "../src/ui/tasks/task-board-panel.js";
 import { renderProjectsPanel } from "../src/ui/tasks/projects-panel.js";
 import type { TaskView } from "../src/storage/task-store.js";
 import type { ProjectRollup } from "../src/storage/project-store.js";
@@ -82,6 +83,30 @@ function baseShellOptions() {
     contactSuggestions: [],
   };
 }
+
+test("task board shows ten cards per column and pages the rest", () => {
+  const tasks = [
+    ...Array.from({ length: 23 }, (_, index) => buildTask({ id: index + 1, title: `Todo ${index + 1}` })),
+    ...Array.from({ length: 10 }, (_, index) => buildTask({ id: index + 101, status: "done" })),
+  ];
+  const html = renderTaskBoardPanel({ tasks, projects: [], members: [] });
+  const column = (status: string) => html.split(`data-status="${status}"`)[1].split("</section>")[0];
+
+  const todo = column("todo");
+  assert.equal(TASK_BOARD_PAGE_SIZE, 10);
+  assert.equal(todo.match(/<article /g)?.length, 23);
+  assert.equal(todo.match(/<article hidden /g)?.length, 13);
+  // The first ten, in board order, are the ones left showing.
+  assert.ok(todo.indexOf("<article hidden ") > todo.indexOf(">Todo 10<"));
+  assert.ok(todo.indexOf("<article hidden ") < todo.indexOf(">Todo 11<"));
+  assert.match(todo, /data-task-board-pagination data-page-count="3"/);
+  assert.match(todo, /Page 1 of 3/);
+  assert.match(todo, /task-board__column-count[^>]*>23</);
+
+  // Exactly ten fits on one page, and an empty column has nothing to page.
+  assert.doesNotMatch(column("done"), /data-task-board-pagination|<article hidden /);
+  assert.doesNotMatch(column("in_progress"), /data-task-board-pagination/);
+});
 
 test("resolveTasksFocusPanelId accepts only known panel ids and otherwise returns null", () => {
   assert.equal(resolveTasksFocusPanelId("task-board"), "task-board");

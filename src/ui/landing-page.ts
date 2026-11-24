@@ -1,5 +1,6 @@
 import type { TaskReminderFeed, TaskReminderView } from "../storage/task-store.js";
 import type { LandingIntelligenceFeed, LandingIntelligenceItem } from "../landing-intelligence.js";
+import { PRINT_ICON } from "./action-buttons.js";
 import { THEME_HEAD_SCRIPT, renderThemePicker } from "./theme.js";
 
 function escapeHtml(value: string) {
@@ -314,6 +315,32 @@ export type LandingPageOptions = {
   postmarkAlert?: PostmarkAlert | null;
 };
 
+// The footer's Centre Staff dialog. Upload takes the workbook that says which
+// Senior Teacher looks after each kindergarten; Download is the PDF of every
+// kindergarten's head teacher, administrator and other staff (Infocare's).
+function renderCentreStaffDialog(): string {
+  return `
+    <dialog class="wiki-modal text-body" data-centre-staff-dialog aria-label="Centre Staff">
+      <div class="wiki-modal__form flex flex-col gap-12">
+        <h2 class="wiki-modal__title text-strong">Centre Staff</h2>
+        <div class="flex items-center justify-between gap-12">
+          <span>Senior Teacher list</span>
+          <button type="button" class="button-md" data-centre-staff-upload><i class="bi bi-upload ui-icon" aria-hidden="true"></i><span>Upload</span></button>
+        </div>
+        <div class="flex items-center justify-between gap-12">
+          <span>Head Teachers, Administrators and staff</span>
+          <button type="button" class="button-md" data-centre-staff-download><i class="bi ${PRINT_ICON} ui-icon" aria-hidden="true"></i><span>Download</span></button>
+        </div>
+        <input type="file" data-centre-staff-file accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden />
+        <p class="wiki-modal__hint text-small" data-centre-staff-status aria-live="polite"></p>
+        <div class="wiki-modal__actions flex justify-end gap-8">
+          <button type="button" class="wiki-modal__cancel button-md" data-centre-staff-close><span>Close</span></button>
+        </div>
+      </div>
+    </dialog>
+  `;
+}
+
 export function renderLandingPage(options: LandingPageOptions = {}) {
   const tiles = [
     { label: "Marketing", description: "Infocare, Meta Ads & Google Analytics", href: "/app", primary: true },
@@ -393,10 +420,10 @@ export function renderLandingPage(options: LandingPageOptions = {}) {
       </nav>
       ${renderLandingIntelligenceFeed(options.intelligenceFeed)}
       <footer class="landing__footer flex justify-center flex-wrap gap-12">
-        <a class="landing__github inline-flex items-center gap-8 text-muted" href="/contacts/upload">
+        <button type="button" class="landing__restart inline-flex items-center gap-8 text-muted" data-centre-staff-open>
           <i class="bi bi-person-lines-fill" aria-hidden="true"></i>
-          <span>Upload Contacts</span>
-        </a>
+          <span>Centre Staff</span>
+        </button>
         <button type="button" class="landing__restart inline-flex items-center gap-8 text-muted" data-restart aria-label="Restart the server">
           <i class="bi bi-arrow-clockwise" aria-hidden="true"></i>
           <span class="landing__restart-label">Restart server</span>
@@ -426,7 +453,52 @@ export function renderLandingPage(options: LandingPageOptions = {}) {
     </main>
     ${remindersHtml}
     </div>
+    ${renderCentreStaffDialog()}
     <script>
+      // Centre Staff: Upload replaces the Senior Teacher workbook and shows
+      // the result in the dialog; Download fetches the staff PDF.
+      (function () {
+        var dialog = document.querySelector("[data-centre-staff-dialog]");
+        var open = document.querySelector("[data-centre-staff-open]");
+        if (!dialog || !open) return;
+        var status = dialog.querySelector("[data-centre-staff-status]");
+        var file = dialog.querySelector("[data-centre-staff-file]");
+        var upload = dialog.querySelector("[data-centre-staff-upload]");
+        function say(text) { if (status) status.textContent = text; }
+        open.addEventListener("click", function () {
+          say("");
+          if (typeof dialog.showModal === "function") dialog.showModal();
+          else dialog.setAttribute("open", "open");
+        });
+        dialog.querySelector("[data-centre-staff-close]").addEventListener("click", function () {
+          if (typeof dialog.close === "function") dialog.close();
+          else dialog.removeAttribute("open");
+        });
+        dialog.querySelector("[data-centre-staff-download]").addEventListener("click", function () {
+          window.location.href = "/api/centre-staff/pdf";
+        });
+        upload.addEventListener("click", function () { file.click(); });
+        file.addEventListener("change", function () {
+          var chosen = file.files && file.files[0];
+          if (!chosen) return;
+          var body = new FormData();
+          body.append("contacts", chosen);
+          upload.disabled = true;
+          say("Uploading…");
+          fetch("/api/centre-staff/senior-teachers", { method: "POST", body: body })
+            .then(function (res) { return res.json().catch(function () { return {}; }); })
+            .then(function (payload) {
+              say(payload.ok
+                ? "Senior Teachers updated for " + payload.kindergartens + " kindergartens."
+                : (payload.error || "The upload failed."));
+            })
+            .catch(function () { say("The upload failed."); })
+            .then(function () {
+              upload.disabled = false;
+              file.value = "";
+            });
+        });
+      })();
       (function () {
         var btn = document.querySelector("[data-restart]");
         if (!btn) return;

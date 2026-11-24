@@ -169,13 +169,19 @@ function leftColumn(content: OnePagerContent, level: LeftLevel, team: string | "
     const width = Math.min(LEFT.width, level.photoHeight * teamRatio);
     const height = width / teamRatio;
     const margin = [(LEFT.width - width) / 2, 0, 0, 5];
-    stack.push(
-      team === "placeholder"
-        ? { image: PLACEHOLDER_IMAGE, width, height, margin }
-        : { image: team, width, height, margin },
-    );
-    // Drawn after the photo, so they sit on top of it, in its top left corner.
-    stack.push(...badgeStack(badges, margin[0] + 6, 6 - height - margin[3]));
+    if (team === "placeholder" || badges.length === 0) {
+      stack.push({ image: team === "placeholder" ? PLACEHOLDER_IMAGE : team, width, height, margin });
+    } else {
+      // With badges the photo is placed apart from the column's flow, the
+      // badges are drawn after it (so they sit on top of it, in its top left
+      // corner), and then its room is taken. pdfmake leaves a drawn box out
+      // when less than its height is left in the column, which is the case
+      // under the photo of a full sheet (Tai o Fenua's): drawn before the
+      // room is taken, the box always has the photo's height to go in.
+      stack.push({ image: team, width, height, relativePosition: { x: margin[0], y: 0 } });
+      stack.push(...badgeStack(badges, margin[0] + 6, 6));
+      stack.push({ stack: [], margin: [0, height, 0, margin[3]] });
+    }
     if (content.teamCaption) {
       stack.push({ text: content.teamCaption, fontSize: 7.6, alignment: "center", lineHeight: CAPTION_LEADING });
     }

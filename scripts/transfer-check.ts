@@ -66,7 +66,7 @@ export const SETTINGS: Setting[] = [
 
 const FILES = [
   { path: "OAuth.json", purpose: "Google Analytics OAuth client" },
-  { path: "centre-contact-list.xlsx", purpose: "Centre contact list (Upload Contacts page recreates it)" },
+  { path: "centre-contact-list.xlsx", purpose: "Senior teacher of each kindergarten, optional (Centre Staff > Upload on the landing page recreates it)" },
 ];
 
 let failures = 0;

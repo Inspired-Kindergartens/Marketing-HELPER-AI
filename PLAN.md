@@ -43,7 +43,8 @@ One A4 portrait page, top to bottom:
 
 ## Crop, AI upscale, badge look (2026-11-24)
 - [x] Crop step shows the whole photo with a crop box: drag a corner to resize, drag inside to move
-- [x] Box keeps the slot's shape for photos 1-3; any shape for the team photo (shown whole on its card too)
+- [x] Tick box **Fix crop to the PDF's photo shape** (on when the dialog opens) for all four photos; unticked, the box is any shape
+- [x] Photo caption saves itself as it is typed (no Save caption button); label "Photo caption" in sentence case
 - [x] Upload is the box's own pixels, never enlarged (`OUTPUT_WIDTH` 2400)
 - [x] Too few pixels for the slot at 300 dpi (`onePagerPhotoDpi`) → upload answers `upscale: true`
 - [x] Upscale asks "Does this image contain real children?" first; Yes sends nothing; No → `POST .../images/:slot/upscale`
@@ -65,7 +66,18 @@ One A4 portrait page, top to bottom:
 - [x] **Email sent** badge once a Staff photo email is sent, until a new team photo is put in (`teamPhotoBadges`)
 - [x] A Staff photo email's note is the short line "Email sent for staff photo update"; earlier ones known by the ready-made subject
 - [x] Drawn into the preview PDF only (`?badges=1`); downloads never carry them (test)
+- [x] A sheet with no team photo (never put in, removed, or its file gone) gets **Staff photo needed** in the preview and **Team photo due** in the list, with no task open (`teamPhotoMissing`, 2026-11-24)
+- [x] Removing a team photo raises its task as In progress unless one is open (`raiseMissingTeamPhotoTask`); `scripts/one-pager-missing-team-photo-tasks.ts` for sheets already without one (2026-11-24)
 - [x] Tests, both readmes, build, server restarted, preview checked as a picture
+
+## Head teacher and administrator from Infocare (2026-11-24)
+- [x] Head teacher and administrator come from Infocare's stored staff list (jobs `Head Teacher` / `Administrator`, current on the day); never from the uploaded workbook, never guessed from another job.
+- [x] Greeting: head teacher alone when there is no administrator; the service's name when there is neither (Marketing emails, Info Sheets email, job description approval).
+- [x] Email address comes from the Info Sheet.
+- [x] Upload Contacts kept for the senior teacher only: needs just `Kindergarten` and `Key Senior Teacher`; the app works without the workbook.
+- [x] Staff list fetched from Infocare once a day (`runStaffListSync`), read-only.
+- [x] Tests, both readmes, build, server restarted, Gwen Rogers checked.
+- [x] Landing footer **Centre Staff** button opens a dialog (replaces the Upload Contacts page): **Upload** the Senior Teacher workbook, **Download** the PDF of each kindergarten's head teacher, administrator and other staff.
 
 ## Versions removed, people columns (2026-11-18)
 - [x] Removed saved versions: Versions panel, **Save version**, the list's Version column, both version routes, `OnePagerVersion` and `OnePager.version` (migration `20261118020000_one_pager_drop_versions`).

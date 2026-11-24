@@ -2,7 +2,7 @@ import { Prisma } from "../../generated/prisma/client.js";
 import { prisma } from "../db.js";
 import { formatSalaryRange as formatSalaryRangePure, type PayScaleRow } from "./jd-pay-scale.js";
 import { sanitizeJdBlurbHtml } from "./jd-sanitize-html.js";
-import { matchCentreContact, readCentreContactList } from "./centre-contact-store.js";
+import { matchCentreContact, readSeniorTeacherList } from "./centre-contact-store.js";
 
 // Prisma's nullable Json columns need the JsonNull sentinel instead of a bare
 // `null` (a bare null would mean "don't change this field" on update).
@@ -618,7 +618,7 @@ function initialsOf(fullName: string): string {
 // names are returned as-is.
 async function resolveSltNames(locationDisplay: string, profiles: { seniorTeacherName: string }[]): Promise<string[]> {
   const [contacts, members] = await Promise.all([
-    readCentreContactList(),
+    readSeniorTeacherList(),
     prisma.member.findMany({ where: { active: true }, select: { name: true } }),
   ]);
   const contact = matchCentreContact(locationDisplay, contacts);

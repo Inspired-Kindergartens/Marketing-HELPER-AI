@@ -14,10 +14,12 @@ export const ONE_PAGER_EMAIL_LABEL: Record<OnePagerEmailKind, string> = {
 // How long the kindergarten is given to reply.
 const REPLY_BUSINESS_DAYS = 3;
 
-// "Paula and Colleen", "Paula", or "there": first names only, each once.
-export function joinGreetingNames(names: ReadonlyArray<string | null | undefined>): string {
+// "Paula and Colleen" or "Paula": first names only, each once. With nobody
+// to name, the service's own name ("Papamoa Kindergarten"), or "there" when
+// that isn't known either.
+export function joinGreetingNames(names: ReadonlyArray<string | null | undefined>, serviceName = ""): string {
   const firstNames = [...new Set(names.map((name) => (name ?? "").trim().split(/\s+/)[0] ?? "").filter(Boolean))];
-  if (firstNames.length === 0) return "there";
+  if (firstNames.length === 0) return serviceName.replace(/\s+/g, " ").trim() || "there";
   if (firstNames.length === 1) return firstNames[0];
   return `${firstNames.slice(0, -1).join(", ")} and ${firstNames[firstNames.length - 1]}`;
 }
@@ -79,6 +81,12 @@ export function onePagerEmailNote(email: OnePagerEmail, kind?: unknown): string 
   return `Info sheet email sent${email.subject ? `: ${email.subject}` : ""}\n\n${email.body}`.trim();
 }
 
+// The note kept when the In use box in the list is ticked or unticked: what
+// was done, then the reason typed.
+export function onePagerInUseNote(inUse: boolean, reason: string): string {
+  return `${inUse ? "Marked in use" : "Marked not in use"}: ${reason}`;
+}
+
 // A note kept for a Staff photo email. Ones sent before the short line was
 // used are known by the ready-made subject.
 const STAFF_PHOTO_EMAIL_NOTE = /^(Email sent for staff photo update|Info sheet email sent: Updated team photo for )/;
@@ -90,7 +98,21 @@ export const TEAM_PHOTO_EMAIL_SENT_BADGE = "Email sent";
 // (the team photo task is open), and the kindergarten has been emailed for
 // one since the photo in the slot was put there.
 export function teamPhotoBadges(input: { photoDue: boolean; teamPhotoAt: Date | null; notes: ReadonlyArray<{ text: string; at: string }> }): string[] {
-  const since = input.teamPhotoAt?.getTime() ?? Number.NEGATIVE_INFINITY;
-  const emailed = input.notes.some((note) => STAFF_PHOTO_EMAIL_NOTE.test(note.text) && new Date(note.at).getTime() > since);
+  const emailed = staffPhotoEmailSent(input.teamPhotoAt, input.notes);
   return [...(input.photoDue ? [TEAM_PHOTO_NEEDED_BADGE] : []), ...(emailed ? [TEAM_PHOTO_EMAIL_SENT_BADGE] : [])];
+}
+
+// True when the kindergarten has been emailed for a new team photo since the
+// photo in the team slot was put there (or the slot is empty). Putting a new
+// team photo in makes it false again.
+export function staffPhotoEmailSent(teamPhotoAt: Date | null, notes: ReadonlyArray<{ text: string; at: string }>): boolean {
+  const since = teamPhotoAt?.getTime() ?? Number.NEGATIVE_INFINITY;
+  return notes.some((note) => STAFF_PHOTO_EMAIL_NOTE.test(note.text) && new Date(note.at).getTime() > since);
+}
+
+// The badge beside a kindergarten in the list: its team photo is due (the
+// task is open), it has been emailed for one, or both. "" when neither.
+export function teamPhotoListBadge(input: { photoDue: boolean; emailSent: boolean }): string {
+  if (input.photoDue) return input.emailSent ? "Team photo due email sent" : "Team photo due";
+  return input.emailSent ? "Staff photo email sent" : "";
 }

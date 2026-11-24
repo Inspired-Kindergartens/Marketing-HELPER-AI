@@ -1398,6 +1398,9 @@ model OnePager {
   // then are not raised again).
   staffPhotoTaskId    Int?
   staffPhotoCheckedAt DateTime?
+  // The "In use" tick in the Kindergartens list. A sheet that is not in use
+  // is left out of team photo upkeep: no task, no badge.
+  inUse            Boolean           @default(true)
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
   centre           CentreReference   @relation(fields: [centreKey], references: [centreKey], onDelete: Cascade, onUpdate: Cascade)

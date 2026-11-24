@@ -2,17 +2,26 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { inflateRawSync } from "node:zlib";
 
+// Who to contact at a kindergarten. Built by centre-people-store: the head
+// teacher and administrator are Infocare's (its stored staff list), the email
+// is the Info Sheet's, and only the senior teacher comes from the uploaded
+// workbook this file reads.
 export type CentreContact = {
   kindergarten: string;
   headTeacher: string;
+  // "" when Infocare has nobody in the Administrator job.
   administrator: string;
-  // First name only in the sheet ("Marion"); optional column.
+  // First name only in the sheet ("Marion").
   keySeniorTeacher: string;
   email: string;
 };
 
-export type CentreContactListStats = {
-  contacts: CentreContact[];
+// One row of the uploaded workbook: the kindergarten and its senior teacher.
+// Nothing else in the workbook is read.
+export type SeniorTeacherEntry = Pick<CentreContact, "kindergarten" | "keySeniorTeacher">;
+
+export type SeniorTeacherListStats = {
+  contacts: SeniorTeacherEntry[];
   rowCount: number;
 };
 
@@ -160,7 +169,7 @@ function getDistinctiveTokens(value: string) {
     .filter((token) => token.length >= 4 && !["oscar"].includes(token));
 }
 
-export function matchCentreContact(serviceName: string, contacts: readonly CentreContact[]) {
+export function matchCentreContact<T extends { kindergarten: string }>(serviceName: string, contacts: readonly T[]): T | null {
   const normalizedServiceName = normalizeCentreContactName(serviceName);
   const serviceTokens = new Set(getDistinctiveTokens(serviceName));
 
@@ -186,11 +195,13 @@ export function matchCentreContact(serviceName: string, contacts: readonly Centr
   );
 }
 
-export async function readCentreContactList(filePath = join(process.cwd(), "centre-contact-list.xlsx")) {
-  return (await readCentreContactListStats(filePath)).contacts;
+// The uploaded workbook, read for the senior teacher of each kindergarten and
+// nothing else. The app works without it: [] when there is no workbook.
+export async function readSeniorTeacherList(filePath = join(process.cwd(), "centre-contact-list.xlsx")) {
+  return (await readSeniorTeacherListStats(filePath)).contacts;
 }
 
-export async function readCentreContactListStats(filePath = join(process.cwd(), "centre-contact-list.xlsx")) {
+export async function readSeniorTeacherListStats(filePath = join(process.cwd(), "centre-contact-list.xlsx")): Promise<SeniorTeacherListStats> {
   try {
     const workbook = await readFile(filePath);
     const entries = readZipEntries(workbook);
@@ -198,12 +209,9 @@ export async function readCentreContactListStats(filePath = join(process.cwd(), 
     const rows = parseSheetRows(readZipEntryText(workbook, entries, "xl/worksheets/sheet1.xml"), sharedStrings);
     const headers = rows[0] ?? [];
     const kindergartenIndex = headers.indexOf("Kindergarten");
-    const headTeacherIndex = headers.indexOf("Head Teacher");
     const keySeniorTeacherIndex = headers.indexOf("Key Senior Teacher");
-    const administratorIndex = headers.indexOf("Administrator");
-    const emailIndex = headers.indexOf("Email");
 
-    if (kindergartenIndex < 0 || headTeacherIndex < 0 || administratorIndex < 0 || emailIndex < 0) {
+    if (kindergartenIndex < 0 || keySeniorTeacherIndex < 0) {
       return { contacts: [], rowCount: 0 };
     }
 
@@ -211,12 +219,9 @@ export async function readCentreContactListStats(filePath = join(process.cwd(), 
     const contacts = dataRows
       .map((row) => ({
         kindergarten: (row[kindergartenIndex] ?? "").trim(),
-        headTeacher: (row[headTeacherIndex] ?? "").trim(),
-        administrator: (row[administratorIndex] ?? "").trim(),
-        keySeniorTeacher: keySeniorTeacherIndex < 0 ? "" : (row[keySeniorTeacherIndex] ?? "").trim(),
-        email: (row[emailIndex] ?? "").trim(),
+        keySeniorTeacher: (row[keySeniorTeacherIndex] ?? "").trim(),
       }))
-      .filter((contact) => contact.kindergarten && contact.email);
+      .filter((contact) => contact.kindergarten);
 
     return { contacts, rowCount: dataRows.length };
   } catch {

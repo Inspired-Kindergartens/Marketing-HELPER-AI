@@ -74,7 +74,7 @@ function renderPanelActions(panelId: string, options: JdAppShellOptions): string
         ${jd.blurbHtml == null && jd.centreKey != null ? `data-blurb-generate-url="/api/jd/${jd.id}/blurb/generate"` : ""}
         data-approval-to="${escapeHtml(contact?.email ?? "")}"
         data-approval-subject="${escapeHtml(JD_APPROVAL_EMAIL_SUBJECT)}"
-        data-approval-body="${escapeHtml(buildJdApprovalEmailText(contact?.headTeacher ?? "", contact?.keySeniorTeacher ?? "", jd.blurbHtml ?? ""))}"
+        data-approval-body="${escapeHtml(buildJdApprovalEmailText(contact?.headTeacher ?? "", contact?.keySeniorTeacher ?? "", jd.blurbHtml ?? "", contact?.kindergarten ?? ""))}"
       ><i class="bi bi-envelope-plus ui-icon" aria-hidden="true"></i><span>Generate Email</span></a>
       ${renderPrintAction({ label: "Download this job description as a PDF to print", attributes: `data-jd-action="pdf" data-jd-id="${jd.id}"` })}
       <button type="submit" class="panel-action-button" form="jd-edit-${jd.id}"><i class="bi bi-save ui-icon" aria-hidden="true"></i><span>Save</span></button>

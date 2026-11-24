@@ -11,7 +11,7 @@ import {
   type AiConfig,
 } from "./ai/config.js";
 import { prisma } from "./db.js";
-import { normalizeCentreContactName, readCentreContactList } from "./storage/centre-contact-store.js";
+import { normalizeCentreContactName, readSeniorTeacherList } from "./storage/centre-contact-store.js";
 
 export type LandingIntelligenceItem = {
   id: string;
@@ -914,7 +914,7 @@ function sanitizeFeed(feed: LandingIntelligenceFeed): LandingIntelligenceFeed {
 
 async function readOwnedKindergartenReferences(): Promise<OwnedKindergartenReference[]> {
   const [contacts, centres] = await Promise.all([
-    readCentreContactList(),
+    readSeniorTeacherList(),
     prisma.centreReference.findMany({ select: { name: true } }).catch(() => []),
   ]);
   const names = new Set<string>();

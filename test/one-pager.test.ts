@@ -42,6 +42,7 @@ import {
   findStaffPhotoReasons,
   isFullTimeTeacherAdvert,
   isTeachingJob,
+  raiseMissingTeamPhotoTask,
   type StaffPhotoCentre,
   type StaffPhotoDeps,
   type StaffRow,
@@ -58,7 +59,7 @@ import {
   type SlotImageRegenerator,
 } from "../src/image-ai/photo-slot.js";
 import { ONE_PAGER_FIELD_MAX } from "../src/one-pager/template.js";
-import { addBusinessDays, buildOnePagerEmail, joinGreetingNames, onePagerEmailNote, teamPhotoBadges } from "../src/one-pager/email.js";
+import { addBusinessDays, buildOnePagerEmail, joinGreetingNames, onePagerEmailNote, staffPhotoEmailSent, teamPhotoBadges, teamPhotoListBadge } from "../src/one-pager/email.js";
 
 test("supplied info sheets cover all 26 centres and leave out the mislabelled OPEYS file", () => {
   assert.equal(ONE_PAGER_REFERENCES.length, 26);
@@ -376,12 +377,219 @@ test("team photo: a change raises one task for that kindergarten, and no second 
   assert.doesNotMatch(source("../src/storage/staff-photo-store.ts") + source("../src/one-pager/staff-photo.ts"), /createInfocareClient|client\.request/);
 });
 
+test("team photo: removing the team photo raises its task as In progress, unless one is open", async () => {
+  const centre: StaffPhotoCentre = { centreKey: 108, name: "Avenues Kindergarten", onePagerId: 1, teamPhotoAt: new Date("2026-11-01T00:00:00Z"), createdAt: new Date("2026-10-01T00:00:00Z"), staffPhotoCheckedAt: null, staffPhotoTaskId: null };
+  const tasks: Array<{ title: string; description: string; centreKey: number; dueDate: string; status?: string; open: boolean }> = [];
+  const deps: StaffPhotoDeps = {
+    listCentres: async () => [centre],
+    staff: async () => [],
+    adverts: async () => [],
+    taskOpen: async (taskId) => tasks[taskId - 1]?.open ?? false,
+    createTask: async (input) => tasks.push({ ...input, open: true }),
+    mark: async (_onePagerId, at, taskId) => {
+      centre.staffPhotoCheckedAt = at;
+      if (taskId != null) centre.staffPhotoTaskId = taskId;
+    },
+  };
+  const now = new Date("2026-11-24T00:00:00Z");
+  // A sheet that still has its team photo, or is not listed (not in use), raises nothing.
+  assert.equal(await raiseMissingTeamPhotoTask(deps, 108, now), null);
+  assert.equal(await raiseMissingTeamPhotoTask(deps, 109, now), null);
+  centre.teamPhotoAt = null;
+  assert.equal(await raiseMissingTeamPhotoTask(deps, 108, now), 1);
+  assert.deepEqual({ ...tasks[0], description: "" }, { title: "Update the team photo: Avenues Kindergarten", description: "", centreKey: 108, dueDate: "2026-12-08", status: "in_progress", open: true });
+  assert.match(tasks[0].description, /^Avenues Kindergarten has no team photo on its info sheet\.\n/);
+  assert.equal(centre.staffPhotoTaskId, 1);
+  // No second task while that one is open; a new one once it is done.
+  assert.equal(await raiseMissingTeamPhotoTask(deps, 108, now), null);
+  tasks[0].open = false;
+  assert.equal(await raiseMissingTeamPhotoTask(deps, 108, now), 2);
+
+  // The Remove button does it: only for the team photo, and a failure never stops the removal.
+  const rootDir = mkdtempSync(join(tmpdir(), "one-pager-test-"));
+  const removedFrom: number[] = [];
+  const app = Fastify();
+  registerOnePagerRoutes(app, {
+    store: memoryStore().store,
+    rootDir,
+    staffPhoto: {
+      check: async () => undefined,
+      openTasks: async () => new Map(removedFrom.map((key) => [key, 9])),
+      photoRemoved: async (centreKey) => {
+        if (centreKey === 109) throw new Error("no tasks storage");
+        removedFrom.push(centreKey);
+      },
+    },
+  });
+  try {
+    await app.inject({ method: "POST", url: "/api/one-pager/108/images/photo1/delete" });
+    assert.deepEqual(removedFrom, []);
+    const removed = await app.inject({ method: "POST", url: "/api/one-pager/108/images/team/delete" });
+    assert.deepEqual(removedFrom, [108]);
+    // The card redrawn has the new task's button.
+    assert.match(removed.json().fragments.photos, /name="task" value="9">/);
+    assert.equal((await app.inject({ method: "POST", url: "/api/one-pager/109/images/team/delete" })).statusCode, 200);
+  } finally {
+    rmSync(rootDir, { recursive: true, force: true });
+  }
+  assert.match(source("../src/server.ts"), /photoRemoved: \(centreKey\) => raiseMissingTeamPhotoTask\(staffPhotoStore, centreKey\)/);
+});
+
 test("team photo: the list marks a kindergarten whose photo is due, and its Team photo card opens the task", () => {
   const html = renderOnePagerAppShell({ ...pageData(true), photoTasks: { 108: 55 } });
   assert.match(html, /Avenues Kindergarten<span class="badge badge--warning" data-one-pager-photo-due>/);
   assert.equal((html.match(/data-one-pager-photo-due/g) ?? []).length, 1);
   assert.match(html, /<form class="flex" action="\/tasks" method="get"><button type="submit" class="button-sm" name="task" value="55">/);
   assert.doesNotMatch(renderOnePagerAppShell(pageData(true)), /data-one-pager-photo-due|Team photo due/);
+});
+
+test("team photo: the list's badge says when the kindergarten has been emailed for a new photo, until one is put in", () => {
+  assert.equal(teamPhotoListBadge({ photoDue: true, emailSent: false }), "Team photo due");
+  assert.equal(teamPhotoListBadge({ photoDue: true, emailSent: true }), "Team photo due email sent");
+  assert.equal(teamPhotoListBadge({ photoDue: false, emailSent: true }), "Staff photo email sent");
+  assert.equal(teamPhotoListBadge({ photoDue: false, emailSent: false }), "");
+
+  // Emailed counts from the photo in the team slot: a newer photo clears it.
+  const sent = [{ text: "Email sent for staff photo update", at: "2026-11-19T01:00:00Z" }];
+  assert.equal(staffPhotoEmailSent(new Date("2026-11-17T00:00:00Z"), sent), true);
+  assert.equal(staffPhotoEmailSent(null, sent), true);
+  assert.equal(staffPhotoEmailSent(new Date("2026-11-20T00:00:00Z"), sent), false);
+  assert.equal(staffPhotoEmailSent(null, [{ text: "Rang about the photo", at: "2026-11-19T01:00:00Z" }]), false);
+
+  // Due and emailed: the one badge says both.
+  const both = renderOnePagerAppShell({ ...pageData(true), photoTasks: { 108: 55 }, photoEmails: { 108: true } });
+  assert.match(both, /Avenues Kindergarten<span class="badge badge--warning" data-one-pager-photo-due><i class="bi bi-camera" aria-hidden="true"><\/i> Team photo due email sent<\/span>/);
+  assert.doesNotMatch(both, /data-one-pager-photo-emailed/);
+  // Emailed with no task open: its own badge.
+  const emailed = renderOnePagerAppShell({ ...pageData(true), photoEmails: { 108: true } });
+  assert.match(emailed, /Avenues Kindergarten<span class="badge badge--warning" data-one-pager-photo-emailed><i class="bi bi-envelope" aria-hidden="true"><\/i> Staff photo email sent<\/span>/);
+  assert.doesNotMatch(emailed, /data-one-pager-photo-due/);
+});
+
+test("team photo: a sheet with no team photo (removed, or its file gone) gets the badges with no task open", async () => {
+  // The list marks it from photoMissing alone; a sheet not in use is left alone.
+  const data = pageData(true);
+  assert.match(renderOnePagerAppShell({ ...data, photoMissing: { 108: true } }), /Avenues Kindergarten<span class="badge badge--warning" data-one-pager-photo-due><i class="bi bi-camera" aria-hidden="true"><\/i> Team photo due<\/span>/);
+  assert.match(renderOnePagerAppShell({ ...data, photoMissing: { 108: true }, photoEmails: { 108: true } }), /Team photo due email sent<\/span>/);
+  data.onePagers[0].inUse = false;
+  assert.doesNotMatch(renderOnePagerAppShell({ ...data, photoMissing: { 108: true } }), /data-one-pager-photo-due/);
+
+  const { app, rows, rootDir, close } = await buildApp();
+  const size = async (url: string) => (await app.inject({ method: "GET", url })).rawPayload.length;
+  try {
+    // No team photo yet: due in the list, Staff photo needed in the preview only.
+    assert.match((await app.inject({ method: "GET", url: "/one-pager?centre=108" })).body, /Avenues Kindergarten<span class="badge badge--warning" data-one-pager-photo-due>/);
+    assert.ok((await size("/api/one-pager/108/pdf?inline=1&badges=1")) > (await size("/api/one-pager/108/pdf")));
+
+    // A team photo put in: no badge.
+    const added = await app.inject({ method: "POST", url: "/api/one-pager/108/images/team", ...upload(png()) });
+    assert.doesNotMatch(added.json().fragments.list, /data-one-pager-photo-due/);
+    assert.equal(await size("/api/one-pager/108/pdf?inline=1&badges=1"), await size("/api/one-pager/108/pdf?inline=1"));
+
+    // Its file gone: missing again.
+    const stored = rows[0].images.find((image) => image.slot === "team")!;
+    rmSync(join(rootDir, stored.storagePath));
+    assert.match((await app.inject({ method: "GET", url: "/one-pager?centre=108" })).body, /data-one-pager-photo-due/);
+    assert.ok((await size("/api/one-pager/108/pdf?inline=1&badges=1")) > (await size("/api/one-pager/108/pdf?inline=1")));
+
+    // Put in again, then removed: the badge comes back at once.
+    await app.inject({ method: "POST", url: "/api/one-pager/108/images/team", ...upload(png()) });
+    const removed = await app.inject({ method: "POST", url: "/api/one-pager/108/images/team/delete" });
+    assert.match(removed.json().fragments.list, /Avenues Kindergarten<span class="badge badge--warning" data-one-pager-photo-due>/);
+  } finally {
+    close();
+  }
+});
+
+test("in use: the list's tick box asks for a reason, keeps it as a note, and a kindergarten not in use needs no staff photo", async () => {
+  // Every kindergarten has the tick box beside its button, ticked until it is taken off.
+  const html = renderOnePagerAppShell({ ...pageData(true), photoTasks: { 108: 55 }, photoEmails: { 108: true } });
+  assert.match(html, /<span>Last edited<\/span><\/div><span class="one-pager-list__in-use">In use<\/span>/);
+  assert.match(html, /<\/button>\s*<label class="one-pager-list__in-use"><input type="checkbox" checked data-one-pager-in-use="108" data-centre-name="Avenues Kindergarten"/);
+  assert.match(html, /<input type="checkbox" checked data-one-pager-in-use="109"/);
+  // The tick box is beside the button, never inside it.
+  assert.doesNotMatch(html, /<button type="submit" class="one-pager-list__row"(?:(?!<\/button>)[\s\S])*data-one-pager-in-use/);
+  // The reason box opens filled in, and the tick is only kept once it is saved.
+  assert.match(html, /<dialog[^>]*data-one-pager-in-use-dialog[\s\S]*?<textarea class="form-control" name="reason"[^>]*required>As directed by the kindergarten<\/textarea>/);
+  assert.match(html, /post\("\/api\/one-pager\/" \+ centre \+ "\/in-use", \{ inUse: inUsePending\.ticked, reason: /);
+  assert.match(html, /inUseDialog\.addEventListener\("close", undoInUse\)/);
+
+  // Not in use: unticked, with no staff photo badge and no task button.
+  const data = pageData(true);
+  data.onePagers[0].inUse = false;
+  const off = renderOnePagerAppShell({ ...data, photoTasks: { 108: 55 }, photoEmails: { 108: true } });
+  assert.match(off, /<input type="checkbox" data-one-pager-in-use="108"/);
+  assert.doesNotMatch(off, /data-one-pager-photo-due|data-one-pager-photo-emailed|Team photo due/);
+
+  // The check and the open tasks leave out a sheet that is not in use.
+  const photoStore = source("../src/storage/staff-photo-store.ts");
+  assert.match(photoStore, /where: \{ inUse: true, centre: \{ ignored: false, openStatus: "Open" \} \}/);
+  assert.match(photoStore, /where: \{ inUse: true, staffPhotoTaskId: \{ not: null \} \}/);
+
+  const rootDir = mkdtempSync(join(tmpdir(), "one-pager-test-"));
+  const memory = memoryStore();
+  const notes: Array<{ centreKey: number; text: string }> = [];
+  const app = Fastify();
+  registerOnePagerRoutes(app, {
+    store: memory.store,
+    rootDir,
+    staffPhoto: { check: async () => undefined, openTasks: async () => new Map([[108, 7]]) },
+    notes: {
+      list: async (centre) => notes.filter((note) => note.centreKey === centre.centreKey).map((note) => ({ id: notes.indexOf(note) + 1, heading: "Info sheet", text: note.text, at: "2026-11-24T01:00:00Z" })).reverse(),
+      add: async (centre, text) => void notes.push({ centreKey: centre.centreKey, text }),
+      edit: async () => undefined,
+    },
+  });
+  try {
+    const before = await app.inject({ method: "GET", url: "/api/one-pager/108/pdf?inline=1&badges=1" });
+    const edited = memory.rows[0].updatedAt;
+
+    // Unticked from the open kindergarten: its list, notes and photos are redrawn.
+    const unticked = await app.inject({ method: "POST", url: "/api/one-pager/108/in-use", payload: { inUse: false, reason: " As directed by the kindergarten ", selected: 108 } });
+    assert.equal(unticked.statusCode, 200);
+    assert.equal(memory.rows[0].inUse, false);
+    assert.equal(memory.rows[0].updatedAt, edited);
+    assert.deepEqual(notes, [{ centreKey: 108, text: "Marked not in use: As directed by the kindergarten" }]);
+    assert.deepEqual(Object.keys(unticked.json().fragments).sort(), ["list", "notes", "photos"]);
+    assert.match(unticked.json().fragments.list, /<input type="checkbox" data-one-pager-in-use="108"/);
+    assert.doesNotMatch(unticked.json().fragments.list, /data-one-pager-photo-due/);
+    assert.match(unticked.json().fragments.notes, /Marked not in use: As directed by the kindergarten/);
+    assert.doesNotMatch(unticked.json().fragments.photos, /Team photo due/);
+    // The preview loses Staff photo needed.
+    const after = await app.inject({ method: "GET", url: "/api/one-pager/108/pdf?inline=1&badges=1" });
+    assert.ok(after.rawPayload.length < before.rawPayload.length);
+
+    // Ticked again, the photo is asked for again.
+    const ticked = await app.inject({ method: "POST", url: "/api/one-pager/108/in-use", payload: { inUse: true, reason: "They are back", selected: 108 } });
+    assert.equal(memory.rows[0].inUse, true);
+    assert.equal(notes[1].text, "Marked in use: They are back");
+    assert.match(ticked.json().fragments.list, /data-one-pager-photo-due/);
+
+    // Another kindergarten's tick, or the list with none open, redraws the list only.
+    const other = await app.inject({ method: "POST", url: "/api/one-pager/109/in-use", payload: { inUse: false, reason: "Closed for building work", selected: 108 } });
+    assert.deepEqual(Object.keys(other.json().fragments), ["list"]);
+    assert.match(other.json().fragments.list, /<input type="checkbox" data-one-pager-in-use="109"/);
+    assert.match(other.json().fragments.list, /name="centre" value="108" aria-current="true"/);
+    const none = await app.inject({ method: "POST", url: "/api/one-pager/109/in-use", payload: { inUse: true, reason: "Open again", selected: null } });
+    assert.deepEqual(Object.keys(none.json().fragments), ["list"]);
+    assert.doesNotMatch(none.json().fragments.list, /aria-current/);
+
+    // A reason is needed, and nothing changes without one.
+    assert.equal((await app.inject({ method: "POST", url: "/api/one-pager/108/in-use", payload: { inUse: false, reason: "  " } })).statusCode, 400);
+    assert.equal((await app.inject({ method: "POST", url: "/api/one-pager/108/in-use", payload: { inUse: "no", reason: "x" } })).statusCode, 400);
+    assert.equal((await app.inject({ method: "POST", url: "/api/one-pager/999/in-use", payload: { inUse: false, reason: "x" } })).statusCode, 404);
+    assert.equal(memory.rows[0].inUse, true);
+    assert.equal(notes.length, 4);
+
+    // Without the notes storage the reason cannot be kept, so the tick is not either.
+    const bare = Fastify();
+    const bareMemory = memoryStore();
+    registerOnePagerRoutes(bare, { store: bareMemory.store, rootDir });
+    assert.equal((await bare.inject({ method: "POST", url: "/api/one-pager/108/in-use", payload: { inUse: false, reason: "x" } })).statusCode, 503);
+    assert.equal(bareMemory.rows.length, 0);
+  } finally {
+    rmSync(rootDir, { recursive: true, force: true });
+  }
 });
 
 test("team photo: the names under an imported photo are checked against today's staff", () => {
@@ -403,6 +611,9 @@ test("email: the two ready-made emails greet by first name and give three workin
   assert.equal(joinGreetingNames(["Paula Smith", " Colleen Jones ", "Paula Smith", null]), "Paula and Colleen");
   assert.equal(joinGreetingNames(["Paula Smith"]), "Paula");
   assert.equal(joinGreetingNames([null, ""]), "there");
+  // No administrator: the head teacher alone. Neither: the service's name.
+  assert.equal(joinGreetingNames(["Kathryn Hawkes", ""], "Gwen Rogers  Kindergarten"), "Kathryn");
+  assert.equal(joinGreetingNames(["", ""], "Papamoa  Kindergarten"), "Papamoa Kindergarten");
   // Thursday plus three working days is the next Tuesday.
   assert.equal(addBusinessDays(new Date(2026, 10, 19), 3).getDate(), 24);
 
@@ -443,6 +654,9 @@ test("preview badges: staff photo needed, and email sent, over the team photo in
   assert.deepEqual(badged.fit, plain.fit);
   assert.ok(badged.buffer.length > plain.buffer.length);
   assert.equal(pageCount((await renderOnePagerPdf(content, {}, { teamBadges: ["Staff photo needed"] })).buffer), 1);
+  // The badges are drawn before the photo's room is taken: on a full sheet
+  // (Tai o Fenua's) pdfmake dropped a box drawn with no room left under the photo.
+  assert.match(source("../src/ui/one-pager-pdf.ts"), /relativePosition: \{ x: margin\[0\], y: 0 \} \}\);\s*stack\.push\(\.\.\.badgeStack\(badges, margin\[0\] \+ 6, 6\)\);\s*stack\.push\(\{ stack: \[\], margin: \[0, height, 0, margin\[3\]\] \}\);/);
 
   // Only the preview asks for them: the page's preview does, the download link does not.
   const page = renderOnePagerAppShell(pageData(true));
@@ -456,7 +670,7 @@ test("preview badges: staff photo needed, and email sent, over the team photo in
     store: memoryStore().store,
     rootDir,
     staffPhoto: { check: async () => undefined, openTasks: async () => new Map([[108, 7]]) },
-    notes: { list: async () => [{ heading: "Info sheet", ...sent }], add: async () => undefined },
+    notes: { list: async () => [{ id: 1, heading: "Info sheet", ...sent }], add: async () => undefined, edit: async () => undefined },
   });
   try {
     const download = await app.inject({ method: "GET", url: "/api/one-pager/108/pdf" });
@@ -483,8 +697,9 @@ test("email: the button sends to the service email, and a sent email is kept as 
     rootDir,
     contactNames: async () => ["Paula Smith", "Colleen Jones"],
     notes: {
-      list: async (centre) => notes.filter((note) => note.centreKey === centre.centreKey).map((note) => ({ heading: "Info sheet", text: note.text, at: "2026-11-19T01:00:00Z" })).reverse(),
+      list: async (centre) => notes.filter((note) => note.centreKey === centre.centreKey).map((note) => ({ id: notes.indexOf(note) + 1, heading: "Info sheet", text: note.text, at: "2026-11-19T01:00:00Z" })).reverse(),
       add: async (centre, text) => void notes.push({ centreKey: centre.centreKey, text }),
+      edit: async (id, text) => void (notes[id - 1].text = text),
     },
   });
   try {
@@ -501,6 +716,12 @@ test("email: the button sends to the service email, and a sent email is kept as 
     // A Staff photo email is kept as the short line only.
     const photoNote = await app.inject({ method: "POST", url: "/api/one-pager/109/email-note", payload: { kind: "staff-photo", subject: "Updated team photo", body: "Kia ora" } });
     assert.equal(photoNote.statusCode, 201);
+    // It shows on the kindergarten in the list at once; the other kindergarten has no badge.
+    assert.deepEqual(Object.keys(photoNote.json().fragments).sort(), ["list", "notes"]);
+    // Neither sheet has a team photo, so both are due one; only Brookfield has been emailed.
+    assert.match(photoNote.json().fragments.list, /Brookfield Kindergarten<span class="badge badge--warning" data-one-pager-photo-due><i class="bi bi-camera" aria-hidden="true"><\/i> Team photo due email sent<\/span>/);
+    assert.match(photoNote.json().fragments.list, /Avenues Kindergarten<span class="badge badge--warning" data-one-pager-photo-due><i class="bi bi-camera" aria-hidden="true"><\/i> Team photo due<\/span>/);
+    assert.equal((photoNote.json().fragments.list.match(/email sent<\/span>/g) ?? []).length, 1);
     assert.deepEqual(notes.pop(), { centreKey: 109, text: "Email sent for staff photo update" });
     // The sent email shows in the Notes panel straight away.
     assert.match(saved.json().fragments.notes, /Info sheet email sent: Updated team photo/);
@@ -513,8 +734,23 @@ test("email: the button sends to the service email, and a sent email is kept as 
     assert.deepEqual(Object.keys(typed.json().fragments), ["notes"]);
     assert.equal((panel.match(/data-one-pager-note>/g) ?? []).length, 2);
     // Newest first, with its date and what it is filed under; the words are escaped.
-    assert.match(panel, /<span>19 Nov 2026, 2:00 pm<\/span><span>Info sheet<\/span><\/div>\s*<div class="one-pager-notes__text">Paula rang: new photo &lt;next&gt; week\.\nCall back Friday\.<\/div>[\s\S]*Info sheet email sent/);
+    assert.match(panel, /<span>19 Nov 2026, 2:00 pm<\/span><span>Info sheet<\/span><\/div>\s*<form class="task-notes__edit" data-one-pager-note-edit="2">\s*<textarea[^>]*name="text"[^>]*>Paula rang: new photo &lt;next&gt; week\.\nCall back Friday\.<\/textarea>[\s\S]*Info sheet email sent/);
     assert.match(panel, /<form[^>]*data-one-pager-form="note">/);
+
+    // ---- Editing a note: each note is a box that saves when it is left ----
+    const edited = await app.inject({ method: "POST", url: "/api/one-pager/108/notes/2", payload: { text: "  Paula rang: photo is booked.  " } });
+    assert.equal(edited.statusCode, 200);
+    assert.equal(edited.json().text, "Paula rang: photo is booked.");
+    assert.equal(notes[1].text, "Paula rang: photo is booked.");
+    // Only the list is redrawn, so nothing else being typed in the panel is lost.
+    assert.deepEqual(Object.keys(edited.json().fragments), ["list"]);
+    assert.match((await app.inject({ method: "GET", url: "/one-pager?centre=108" })).body, /data-one-pager-note-edit="2">\s*<textarea[^>]*>Paula rang: photo is booked\.<\/textarea>/);
+    // Not emptied, not another kindergarten's note, not one that isn't there.
+    assert.equal((await app.inject({ method: "POST", url: "/api/one-pager/108/notes/2", payload: { text: " " } })).statusCode, 400);
+    assert.equal((await app.inject({ method: "POST", url: "/api/one-pager/109/notes/2", payload: { text: "x" } })).statusCode, 404);
+    assert.equal((await app.inject({ method: "POST", url: "/api/one-pager/108/notes/99", payload: { text: "x" } })).statusCode, 404);
+    assert.equal(notes[1].text, "Paula rang: photo is booked.");
+    assert.match(page.body, /closest\("\[data-one-pager-note-edit\] textarea"\)/);
 
     assert.equal((await app.inject({ method: "POST", url: "/api/one-pager/108/notes", payload: { text: "  " } })).statusCode, 400);
     assert.equal((await app.inject({ method: "POST", url: "/api/one-pager/999/notes", payload: { text: "x" } })).statusCode, 404);
@@ -664,7 +900,7 @@ function memoryStore(centres: OnePagerCentre[] = [AVENUES, BROOKFIELD]) {
     async ensure(centreKey, initial) {
       const existing = rows.find((row) => row.centreKey === centreKey);
       if (existing) return existing;
-      const row: OnePagerRecord = { ...EMPTY_ONE_PAGER_FIELDS, serviceModel: "kindergarten", ...initial, id: nextId++, centreKey, updatedAt: new Date("2026-11-15T00:00:00Z"), images: [], previousImages: [] };
+      const row: OnePagerRecord = { ...EMPTY_ONE_PAGER_FIELDS, serviceModel: "kindergarten", inUse: true, ...initial, id: nextId++, centreKey, updatedAt: new Date("2026-11-15T00:00:00Z"), images: [], previousImages: [] };
       rows.push(row);
       return row;
     },
@@ -673,6 +909,9 @@ function memoryStore(centres: OnePagerCentre[] = [AVENUES, BROOKFIELD]) {
       if (!row) return null;
       Object.assign(row, changes);
       return row;
+    },
+    async setInUse(centreKey, inUse) {
+      rows.find((entry) => entry.centreKey === centreKey)!.inUse = inUse;
     },
     async setImage(onePagerId, slot, file) {
       const row = byId(onePagerId);
@@ -1200,12 +1439,32 @@ test("backup: the data download carries all media, and the original PDFs stay ou
   assert.match(source("../scripts/restore-backup.ps1"), /Copy-Item \$_\.FullName \$repoRoot -Recurse -Force/);
 });
 
-test("Crop: the whole photo with a crop box, the slot's shape for the top photos and any shape for the team photo", () => {
+test("caption: the photo caption saves itself as it is typed, with no Save button, and outlives a redraw of the photos", () => {
+  const html = renderOnePagerAppShell(pageData(true));
+  // Labelled "Photo caption", written as a sentence; no Save caption button.
+  assert.match(html, /<label class="field-label field-label--sentence"><span>Photo caption<\/span><textarea class="form-control" name="teamCaption" rows="3" maxlength="400">/);
+  assert.match(source("../src/ui/app.css"), /\.field-label--sentence \{\s*text-transform: none;/);
+  assert.doesNotMatch(html, /Save caption|Caption under the photo/);
+  assert.doesNotMatch(html, /data-one-pager-form="caption">[\s\S]{0,400}<button/);
+  // Saved a moment after the typing stops, and at once when the box is left.
+  assert.match(html, /captionTimer = setTimeout\(saveCaptionIfChanged, 800\);/);
+  assert.match(html, /document\.addEventListener\("change", function\(event\) \{\s*if \(!\(event\.target instanceof Element\) \|\| event\.target !== captionBox\(\)\) return;\s*clearTimeout\(captionTimer\);\s*saveCaptionIfChanged\(\);/);
+  // Putting a photo in redraws the Team photo card: a caption typed first is put back and saved.
+  assert.match(html, /var typed = caption && caption\.value !== caption\.defaultValue \? caption\.value : null;/);
+  assert.match(html, /if \(caption && typed !== null && result\.fragments\.photos !== undefined\) \{\s*caption\.value = typed;\s*saveCaptionIfChanged\(\);/);
+});
+
+test("Crop: the whole photo with a crop box, fixed to the PDF's shape while the tick box is on, for all four photos", () => {
   const html = renderOnePagerAppShell(pageData(true));
   assert.match(html, /<dialog class="wiki-modal one-pager-crop text-body" data-one-pager-crop aria-label="Crop the photo">/);
   assert.doesNotMatch(html, /data-one-pager-zoom/);
-  assert.match(html, /data-one-pager-upload="photo1" data-ratio="1\.4295"/);
-  assert.match(html, /data-one-pager-upload="team" data-ratio="free"/);
+  // Every slot gives the shape the PDF needs: the three top photos and the team photo.
+  for (const slot of ["photo1", "photo2", "photo3"]) assert.match(html, new RegExp(`data-one-pager-upload="${slot}" data-ratio="1\\.4295"`));
+  assert.match(html, /data-one-pager-upload="team" data-ratio="1\.3333"/);
+  // The tick box is on when the dialog opens; off, the box is any shape.
+  assert.match(html, /<input type="checkbox" checked data-one-pager-crop-fixed \/><span>Fix crop to the PDF's photo shape<\/span>/);
+  assert.match(html, /cropFixed\.checked = true;/);
+  assert.match(html, /crop\.ratio = cropFixed\.checked \? crop\.slotRatio : 0;/);
   // What is uploaded is the box's own pixels, never enlarged, so the server can tell a tight crop.
   assert.match(html, /output\.width = Math\.max\(1, Math\.round\(Math\.min\(OUTPUT_WIDTH, crop\.w\)\)\);/);
   // A tight crop goes on to the upscale, which starts with the real children question.
@@ -1247,6 +1506,7 @@ function pageData(selected: boolean): OnePagerPageData {
     id: 1,
     centreKey: 108,
     serviceModel: "kindergarten",
+    inUse: true,
     updatedAt: new Date("2026-11-15T01:05:00Z"),
     images: [
       { id: 7, onePagerId: 1, slot: "team", storedName: "a.jpg", storagePath: "uploads/one-pager/a.jpg", mimeType: "image/jpeg", sizeBytes: 1000, aiGenerated: false, aiPrompt: "", createdAt: new Date() },

@@ -213,9 +213,10 @@ function blurbHtmlToText(html: string) {
     .trim();
 }
 
-export function buildJdApprovalEmailText(headTeacherName: string, seniorTeacherName: string, blurbHtml: string) {
-  const firstName = headTeacherName.trim().split(/\s+/)[0] ?? "";
-  const greeting = firstName ? `Kia ora ${firstName},` : "Kia ora,";
+// With no head teacher to name, the greeting is the service's own name.
+export function buildJdApprovalEmailText(headTeacherName: string, seniorTeacherName: string, blurbHtml: string, serviceName = "") {
+  const greetingName = (headTeacherName.trim().split(/\s+/)[0] ?? "") || serviceName.replace(/\s+/g, " ").trim();
+  const greeting = greetingName ? `Kia ora ${greetingName},` : "Kia ora,";
   const seniorTeacher = seniorTeacherName.trim().split(/\s+/)[0] ?? "";
   const askedBy = seniorTeacher ? `${seniorTeacher} has asked I submit` : "I have been asked to submit";
 

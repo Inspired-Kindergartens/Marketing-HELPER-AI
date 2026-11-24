@@ -197,7 +197,7 @@ export function renderTaskDetailPanel(options: TaskDetailPanelOptions): string {
   const activeMembers = members.filter((member) => member.active);
   const statusOptions = TASK_STATUSES.map(
     (status) =>
-      `<option value="${status}"${status === task.status ? " selected" : ""}>${escapeHtml(TASK_STATUS_LABELS[status])}</option>`,
+      `<label class="task-status-radio flex items-center gap-4 nowrap text-small"><input type="radio" name="status" value="${status}" data-task-action="status"${status === task.status ? " checked" : ""} /><span>${escapeHtml(TASK_STATUS_LABELS[status])}</span></label>`,
   ).join("");
   const projectOptions = projects
     .map(
@@ -253,10 +253,10 @@ export function renderTaskDetailPanel(options: TaskDetailPanelOptions): string {
           <textarea class="form-control form-control--sm" name="description" rows="8" placeholder="Describe the task…">${escapeHtml(task.description ?? "")}</textarea>
         </label>
         <div class="task-field-row flex flex-wrap gap-10">
-          <label class="task-field flex flex-col gap-4">
-            <span class="task-field__label text-ghost text-small">Status</span>
-            <select class="form-control form-control--sm" name="status" data-task-action="status">${statusOptions}</select>
-          </label>
+          <div class="task-field flex flex-col gap-4" role="radiogroup" aria-labelledby="task-status-label">
+            <span class="task-field__label text-ghost text-small" id="task-status-label">Status</span>
+            <div class="task-status-radios flex flex-wrap items-center gap-10">${statusOptions}</div>
+          </div>
           <label class="task-field flex flex-col gap-4">
             <span class="task-field__label text-ghost text-small">Due date</span>
             <span class="date-combo">

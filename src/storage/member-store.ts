@@ -1,5 +1,6 @@
 import { prisma } from "../db.js";
-import { readCentreContactList, type CentreContact } from "./centre-contact-store.js";
+import type { CentreContact } from "./centre-contact-store.js";
+import { readCentreContacts } from "./centre-people-store.js";
 
 // The members directory: a user-maintained list of people who can be assigned to
 // tasks and added to projects. Not a login/auth concept — the app has no user
@@ -114,8 +115,8 @@ export async function deleteMember(id: number): Promise<void> {
 }
 
 // A searchable contact suggestion for the task email "To" field: the union of
-// the Member directory (people with emails) and the read-only centre-contact
-// list. Used purely to seed the autocomplete when typing a *new* address — the
+// the Member directory (people with emails) and each kindergarten's own
+// address (its Info Sheet email). Used purely to seed the autocomplete when typing a *new* address — the
 // per-task remembered recipients are stored separately (TaskEmailRecipient).
 export type EmailContactSuggestion = {
   email: string;
@@ -132,7 +133,7 @@ export async function listEmailContactSuggestions(
       orderBy: { name: "asc" },
       select: { name: true, email: true },
     }),
-    centreContacts ? Promise.resolve(centreContacts) : readCentreContactList(),
+    centreContacts ? Promise.resolve(centreContacts) : readCentreContacts(),
   ]);
 
   const byEmail = new Map<string, EmailContactSuggestion>();

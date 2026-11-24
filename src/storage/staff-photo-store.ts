@@ -8,7 +8,8 @@ import { createTask } from "./task-store.js";
 export const staffPhotoStore: StaffPhotoDeps = {
   async listCentres() {
     const rows = await prisma.onePager.findMany({
-      where: { centre: { ignored: false, openStatus: "Open" } },
+      // A sheet that is not in use (the list's tick box) needs no team photo.
+      where: { inUse: true, centre: { ignored: false, openStatus: "Open" } },
       include: { centre: { select: { name: true } }, images: { where: { slot: "team" }, select: { createdAt: true } } },
     });
     return rows.map((row) => ({
@@ -72,8 +73,9 @@ export async function readNamedStaff(centreKey: number): Promise<NamedStaff[]> {
 }
 
 // The open team photo task of each kindergarten that has one, by centreKey.
+// One whose sheet is not in use is left out: no photo is asked of it.
 export async function readOpenStaffPhotoTasks(): Promise<Map<number, number>> {
-  const rows = await prisma.onePager.findMany({ where: { staffPhotoTaskId: { not: null } }, select: { centreKey: true, staffPhotoTaskId: true } });
+  const rows = await prisma.onePager.findMany({ where: { inUse: true, staffPhotoTaskId: { not: null } }, select: { centreKey: true, staffPhotoTaskId: true } });
   const ids = rows.map((row) => row.staffPhotoTaskId as number);
   if (ids.length === 0) return new Map();
   const open = new Set((await prisma.task.findMany({ where: { id: { in: ids }, status: { not: "done" } }, select: { id: true } })).map((task) => task.id));

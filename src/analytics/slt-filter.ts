@@ -2,7 +2,11 @@
 // A centre's SLT comes from the contact list's "Key Senior Teacher" column,
 // by first name: "Marion Dekker" is Marion, and a shared centre
 // ("Haylee/Vilna") belongs to both.
-import { matchCentreContact, type CentreContact } from "../storage/centre-contact-store.js";
+import { matchCentreContact, type SeniorTeacherEntry } from "../storage/centre-contact-store.js";
+
+// Only the kindergarten and its senior teacher are read, so a full contact
+// fits here too.
+type CentreContact = SeniorTeacherEntry;
 
 function sltNamesOf(contact: CentreContact): string[] {
   // The column is optional in the sheet.

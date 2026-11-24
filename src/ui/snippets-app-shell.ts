@@ -229,11 +229,13 @@ function renderSnippetsScript(): string {
           if (status) status.textContent = text;
         }
 
-        function closeCreateDialog() {
+        // keep: dismissed by a click outside, so what was typed stays for next
+        // time. Only Cancel and a saved snippet clear it.
+        function closeCreateDialog(keep) {
           var dialog = document.querySelector("[data-snippet-create-dialog]");
           if (!dialog) return;
           var form = dialog.querySelector("[data-snippet-create]");
-          if (form) {
+          if (form && !keep) {
             form.reset();
             form.querySelectorAll('input[type="hidden"]').forEach(function(field) { field.value = ""; });
           }
@@ -241,21 +243,24 @@ function renderSnippetsScript(): string {
           else dialog.removeAttribute("open");
         }
 
+        // Clicking the backdrop closes a dialog (Esc is handled natively). The
+        // click must start there too: selecting text and letting go outside
+        // the modal does not close it.
+        function onBackdropClick(dialog, close) {
+          var pressedOutside = false;
+          dialog.addEventListener("pointerdown", function(event) { pressedOutside = event.target === dialog; });
+          dialog.addEventListener("click", function(event) {
+            if (event.target === dialog && pressedOutside) close();
+            pressedOutside = false;
+          });
+        }
+
         (function() {
           var dialog = document.querySelector("[data-snippet-create-dialog]");
-          if (dialog) {
-            // Clicking the backdrop closes it (Esc is handled natively).
-            dialog.addEventListener("click", function(event) {
-              if (event.target === dialog) closeCreateDialog();
-            });
-          }
+          if (dialog) onBackdropClick(dialog, function() { closeCreateDialog(true); });
           var categoriesDialog = document.querySelector("[data-snippet-categories-dialog]");
-          if (categoriesDialog) {
-            // Closing reloads, so renames and deletes show in the list.
-            categoriesDialog.addEventListener("click", function(event) {
-              if (event.target === categoriesDialog) window.location.reload();
-            });
-          }
+          // Closing reloads, so renames and deletes show in the list.
+          if (categoriesDialog) onBackdropClick(categoriesDialog, function() { window.location.reload(); });
         })();
 
         // --- Categories modal (same behaviour as the wiki's) ----------------

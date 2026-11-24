@@ -19,6 +19,22 @@ function buildReminder(overrides: Partial<TaskReminderView> = {}): TaskReminderV
   };
 }
 
+test("Centre Staff is a footer button that opens a dialog with Upload and Download", () => {
+  const html = renderLandingPage({});
+
+  // A button, not a link to the old Upload Contacts page.
+  assert.match(html, /<button type="button" class="landing__restart[^"]*" data-centre-staff-open>\s*<i class="bi bi-person-lines-fill"[^>]*><\/i>\s*<span>Centre Staff<\/span>/);
+  assert.doesNotMatch(html, /Upload Contacts|href="\/contacts\/upload"/);
+  // The app's standard dialog, with the two actions and a Close.
+  assert.match(html, /<dialog class="wiki-modal text-body" data-centre-staff-dialog aria-label="Centre Staff">/);
+  assert.match(html, /<span>Senior Teacher list<\/span>\s*<button type="button" class="button-md" data-centre-staff-upload>[\s\S]*?<span>Upload<\/span>/);
+  assert.match(html, /<span>Head Teachers, Administrators and staff<\/span>\s*<button type="button" class="button-md" data-centre-staff-download>[\s\S]*?<span>Download<\/span>/);
+  assert.match(html, /data-centre-staff-close><span>Close<\/span>/);
+  // Upload posts the workbook and reports in the dialog; Download is the PDF.
+  assert.match(html, /fetch\("\/api\/centre-staff\/senior-teachers", \{ method: "POST", body: body \}\)/);
+  assert.match(html, /window\.location\.href = "\/api\/centre-staff\/pdf"/);
+});
+
 test("landing page hides the reminders section when the feed is empty", () => {
   const html = renderLandingPage({ reminders: { overdue: [], dueSoon: [], total: 0 } });
 

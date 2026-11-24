@@ -330,10 +330,12 @@ test("email buttons use shared yes no confirmation flow", () => {
   assert.match(html, /data-kindergarten-name="Te Puke"/);
   assert.match(html, /The next step is to approve your advert campaign before going live and I have designed an advert that I think would work well for \\u003ckindergarten_name> - 3 images for different placements but one advert campaign/);
   assert.match(html, /function firstNameOnly\(name\)/);
-  // One greeting for both contacts: "Paula and Colleen", or "there" with none.
-  assert.match(html, /function joinGreetingNames\(names\)/);
-  assert.match(html, /"<greeting_names>": joinGreetingNames\(\[context\.headTeacher, context\.administrator\]\)/);
-  assert.match(html, /return "there";/);
+  // One greeting for both contacts: "Paula and Colleen". With neither a head
+  // teacher nor an administrator it is the service's name.
+  assert.match(html, /function joinGreetingNames\(names, serviceName\)/);
+  assert.match(html, /"<greeting_names>": joinGreetingNames\(\[context\.headTeacher, context\.administrator\], context\.centreName\)/);
+  assert.match(html, /return String\(serviceName \|\| ""\)\.replace\(\/\\s\+\/g, " "\)\.trim\(\) \|\| "there";/);
+  assert.match(html, /\], centreName\);/);
   assert.match(html, /function askEmailSentConfirmation\(centreName\)/);
   assert.match(html, /yesButton\.textContent = "Yes"/);
   assert.match(html, /noButton\.textContent = "No"/);

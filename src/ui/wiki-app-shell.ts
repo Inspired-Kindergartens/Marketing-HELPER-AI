@@ -391,32 +391,36 @@ function renderWikiScript(): string {
           done("Copy failed");
         }
 
-        function closeCreateDialog() {
+        // keep: dismissed by a click outside, so what was typed stays for next
+        // time. Only Cancel and a saved article clear it.
+        function closeCreateDialog(keep) {
           var dialog = document.querySelector("[data-wiki-create-dialog]");
           if (!dialog) return;
           var form = dialog.querySelector("[data-wiki-create]");
-          if (form) form.reset();
+          if (form && !keep) form.reset();
           if (typeof dialog.close === "function") dialog.close();
           else dialog.removeAttribute("open");
         }
 
-        // Clicking the backdrop closes the dialog, matching normal modal
-        // behaviour (Esc is handled natively by <dialog>).
+        // Clicking the backdrop closes a dialog (Esc is handled natively by
+        // <dialog>). The click must start there too: selecting text and
+        // letting go outside the modal does not close it.
+        function onBackdropClick(dialog, close) {
+          var pressedOutside = false;
+          dialog.addEventListener("pointerdown", function(event) { pressedOutside = event.target === dialog; });
+          dialog.addEventListener("click", function(event) {
+            if (event.target === dialog && pressedOutside) close();
+            pressedOutside = false;
+          });
+        }
+
         (function() {
           var dialog = document.querySelector("[data-wiki-create-dialog]");
-          if (dialog) {
-            dialog.addEventListener("click", function(event) {
-              if (event.target === dialog) closeCreateDialog();
-            });
-          }
+          if (dialog) onBackdropClick(dialog, function() { closeCreateDialog(true); });
 
           var categoriesDialog = document.querySelector("[data-wiki-categories-dialog]");
-          if (categoriesDialog) {
-            categoriesDialog.addEventListener("click", function(event) {
-              // Closing reloads, so renames and deletes are reflected in the list.
-              if (event.target === categoriesDialog) window.location.reload();
-            });
-          }
+          // Closing reloads, so renames and deletes are reflected in the list.
+          if (categoriesDialog) onBackdropClick(categoriesDialog, function() { window.location.reload(); });
         })();
 
         // --- Article body editor -------------------------------------------

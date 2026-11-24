@@ -29,6 +29,8 @@ export type OnePagerRecord = OnePagerFields & {
   centreKey: number;
   // "kindergarten" or "all-day"; read with resolveOnePagerServiceModel.
   serviceModel: string;
+  // The "In use" tick in the list. Not in use: no team photo is asked for.
+  inUse: boolean;
   updatedAt: Date;
   images: OnePagerImageRecord[];
   // The photo each slot held before its last replacement (at most one a slot).
@@ -57,6 +59,8 @@ export type OnePagerStore = {
   // The kindergarten's info sheet, created with `initial` if it has none yet.
   ensure(centreKey: number, initial: OnePagerChanges): Promise<OnePagerRecord>;
   update(centreKey: number, changes: OnePagerChanges): Promise<OnePagerRecord | null>;
+  // The "In use" tick. Not an edit of the sheet: its "last edited" stays put.
+  setInUse(centreKey: number, inUse: boolean): Promise<void>;
   // Puts a photo in a slot. The photo it replaces is kept as the slot's
   // previous photo; returns the older previous photo that is no longer kept
   // (its file can go), if any.
@@ -135,6 +139,11 @@ export const onePagerStore: OnePagerStore = {
     const existing = await prisma.onePager.findUnique({ where: { centreKey }, select: { id: true } });
     if (!existing) return null;
     return prisma.onePager.update({ where: { centreKey }, data: changes, include: WITH_FILES });
+  },
+
+  async setInUse(centreKey, inUse) {
+    const current = await prisma.onePager.findUniqueOrThrow({ where: { centreKey }, select: { updatedAt: true } });
+    await prisma.onePager.update({ where: { centreKey }, data: { inUse, updatedAt: current.updatedAt } });
   },
 
   async setImage(onePagerId, slot, file) {

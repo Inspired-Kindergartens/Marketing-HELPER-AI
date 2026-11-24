@@ -4,8 +4,8 @@ import test from "node:test";
 import {
   matchCentreContact,
   normalizeCentreContactName,
-  readCentreContactList,
-  readCentreContactListStats,
+  readSeniorTeacherList,
+  readSeniorTeacherListStats,
 } from "../src/storage/centre-contact-store.js";
 
 const contacts = [
@@ -51,18 +51,22 @@ test("centre contact matcher uses unique distinctive tokens for renamed services
   assert.equal(match?.email, "opeys@ikindergartens.nz");
 });
 
-test("centre contact reader parses the workbook contact columns when available", async () => {
-  const workbookContacts = await readCentreContactList();
+// The uploaded workbook is read for the senior teacher only: the head teacher
+// and administrator are Infocare's, and the email is the Info Sheet's.
+test("workbook reader reads the senior teacher of each kindergarten and nothing else", async () => {
+  const workbookContacts = await readSeniorTeacherList();
   const match = matchCentreContact("Avenues Kindergarten", workbookContacts);
 
-  assert.equal(match?.headTeacher, "Catherine Geddes");
-  assert.equal(match?.administrator, "Jenna Fenton");
-  assert.equal(match?.email, "avenues@ikindergartens.nz");
+  assert.deepEqual(match, { kindergarten: "Avenues", keySeniorTeacher: "Haylee" });
 });
 
-test("centre contact reader reports workbook rows separately from usable contacts", async () => {
-  const stats = await readCentreContactListStats();
+test("workbook reader reports workbook rows separately from usable rows", async () => {
+  const stats = await readSeniorTeacherListStats();
 
   assert.equal(stats.rowCount, 26);
   assert.equal(stats.contacts.length, 26);
+});
+
+test("the app does not need the workbook: no file reads as an empty list", async () => {
+  assert.deepEqual(await readSeniorTeacherListStats("no-such-workbook.xlsx"), { contacts: [], rowCount: 0 });
 });

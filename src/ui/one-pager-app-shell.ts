@@ -14,7 +14,7 @@ import {
   type OnePagerTemplateText,
 } from "../one-pager/template.js";
 import { REAL_CHILDREN_QUESTION, REGENERATION_OPTIONS } from "../image-ai/photo-slot.js";
-import { buildOnePagerEmail } from "../one-pager/email.js";
+import { buildOnePagerEmail, teamPhotoListBadge } from "../one-pager/email.js";
 import type { OnePagerCentre, OnePagerRecord } from "../storage/one-pager-store.js";
 
 // Info Sheets: the one-page PDF for each kindergarten. The list, the selected
@@ -31,6 +31,11 @@ export type OnePagerPageData = {
   // Kindergartens whose teaching team has changed: the open task (its id) to
   // get a new team photo, by centreKey.
   photoTasks?: Record<number, number>;
+  // Kindergartens that have been emailed for a new team photo since the one
+  // on their sheet was put there, by centreKey.
+  photoEmails?: Record<number, boolean>;
+  // Info sheets with no team photo (removed, or its file has gone), by centreKey.
+  photoMissing?: Record<number, boolean>;
   // Who an email about the selected kindergarten's sheet goes to: the
   // service's email, and the first names to greet ("Paula and Colleen").
   emailContact?: { to: string; greeting: string };
@@ -45,8 +50,10 @@ export type OnePagerPeople = { seniorLeader: string; headTeacher: string; admini
 
 // A note on a kindergarten: what it is filed under ("Info sheet", an advert
 // review, ...), its words, and when it was written (ISO).
-export type OnePagerNote = { heading: string; text: string; at: string };
+export type OnePagerNote = { id: number; heading: string; text: string; at: string };
 export const ONE_PAGER_NOTE_MAX = 6000;
+// The reason the In use box starts with each time it opens.
+export const ONE_PAGER_IN_USE_REASON = "As directed by the kindergarten";
 
 export type OnePagerFragmentKey = "list" | "text" | "photos" | "notes" | "shared";
 export type OnePagerFragments = Partial<Record<OnePagerFragmentKey, string>>;
@@ -77,21 +84,32 @@ export function renderOnePagerList(data: OnePagerPageData): string {
       const onePager = byCentre.get(centre.centreKey);
       const current = centre.centreKey === selectedKey;
       const people = data.people?.[centre.centreKey];
+      // In use until the tick is taken off (a kindergarten with no sheet yet is in use).
+      const inUse = onePager?.inUse ?? true;
+      // Its team photo is due, it has been emailed for a new one, or both.
+      // One that is not in use is not asked for a staff photo.
+      // A sheet with no team photo is due one too, task or no task.
+      const photoDue = inUse && Boolean(data.photoTasks?.[centre.centreKey] || data.photoMissing?.[centre.centreKey]);
+      const photoBadge = inUse ? teamPhotoListBadge({ photoDue, emailSent: Boolean(data.photoEmails?.[centre.centreKey]) }) : "";
       // Each kindergarten is a standard button (no links): it opens that
-      // kindergarten. The one being worked on is marked with an arrow.
+      // kindergarten. The one being worked on is marked with an arrow. Its
+      // In use tick box sits beside the button.
       return `
+        <div class="one-pager-list__line">
         <button type="submit" class="one-pager-list__row" name="centre" value="${centre.centreKey}"${current ? ' aria-current="true"' : ""}>
-          <span class="one-pager-list__name"><i class="bi ${current ? "bi-caret-right-fill" : "bi-file-earmark-richtext"}" aria-hidden="true"></i>${escapeHtml(centre.name)}${data.photoTasks?.[centre.centreKey] ? `<span class="badge badge--warning" data-one-pager-photo-due><i class="bi bi-camera" aria-hidden="true"></i> Team photo due</span>` : ""}</span>
+          <span class="one-pager-list__name"><i class="bi ${current ? "bi-caret-right-fill" : "bi-file-earmark-richtext"}" aria-hidden="true"></i>${escapeHtml(centre.name)}${photoBadge ? `<span class="badge badge--warning" ${photoDue ? "data-one-pager-photo-due" : "data-one-pager-photo-emailed"}><i class="bi ${photoDue ? "bi-camera" : "bi-envelope"}" aria-hidden="true"></i> ${photoBadge}</span>` : ""}</span>
           <span class="one-pager-list__person" data-one-pager-senior-leader>${escapeHtml(people?.seniorLeader ?? "")}</span>
           <span class="one-pager-list__person flex flex-col" data-one-pager-team-leads><span>${escapeHtml(people?.headTeacher ?? "")}</span><span>${escapeHtml(people?.administrator ?? "")}</span></span>
           <span>${onePager ? `${onePager.images.length}/${ONE_PAGER_SLOTS.length}` : ""}</span>
           <span>${onePager ? escapeHtml(formatDateTime(onePager.updatedAt)) : ""}</span>
-        </button>`;
+        </button>
+        <label class="one-pager-list__in-use"><input type="checkbox"${inUse ? " checked" : ""} data-one-pager-in-use="${centre.centreKey}" data-centre-name="${escapeHtml(centre.name)}" aria-label="${escapeHtml(centre.name)} in use" /></label>
+        </div>`;
     })
     .join("");
   return `
     <form class="one-pager-list flex flex-col gap-6" action="/one-pager" method="get">
-      <div class="one-pager-list__head text-small text-ghost label-case"><span>Kindergarten</span><span class="one-pager-list__person">Senior leader</span><span class="one-pager-list__person">Head Teacher / Administrator</span><span>Photos</span><span>Last edited</span></div>
+      <div class="one-pager-list__line text-small text-ghost label-case"><div class="one-pager-list__head"><span>Kindergarten</span><span class="one-pager-list__person">Senior leader</span><span class="one-pager-list__person">Head Teacher / Administrator</span><span>Photos</span><span>Last edited</span></div><span class="one-pager-list__in-use">In use</span></div>
       ${rows || `<span class="text-empty">No open kindergartens.</span>`}
     </form>
   `;
@@ -169,22 +187,22 @@ export function renderOnePagerPhotos(data: OnePagerPageData): string {
         </div>
         ${image ? `<label class="one-pager-photo__ai inline-flex items-center gap-6 text-small text-muted"><input type="checkbox"${image.aiGenerated ? " checked" : ""} data-one-pager-ai="${slot}" /><span>AI generated</span></label>` : ""}
         <div class="flex flex-wrap gap-8">
-          <button type="button" class="button-sm" data-one-pager-upload="${slot}" data-ratio="${slot === "team" ? "free" : ratio}"><i class="bi bi-upload" aria-hidden="true"></i>${image ? "Replace" : "Upload"}</button>
+          <button type="button" class="button-sm" data-one-pager-upload="${slot}" data-ratio="${ratio}"><i class="bi bi-upload" aria-hidden="true"></i>${image ? "Replace" : "Upload"}</button>
           <button type="button" class="button-sm" data-one-pager-generate="${slot}" data-label="${label}" data-prompt="${escapeHtml(image?.aiGenerated ? image.aiPrompt : "")}"><i class="bi bi-stars" aria-hidden="true"></i>Generate with AI</button>
           ${image && slot !== "team" ? `<button type="button" class="button-sm" data-one-pager-regenerate="${slot}" data-label="${label}" data-ai="${image.aiGenerated ? "1" : ""}"><i class="bi bi-arrow-repeat" aria-hidden="true"></i>Regenerate with AI</button>` : ""}
           ${hasPrevious ? `<button type="button" class="button-sm" data-one-pager-revert="${slot}"><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i>Revert</button>` : ""}
           ${image ? `<button type="button" class="button-sm" data-one-pager-download="/api/one-pager/images/${image.id}/file" data-filename="${escapeHtml(downloadName)}"><i class="bi bi-box-arrow-down" aria-hidden="true"></i>Download</button>` : ""}
           ${image ? `<button type="button" class="button-sm" data-one-pager-remove="${slot}" data-label="${label}"><i class="bi bi-trash" aria-hidden="true"></i>Remove</button>` : ""}
         </div>${
-          // The words under the team photo are edited with the photo they sit under.
+          // The words under the team photo are edited with the photo they sit
+          // under. There is no Save button: they save themselves as they are typed.
           slot === "team"
             ? `
         <form class="one-pager-form flex flex-col gap-8" data-one-pager-form="caption">
-          ${textArea("teamCaption", "Caption under the photo", data.selected!.onePager.teamCaption, 3)}
-          <div class="flex"><button type="submit" class="button-sm"><i class="bi bi-save" aria-hidden="true"></i>Save caption</button></div>
+          <label class="field-label field-label--sentence"><span>Photo caption</span><textarea class="form-control" name="teamCaption" rows="3" maxlength="${ONE_PAGER_FIELD_MAX.teamCaption}">${escapeHtml(data.selected!.onePager.teamCaption)}</textarea></label>
         </form>${
           // The team has changed and a task is open to get a new photo: it opens from here.
-          data.photoTasks?.[data.selected!.centre.centreKey]
+          data.selected!.onePager.inUse && data.photoTasks?.[data.selected!.centre.centreKey]
             ? `
         <form class="flex" action="/tasks" method="get"><button type="submit" class="button-sm" name="task" value="${data.photoTasks[data.selected!.centre.centreKey]}"><i class="bi bi-camera" aria-hidden="true"></i>Team photo due: open task</button></form>`
             : ""
@@ -206,7 +224,9 @@ export function renderOnePagerNotes(data: OnePagerPageData): string {
       return `
         <li class="task-notes__item" data-one-pager-note>
           <div class="task-notes__meta flex items-center gap-8 text-small text-ghost"><span>${Number.isNaN(at.getTime()) ? "" : escapeHtml(formatDateTime(at))}</span><span>${escapeHtml(note.heading)}</span></div>
-          <div class="one-pager-notes__text">${escapeHtml(note.text)}</div>
+          <form class="task-notes__edit" data-one-pager-note-edit="${note.id}">
+            <textarea class="form-control form-control--sm" name="text" rows="3" maxlength="${ONE_PAGER_NOTE_MAX}" aria-label="Edit note">${escapeHtml(note.text)}</textarea>
+          </form>
         </li>`;
     })
     .join("");
@@ -272,14 +292,43 @@ function renderOnePagerScript(centreKey: number | null): string {
         function post(url, payload) {
           return fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload || {}) }).then(read);
         }
+        // The words under the team photo, when they have been changed and not yet saved.
+        function captionBox() { return document.querySelector('[data-one-pager-form="caption"] textarea'); }
+        function saveCaptionIfChanged() {
+          var box = captionBox();
+          if (box && box.value !== box.defaultValue && typeof box.form.requestSubmit === "function") box.form.requestSubmit();
+        }
         function swap(result) {
           if (!result || !result.fragments) return;
+          // A caption being typed is on the Team photo card, which a redraw
+          // of the photos replaces: it is put back and saved, never lost.
+          var caption = captionBox();
+          var typed = caption && caption.value !== caption.defaultValue ? caption.value : null;
           Object.keys(result.fragments).forEach(function(key) {
             var holder = document.querySelector('[data-one-pager-fragment="' + key + '"]');
             if (holder) holder.innerHTML = result.fragments[key];
           });
           markRegenerating();
+          caption = captionBox();
+          if (caption && typed !== null && result.fragments.photos !== undefined) {
+            caption.value = typed;
+            saveCaptionIfChanged();
+          }
         }
+        // The caption saves itself: a moment after the typing stops, and at
+        // once when the box is left. A save that lands while more is being
+        // typed leaves the box changed, so the next pause saves the rest.
+        var captionTimer = null;
+        document.addEventListener("input", function(event) {
+          if (!(event.target instanceof Element) || event.target !== captionBox()) return;
+          clearTimeout(captionTimer);
+          captionTimer = setTimeout(saveCaptionIfChanged, 800);
+        });
+        document.addEventListener("change", function(event) {
+          if (!(event.target instanceof Element) || event.target !== captionBox()) return;
+          clearTimeout(captionTimer);
+          saveCaptionIfChanged();
+        });
         // The slots whose new picture is still being made. Each keeps its old
         // photo, dimmed under a turning icon, with its buttons off until its
         // own picture arrives. The marks are put back after every swap, as a
@@ -336,6 +385,28 @@ function renderOnePagerScript(centreKey: number | null): string {
         }
         refreshPreview();
 
+        // A note is changed where it stands, as on the Tasks page: it saves
+        // when its box is left with different words in it. An emptied box
+        // gets its saved words back. Only the list is redrawn (its Staff photo
+        // email badge is read from the notes), so the Notes panel keeps
+        // whatever else is being typed in it.
+        document.addEventListener("blur", function(event) {
+          var field = event.target instanceof Element ? event.target.closest("[data-one-pager-note-edit] textarea") : null;
+          if (!field || field.value === field.defaultValue) return;
+          if (!field.value.trim()) { field.value = field.defaultValue; return; }
+          var sent = field.value;
+          post(BASE + "/notes/" + field.form.getAttribute("data-one-pager-note-edit"), { text: sent }).then(function(result) {
+            // What was sent is now what is saved.
+            field.defaultValue = result.text;
+            if (field.value === sent) field.value = result.text;
+            swap(result);
+            refreshPreview();
+          }).catch(fail);
+        }, true);
+        document.addEventListener("submit", function(event) {
+          if (event.target instanceof Element && event.target.closest("[data-one-pager-note-edit]")) event.preventDefault();
+        });
+
         document.addEventListener("submit", function(event) {
           var form = event.target instanceof Element ? event.target.closest("[data-one-pager-form]") : null;
           if (!form) return;
@@ -354,6 +425,9 @@ function renderOnePagerScript(centreKey: number | null): string {
             if (kind === "caption") {
               // Only the caption was saved: the Text panel keeps whatever is being typed in it.
               if (button) button.disabled = false;
+              // What was sent is now what is saved.
+              var savedBox = captionBox();
+              if (savedBox && savedBox.value === payload.teamCaption) savedBox.defaultValue = savedBox.value;
               if (result.fragments) swap({ fragments: { list: result.fragments.list } });
             } else {
               swap(result);
@@ -370,23 +444,30 @@ function renderOnePagerScript(centreKey: number | null): string {
 
         // ---- Photos: choose a file, crop it, upload ----
         // The whole photo is shown with a crop box on it: drag the box to move
-        // it, drag a corner to resize it. For the three top photos the box
-        // keeps the slot's shape; the team photo's box is any shape, as the
-        // page shows the whole team photo whatever its shape.
+        // it, drag a corner to resize it. While the tick box is on (as it is
+        // when the dialog opens) the box keeps the shape the PDF gives that
+        // photo; with it off the box is any shape. The same for all four photos.
+        // Where the mouse button went down. A click on a dialog's backdrop
+        // closes it only if it started there too: selecting text (or dragging
+        // the crop box) and letting go outside the modal does not close it.
+        var pressedOn = null;
+        document.addEventListener("pointerdown", function(event) { pressedOn = event.target; }, true);
         var fileInput = document.querySelector("[data-one-pager-file]");
         var cropDialog = document.querySelector("[data-one-pager-crop]");
         var cropCanvas = cropDialog ? cropDialog.querySelector("canvas") : null;
+        var cropFixed = cropDialog ? cropDialog.querySelector("[data-one-pager-crop-fixed]") : null;
         // The box (x, y, w, h) is in the photo's own pixels; scale is canvas
-        // pixels to one of them; ratio is the box's fixed shape, 0 for any.
-        var crop = null; // { slot, image, ratio, scale, x, y, w, h }
+        // pixels to one of them; ratio is the box's fixed shape, 0 for any;
+        // slotRatio is the shape the PDF gives the photo.
+        var crop = null; // { slot, image, slotRatio, ratio, scale, x, y, w, h }
         var CROP_MAX_WIDTH = 1200;
         var CROP_MAX_HEIGHT = 800;
         var CROP_HANDLE = 20;
         var CROP_MIN = 48;
         var OUTPUT_WIDTH = 2400;
 
-        // "free" (any shape) is 0; otherwise the slot's width / height.
-        function cropRatio(value) { return value === "free" ? 0 : Number(value) || 0; }
+        // The slot's width / height, as its upload button gives it.
+        function cropRatio(value) { return Number(value) || 0; }
         function drawCrop() {
           var context = cropCanvas.getContext("2d");
           var scale = crop.scale;
@@ -467,10 +548,11 @@ function renderOnePagerScript(centreKey: number | null): string {
             var scale = Math.min(CROP_MAX_WIDTH / image.width, CROP_MAX_HEIGHT / image.height);
             cropCanvas.width = Math.max(1, Math.round(image.width * scale));
             cropCanvas.height = Math.max(1, Math.round(image.height * scale));
-            // Starts as the most of the photo the shape allows, centred.
+            // Starts in the PDF's shape, as the most of the photo that shape allows, centred.
+            cropFixed.checked = true;
             var width = ratio ? Math.min(image.width, image.height * ratio) : image.width;
             var height = ratio ? width / ratio : image.height;
-            crop = { slot: slot, image: image, ratio: ratio, scale: cropCanvas.width / image.width, x: (image.width - width) / 2, y: (image.height - height) / 2, w: width, h: height };
+            crop = { slot: slot, image: image, slotRatio: ratio, ratio: ratio, scale: cropCanvas.width / image.width, x: (image.width - width) / 2, y: (image.height - height) / 2, w: width, h: height };
             drawCrop();
             if (typeof cropDialog.showModal === "function") cropDialog.showModal();
             else cropDialog.setAttribute("open", "open");
@@ -511,8 +593,22 @@ function renderOnePagerScript(centreKey: number | null): string {
           ["pointerup", "pointercancel"].forEach(function(name) {
             cropCanvas.addEventListener(name, function() { drag = null; });
           });
+          cropFixed.addEventListener("change", function() {
+            if (!crop) return;
+            crop.ratio = cropFixed.checked ? crop.slotRatio : 0;
+            if (crop.ratio) {
+              // Ticked: the box is trimmed to the PDF's shape about its own middle.
+              var width = Math.min(crop.w, crop.h * crop.ratio);
+              var height = width / crop.ratio;
+              crop.x += (crop.w - width) / 2;
+              crop.y += (crop.h - height) / 2;
+              crop.w = width;
+              crop.h = height;
+            }
+            drawCrop();
+          });
           cropDialog.addEventListener("click", function(event) {
-            if (event.target === cropDialog || (event.target instanceof Element && event.target.closest("[data-one-pager-crop-cancel]"))) closeCrop();
+            if ((event.target === cropDialog && pressedOn === cropDialog) || (event.target instanceof Element && event.target.closest("[data-one-pager-crop-cancel]"))) closeCrop();
           });
           cropDialog.querySelector("form").addEventListener("submit", function(event) {
             event.preventDefault();
@@ -559,6 +655,7 @@ function renderOnePagerScript(centreKey: number | null): string {
             busy(submit, true);
             post(BASE + "/images/" + form.querySelector("[name=slot]").value + "/generate", { prompt: form.querySelector("[name=prompt]").value }).then(function(result) {
               busy(submit, false);
+              generateDialog.removeAttribute("data-draft");
               closeGenerate();
               swap(result);
               refreshPreview();
@@ -701,17 +798,12 @@ function renderOnePagerScript(centreKey: number | null): string {
           // The box closes at once, so another photo can be sent while this
           // one is being made.
           regenerating[slot] = true;
+          if (regenerateDialog) regenerateDialog.removeAttribute("data-draft");
           closeRegenerate();
           markRegenerating();
           post(BASE + "/images/" + slot + "/" + action, payload).then(function(result) {
             delete regenerating[slot];
-            // A caption being typed under the team photo outlives the redraw.
-            var caption = document.querySelector('[data-one-pager-form="caption"] textarea');
-            var typed = caption ? caption.value : null;
             swap(result);
-            markRegenerating();
-            caption = document.querySelector('[data-one-pager-form="caption"] textarea');
-            if (caption && typed !== null) caption.value = typed;
             refreshPreview();
           }).catch(function(error) {
             delete regenerating[slot];
@@ -727,7 +819,19 @@ function renderOnePagerScript(centreKey: number | null): string {
           var ai = button.getAttribute("data-ai") === "1";
           var label = button.getAttribute("data-label").toLowerCase();
           var form = regenerateDialog.querySelector("form");
+          // Dismissed (a click outside, Esc) and opened again for the same
+          // photo: the request typed is still there. Cancel and sending it
+          // clear it. The real children question is always asked again.
+          var draft = slot + ":" + action;
+          var kept = regenerateDialog.getAttribute("data-draft") === draft
+            ? { request: form.querySelector("[name=request]").value, option: form.querySelector("[name=option]").value }
+            : null;
           form.reset();
+          if (kept) {
+            form.querySelector("[name=request]").value = kept.request;
+            form.querySelector("[name=option]").value = kept.option;
+          }
+          regenerateDialog.setAttribute("data-draft", draft);
           form.querySelector("[name=slot]").value = slot;
           form.querySelector("[name=action]").value = action;
           form.querySelector("[name=containsRealChildren]").value = "";
@@ -771,6 +875,61 @@ function renderOnePagerScript(centreKey: number | null): string {
             fail(error);
           });
         });
+
+        // ---- Kindergartens: the In use tick. Ticking or unticking it asks
+        // why first; the reason is kept as a note on the kindergarten. Until
+        // it is saved the tick is not: Cancel, Esc or a click outside puts
+        // the box back as it was. ----
+        var inUseDialog = document.querySelector("[data-one-pager-in-use-dialog]");
+        var inUsePending = null; // { box, ticked }
+        function closeInUse() {
+          if (typeof inUseDialog.close === "function") inUseDialog.close();
+          else { inUseDialog.removeAttribute("open"); undoInUse(); }
+        }
+        function undoInUse() {
+          if (!inUsePending) return;
+          inUsePending.box.checked = !inUsePending.ticked;
+          inUsePending = null;
+        }
+        document.addEventListener("change", function(event) {
+          var box = event.target instanceof Element ? event.target.closest("[data-one-pager-in-use]") : null;
+          if (!box || !inUseDialog) return;
+          inUsePending = { box: box, ticked: box.checked };
+          var form = inUseDialog.querySelector("form");
+          form.reset();
+          inUseDialog.querySelector("[data-one-pager-in-use-title]").textContent = box.getAttribute("data-centre-name") + (box.checked ? ": in use" : ": not in use");
+          if (typeof inUseDialog.showModal === "function") inUseDialog.showModal();
+          else inUseDialog.setAttribute("open", "open");
+          var reason = form.querySelector("[name=reason]");
+          reason.focus();
+          reason.select();
+        });
+        if (inUseDialog) {
+          inUseDialog.addEventListener("close", undoInUse);
+          inUseDialog.addEventListener("click", function(event) {
+            if ((event.target === inUseDialog && pressedOn === inUseDialog) || (event.target instanceof Element && event.target.closest("[data-one-pager-in-use-cancel]"))) closeInUse();
+          });
+          inUseDialog.querySelector("form").addEventListener("submit", function(event) {
+            event.preventDefault();
+            if (!inUsePending) return;
+            var submit = event.target.querySelector("[type=submit]");
+            var centre = inUsePending.box.getAttribute("data-one-pager-in-use");
+            submit.disabled = true;
+            post("/api/one-pager/" + centre + "/in-use", { inUse: inUsePending.ticked, reason: event.target.querySelector("[name=reason]").value, selected: KEY }).then(function(result) {
+              submit.disabled = false;
+              inUsePending = null;
+              closeInUse();
+              // The Notes panel shows the new note, keeping a note that is being typed.
+              var draft = document.querySelector('[data-one-pager-form="note"] textarea');
+              var typed = draft ? draft.value : "";
+              swap(result);
+              draft = document.querySelector('[data-one-pager-form="note"] textarea');
+              if (draft) draft.value = typed;
+              // The open kindergarten's preview drops (or regains) Staff photo needed.
+              if (String(KEY) === centre) refreshPreview();
+            }).catch(function(error) { submit.disabled = false; fail(error); });
+          });
+        }
 
         // ---- Photos: drop a file on a slot's card, the same as choosing it with Replace ----
         var dropCard = null;
@@ -829,20 +988,31 @@ function renderOnePagerScript(centreKey: number | null): string {
             // Only the description typed here goes to OpenAI; the picture that
             // comes back is stored flagged as AI generated.
             var form = generateDialog.querySelector("form");
-            form.reset();
-            form.querySelector("[name=slot]").value = button.getAttribute("data-one-pager-generate");
-            form.querySelector("[name=prompt]").value = button.getAttribute("data-prompt") || "";
+            var generateSlot = button.getAttribute("data-one-pager-generate");
+            // Dismissed (a click outside, Esc) and opened again for the same
+            // photo: the description typed is still there. Cancel and a
+            // generated picture clear it.
+            if (generateDialog.getAttribute("data-draft") !== generateSlot) {
+              form.reset();
+              form.querySelector("[name=prompt]").value = button.getAttribute("data-prompt") || "";
+            }
+            generateDialog.setAttribute("data-draft", generateSlot);
+            form.querySelector("[name=slot]").value = generateSlot;
             generateDialog.querySelector("[data-one-pager-generate-title]").textContent = "Generate " + button.getAttribute("data-label").toLowerCase() + " with AI";
             if (typeof generateDialog.showModal === "function") generateDialog.showModal();
             else generateDialog.setAttribute("open", "open");
             form.querySelector("[name=prompt]").focus();
-          } else if (target.closest("[data-one-pager-generate-cancel]") || target === generateDialog) {
+          } else if (target.closest("[data-one-pager-generate-cancel]")) {
+            generateDialog.removeAttribute("data-draft");
             closeGenerate();
+          } else if (target === generateDialog) {
+            if (pressedOn === generateDialog) closeGenerate();
           } else if ((button = target.closest("[data-one-pager-regenerate]"))) {
             openRedraw(button.getAttribute("data-one-pager-regenerate"), "regenerate");
           } else if ((button = target.closest("[data-one-pager-real-children]"))) {
             var redrawForm = regenerateDialog.querySelector("form");
             if (button.getAttribute("data-one-pager-real-children") === "yes") {
+              regenerateDialog.removeAttribute("data-draft");
               closeRegenerate();
               window.alert("This image was not sent. An image with real children in it is never uploaded.");
             } else if (redrawForm.querySelector("[name=action]").value === "upscale") {
@@ -852,8 +1022,11 @@ function renderOnePagerScript(centreKey: number | null): string {
               regenerateDialog.querySelector("[name=containsRealChildren]").value = "no";
               showRegenerateStep("request");
             }
-          } else if (target.closest("[data-one-pager-regenerate-cancel]") || target === regenerateDialog) {
+          } else if (target.closest("[data-one-pager-regenerate-cancel]")) {
+            regenerateDialog.removeAttribute("data-draft");
             closeRegenerate();
+          } else if (target === regenerateDialog) {
+            if (pressedOn === regenerateDialog) closeRegenerate();
           } else if ((button = target.closest("[data-one-pager-revert]"))) {
             // Swaps the photo with the one it replaced; pressing it again swaps them back.
             var revertButton = button;
@@ -982,6 +1155,7 @@ export function renderOnePagerAppShell(data: OnePagerPageData, openPanelId: stri
       <form class="wiki-modal__form flex flex-col gap-12">
         <h2 class="wiki-modal__title text-strong">Crop the photo</h2>
         <canvas class="one-pager-crop__canvas"></canvas>
+        <label class="one-pager-crop__fixed inline-flex items-center gap-6 text-small text-muted"><input type="checkbox" checked data-one-pager-crop-fixed /><span>Fix crop to the PDF's photo shape</span></label>
         <div class="wiki-modal__actions flex justify-end gap-8">
           <button type="button" class="wiki-modal__cancel button-md" data-one-pager-crop-cancel><span>Cancel</span></button>
           <button type="submit" class="wiki-modal__submit button-md">Use photo</button>
@@ -996,6 +1170,16 @@ export function renderOnePagerAppShell(data: OnePagerPageData, openPanelId: stri
         <div class="wiki-modal__actions flex justify-end gap-8">
           <button type="button" class="wiki-modal__cancel button-md" data-one-pager-generate-cancel><span>Cancel</span></button>
           <button type="submit" class="wiki-modal__submit button-md"><i class="bi bi-stars" aria-hidden="true"></i>Generate</button>
+        </div>
+      </form>
+    </dialog>
+    <dialog class="wiki-modal wiki-modal--wide text-body" data-one-pager-in-use-dialog aria-label="In use">
+      <form class="wiki-modal__form flex flex-col gap-12">
+        <h2 class="wiki-modal__title text-strong" data-one-pager-in-use-title>In use</h2>
+        <label class="field-label"><span>Reason</span><textarea class="form-control" name="reason" rows="4" maxlength="${ONE_PAGER_NOTE_MAX}" required>${escapeHtml(ONE_PAGER_IN_USE_REASON)}</textarea></label>
+        <div class="wiki-modal__actions flex justify-end gap-8">
+          <button type="button" class="wiki-modal__cancel button-md" data-one-pager-in-use-cancel><span>Cancel</span></button>
+          <button type="submit" class="wiki-modal__submit button-md">Save</button>
         </div>
       </form>
     </dialog>

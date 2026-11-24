@@ -100,7 +100,10 @@ import { enrolmentQualityPdfFilename, generateEnrolmentQualityPdfBuffer } from "
 import { generateSectorPdfBuffer, sectorPdfFilename, selectSectorPrintCentres } from "./ui/sector-pdf.js";
 import { analyticsPdfFilename, generateAnalyticsPdfBuffer } from "./ui/analytics-pdf.js";
 import { generateWaitlistPdfBuffer, waitlistPdfFilename } from "./ui/waitlist-pdf.js";
-import { matchCentreContact, readCentreContactList, readCentreContactListStats } from "./storage/centre-contact-store.js";
+import { matchCentreContact, readSeniorTeacherList, readSeniorTeacherListStats } from "./storage/centre-contact-store.js";
+import { readCentreContacts, readCentreStaff, readNewestStaffLists } from "./storage/centre-people-store.js";
+import { centreStaffPdfFilename, generateCentreStaffPdfBuffer } from "./ui/centre-staff-pdf.js";
+import { runStaffListSync } from "./infocare/staff-list-sync.js";
 import { filterBySlt, listSltNames, resolveSlt, sltTotalName } from "./analytics/slt-filter.js";
 import {
   addGeneralChatMessage,
@@ -379,7 +382,7 @@ import { createSlotImageGenerator, createSlotImageRegenerator } from "./image-ai
 import { aiImageStore } from "./storage/ai-image-store.js";
 import { registerOnePagerRoutes } from "./one-pager/routes.js";
 import { onePagerStore } from "./storage/one-pager-store.js";
-import { checkStaffPhotos } from "./one-pager/staff-photo.js";
+import { checkStaffPhotos, raiseMissingTeamPhotoTask } from "./one-pager/staff-photo.js";
 import { readOpenStaffPhotoTasks, staffPhotoStore } from "./storage/staff-photo-store.js";
 
 const envSchema = z.object({
@@ -472,19 +475,21 @@ registerOnePagerRoutes(app, {
   // only code that talks to OpenAI; the info sheet code is just handed this.
   generateImage: createSlotImageGenerator(env),
   regenerateImage: createSlotImageRegenerator(env),
-  staffPhoto: { check: () => checkStaffPhotos(staffPhotoStore), openTasks: readOpenStaffPhotoTasks },
-  // Greeting names come from the same contact list as the Marketing page's emails.
+  staffPhoto: { check: () => checkStaffPhotos(staffPhotoStore), openTasks: readOpenStaffPhotoTasks, photoRemoved: (centreKey) => raiseMissingTeamPhotoTask(staffPhotoStore, centreKey) },
+  // Greeting names are the same people as the Marketing page's emails greet:
+  // Infocare's head teacher and administrator. A kindergarten with no
+  // administrator in Infocare is greeted by its head teacher alone.
   contactNames: async (centre) => {
-    const contact = matchCentreContact(centre.name, await readCentreContactList());
+    const contact = (await readCentreContacts()).find((candidate) => candidate.centreKey === centre.centreKey);
     return contact ? [contact.headTeacher, contact.administrator] : [];
   },
-  // The list's people columns, from the same contact list. The senior leader
-  // is its Key Senior Teacher column.
+  // The list's people columns, from the same source. The senior leader is the
+  // uploaded workbook's Key Senior Teacher column.
   people: async (centres) => {
-    const contacts = await readCentreContactList();
+    const contacts = new Map((await readCentreContacts()).map((contact) => [contact.centreKey, contact]));
     return Object.fromEntries(
       centres.flatMap((centre) => {
-        const contact = matchCentreContact(centre.name, contacts);
+        const contact = contacts.get(centre.centreKey);
         return contact
           ? [[centre.centreKey, { seniorLeader: contact.keySeniorTeacher, headTeacher: contact.headTeacher, administrator: contact.administrator }]]
           : [];
@@ -499,8 +504,9 @@ registerOnePagerRoutes(app, {
   notes: {
     list: async (centre) => {
       const history = await readMetaNotificationHistoryPage({ centreKey: centre.centreKey, kind: "Note", pageSize: 100 });
-      return history.rows.map((row) => ({ heading: row.heading, text: row.message, at: row.occurredAt }));
+      return history.rows.flatMap((row) => (row.noteId == null ? [] : [{ id: row.noteId, heading: row.heading, text: row.message, at: row.occurredAt }]));
     },
+    edit: async (id, text) => void (await updateMetaRecommendationNote(id, text)),
     add: async (centre, text) => {
       const notificationId = `info-sheet-${centre.centreKey}`;
       await upsertMetaRecommendationNotification({
@@ -1296,61 +1302,6 @@ function buildPostmarkRecentMessagesRss(input: {
 </rss>`;
 }
 
-function renderContactUploadPage(input: {
-  status?: string;
-  contactCount?: string;
-  rowCount?: string;
-  error?: string;
-  currentContactCount: number;
-  currentRowCount: number;
-  updatedAt: string | null;
-}) {
-  const uploadedRowCount = input.rowCount ?? String(input.currentRowCount);
-  const uploadedContactCount = input.contactCount ?? String(input.currentContactCount);
-  const availabilityNote =
-    uploadedRowCount === uploadedContactCount ? "" : ` ${escapeHtml(uploadedContactCount)} usable contacts are available.`;
-  const status =
-    input.status === "uploaded"
-      ? `<p class="contact-upload__status text-accent">Contacts updated. ${escapeHtml(uploadedRowCount)} workbook rows uploaded.${availabilityNote}</p>`
-      : input.error
-        ? `<p class="contact-upload__error">${escapeHtml(input.error)}</p>`
-        : "";
-
-  return `<!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Upload Contacts - Marketing Helper AI</title>
-    <link rel="icon" href="/favicon.ico" type="image/png" />
-    <link rel="stylesheet" href="/vendor/bootstrap-icons.css" />
-    <link rel="stylesheet" href="/app.css" />
-    <link rel="stylesheet" href="/themes.css" />
-    ${THEME_HEAD_SCRIPT}
-  </head>
-  <body class="landing-body">
-    <main class="contact-upload grid gap-16 text-body">
-      <a class="contact-upload__back text-muted" href="/">Back to landing</a>
-      <h1>Upload Contacts</h1>
-      <p>Update the contacts list from the <a href="https://ikindergartens.sharepoint.com/sites/InspiredKindergartenTeam/Lists/Kindergarten%20Contact%20List/AllItems.aspx" target="_blank" rel="noopener noreferrer">Kindergarten Contact List</a> from the Staff Portal Sharepoint site</p>
-      ${status}
-      <dl class="contact-upload__meta grid gap-10">
-        <div><dt>Current rows</dt><dd>${input.currentRowCount}</dd></div>
-        <div><dt>Usable contacts</dt><dd>${input.currentContactCount}</dd></div>
-        <div><dt>Current file</dt><dd>${input.updatedAt ? escapeHtml(input.updatedAt) : "Not found"}</dd></div>
-      </dl>
-      <form class="contact-upload__form flex flex-wrap gap-12" action="/contacts/upload" method="post" enctype="multipart/form-data">
-        <label class="field-label">
-          <span>Excel workbook</span>
-          <input class="form-control" type="file" name="contacts" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required />
-        </label>
-        <button type="submit"><i class="bi bi-upload" aria-hidden="true"></i><span>Upload contacts</span></button>
-      </form>
-    </main>
-  </body>
-</html>`;
-}
-
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 // Landing-page staleness alert for Postmark webhooks, derived from the same
@@ -1461,25 +1412,19 @@ app.get("/readme", async (_request, reply) => {
   return reply.type("text/html; charset=utf-8").send(await renderReadmePage());
 });
 
-app.get<{ Querystring: { status?: string; contactCount?: string; rowCount?: string; error?: string } }>("/contacts/upload", async (request, reply) => {
-  const [contactStats, stat] = await Promise.all([
-    readCentreContactListStats(),
-    import("node:fs/promises")
-      .then((fs) => fs.stat(join(process.cwd(), "centre-contact-list.xlsx")))
-      .catch(() => null),
-  ]);
+// The Upload Contacts page became the landing page's Centre Staff dialog.
+app.get("/contacts/upload", async (_request, reply) => reply.redirect("/"));
 
-  return reply.type("text/html; charset=utf-8").send(
-    renderContactUploadPage({
-      status: request.query?.status,
-      contactCount: request.query?.contactCount,
-      rowCount: request.query?.rowCount,
-      error: request.query?.error,
-      currentContactCount: contactStats.contacts.length,
-      currentRowCount: contactStats.rowCount,
-      updatedAt: stat?.mtime ? stat.mtime.toLocaleString("en-NZ") : null,
-    }),
-  );
+// Centre Staff, Download: every open kindergarten with its head teacher,
+// administrator and other staff, from the stored Infocare staff lists.
+app.get("/api/centre-staff/pdf", async (_request, reply) => {
+  const now = new Date();
+  const { sections, listsReceivedAt } = await readCentreStaff(now);
+  const buffer = await generateCentreStaffPdfBuffer(sections, listsReceivedAt, now);
+  return reply
+    .type("application/pdf")
+    .header("Content-Disposition", attachmentDownloadHeader(centreStaffPdfFilename(now)))
+    .send(buffer);
 });
 
 // Infocare login: write-only. Neither route ever sends the username or password
@@ -1535,17 +1480,18 @@ app.post<{ Body: { username?: unknown; password?: unknown } }>("/api/settings/in
   return reply.type("application/json; charset=utf-8").send({ ok: true });
 });
 
-app.post("/contacts/upload", async (request, reply) => {
+// Centre Staff, Upload: replaces the workbook that says which Senior Teacher
+// looks after each kindergarten. The dialog shows the reply in place.
+app.post("/api/centre-staff/senior-teachers", async (request, reply) => {
+  const fail = (error: string) => reply.code(400).type("application/json; charset=utf-8").send({ ok: false, error });
   const file = await request.file();
 
   if (!file) {
-    reply.code(303);
-    return reply.redirect("/contacts/upload?error=Choose%20a%20contacts%20workbook%20to%20upload.");
+    return fail("Choose a workbook to upload.");
   }
 
   if (extname(file.filename).toLowerCase() !== ".xlsx") {
-    reply.code(303);
-    return reply.redirect("/contacts/upload?error=Upload%20an%20.xlsx%20contacts%20workbook.");
+    return fail("Upload an .xlsx workbook.");
   }
 
   const buffer = await file.toBuffer();
@@ -1556,21 +1502,15 @@ app.post("/contacts/upload", async (request, reply) => {
   await writeFile(tempPath, buffer);
 
   try {
-    const parsed = await readCentreContactListStats(tempPath);
+    const parsed = await readSeniorTeacherListStats(tempPath);
 
     if (parsed.contacts.length === 0) {
-      reply.code(303);
-      return reply.redirect(
-        "/contacts/upload?error=The%20workbook%20must%20include%20Kindergarten%2C%20Head%20Teacher%2C%20Administrator%2C%20and%20Email%20columns.",
-      );
+      return fail("The workbook must include Kindergarten and Key Senior Teacher columns.");
     }
 
     await writeFile(join(process.cwd(), "centre-contact-list.xlsx"), buffer);
     void refreshLandingIntelligenceFeed(aiConfig, app.log);
-    reply.code(303);
-    return reply.redirect(
-      `/contacts/upload?status=uploaded&rowCount=${parsed.rowCount}&contactCount=${parsed.contacts.length}`,
-    );
+    return reply.type("application/json; charset=utf-8").send({ ok: true, kindergartens: parsed.contacts.length });
   } finally {
     await unlink(tempPath).catch(() => undefined);
   }
@@ -1842,7 +1782,7 @@ app.get<{ Querystring: { centre?: string; window?: string; panel?: string; sort?
   const latestRunDate = latestSnapshotSet ? new Date(latestSnapshotSet.runDate) : new Date();
   const windowStartDate = resolveWindowStartDate(latestRunDate, selectedWindowKey);
   const snapshotSet = latestSnapshotSet;
-  const centreContacts = await readCentreContactList();
+  const centreContacts = await readCentreContacts();
   // Infocare Analytics' SLT filter: with no centre chosen, the first of that
   // SLT's centres is the selected one.
   const slt = resolveSlt(request.query?.slt, centreContacts);
@@ -2273,7 +2213,10 @@ app.get<{ Querystring: { panel?: string; jd?: string } }>("/jd", async (request,
   const boilerplateHtml = selectedJd
     ? buildImmovableBoilerplateHtml(selectedJd)
     : "";
-  const centreContact = selectedJd ? matchCentreContact(selectedJd.locationDisplay, await readCentreContactList()) : null;
+  const centreContacts = selectedJd ? await readCentreContacts() : [];
+  const centreContact = selectedJd
+    ? centreContacts.find((contact) => contact.centreKey === selectedJd.centreKey) ?? matchCentreContact(selectedJd.locationDisplay, centreContacts)
+    : null;
 
   return reply.type("text/html; charset=utf-8").send(
     renderJdAppShell({
@@ -3592,7 +3535,7 @@ async function loadEnrolmentQualityView(
     readOpenCentreReferences(),
     readCentreMonthlyRolls(addMonths(currentMonth, -(ROLL_HISTORY_MONTHS - 1)), currentMonth),
     readOperatingCapacities(),
-    sltFilter === undefined ? [] : readCentreContactList(),
+    sltFilter === undefined ? [] : readSeniorTeacherList(),
   ]);
   const slt = resolveSlt(sltFilter, contacts);
   const rows = filterBySlt(
@@ -3784,7 +3727,7 @@ app.get<{ Querystring: { window?: string; sort?: string; slt?: string } }>("/api
     return reply.code(404).send({ error: "No Infocare analytics snapshot yet." });
   }
   const windowKey = resolveWindowKey(request.query?.window);
-  const contacts = request.query?.slt ? await readCentreContactList() : [];
+  const contacts = request.query?.slt ? await readSeniorTeacherList() : [];
   const slt = resolveSlt(request.query?.slt, contacts);
   const buffer = await generateAnalyticsPdfBuffer(
     { ...snapshotSet, snapshots: filterBySlt(snapshotSet.snapshots, (row) => row.serviceName, slt, contacts) },
@@ -3883,6 +3826,31 @@ function startRollHistorySyncLoop() {
   };
   setTimeout(run, ROLL_HISTORY_STARTUP_DELAY_MS).unref();
   setInterval(run, ROLL_HISTORY_CHECK_INTERVAL_MS).unref();
+}
+
+// The staff list (who the head teacher and administrator are) is fetched from
+// Infocare once a day. The hourly check finds every kindergarten already
+// fetched today and makes no calls, so it is the first check of the day that
+// fetches: soon after midnight, or the first time the app runs that day.
+const STAFF_LIST_STARTUP_DELAY_MS = 240_000;
+const STAFF_LIST_CHECK_INTERVAL_MS = 60 * 60 * 1000;
+
+function startStaffListSyncLoop() {
+  const run = () => {
+    try {
+      getInfocareEnv();
+    } catch {
+      return; // Infocare not configured on this machine.
+    }
+    // One Infocare fetch at a time: the next check picks it up.
+    if (getRollHistoryProgress().running) return;
+    void runStaffListSync(app.log, {
+      centres: readOpenCentreReferences,
+      newestReceivedAt: async () => new Map([...(await readNewestStaffLists())].map(([centreKey, list]) => [centreKey, list.receivedAt])),
+    }).catch((error) => app.log.warn({ error }, "Staff list: daily fetch failed"));
+  };
+  setTimeout(run, STAFF_LIST_STARTUP_DELAY_MS).unref();
+  setInterval(run, STAFF_LIST_CHECK_INTERVAL_MS).unref();
 }
 
 // Checked shortly after startup and daily after that; an update only runs when
@@ -6246,6 +6214,7 @@ async function start() {
   startHelpKbSyncLoop();
   startSectorSyncLoop();
   startRollHistorySyncLoop();
+  startStaffListSyncLoop();
   void tickMetaAdvertReviews(app.log, { force: true });
   void syncBudgetMetaSpend(app.log);
   void logJdAgreementStatusOnStartup();
